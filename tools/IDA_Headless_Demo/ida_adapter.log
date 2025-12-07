@@ -1,0 +1,220 @@
+2025-12-07 20:46:50,426 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:46:50,427 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:46:50,429 - ida_adapter - DEBUG - 复制脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:46:50,431 - ida_adapter - DEBUG - 复制脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:46:50,433 - ida_adapter - DEBUG - 复制脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:46:50,433 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:46:50,433 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractBinaryInfo_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:46:55,304 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 20:46:55,304 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:46:55,304 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractDisassembly_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:46:59,522 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 20:46:59,522 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:46:59,523 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractPseudocode_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:47:04,711 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 20:47:04,712 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 20:47:04,712 - ida_adapter - DEBUG - 文件名清理: Malware_sample.exe -> Malware_sample
+2025-12-07 20:47:04,712 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 20:47:04,713 - ida_adapter - DEBUG - 删除临时脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:47:04,715 - ida_adapter - DEBUG - 删除临时脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:47:04,715 - ida_adapter - DEBUG - 删除临时脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:47:04,715 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:07,943 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:07,944 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:07,946 - ida_adapter - DEBUG - 复制脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:51:07,947 - ida_adapter - DEBUG - 复制脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:51:07,949 - ida_adapter - DEBUG - 复制脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:51:07,949 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:51:07,949 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractBinaryInfo_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:07,950 - ida_adapter - DEBUG - 完整命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractBinaryInfo_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:07,950 - ida_adapter - DEBUG - 当前工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:12,220 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 20:51:12,220 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:51:12,221 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractDisassembly_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:12,221 - ida_adapter - DEBUG - 完整命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractDisassembly_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:12,221 - ida_adapter - DEBUG - 当前工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:16,464 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 20:51:16,464 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:51:16,464 - ida_adapter - DEBUG - 构建的命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractPseudocode_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:16,464 - ida_adapter - DEBUG - 完整命令: C:\Program Files\IDA Professional 9.2\idat.exe -A -c -S"ExtractPseudocode_IDA.py" E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 20:51:16,464 - ida_adapter - DEBUG - 当前工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:21,214 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 20:51:21,215 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 20:51:21,215 - ida_adapter - DEBUG - 当前工作目录内容 (E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo):
+2025-12-07 20:51:21,215 - ida_adapter - DEBUG -   - ExtractBinaryInfo_IDA.py
+2025-12-07 20:51:21,215 - ida_adapter - DEBUG -   - ExtractDisassembly_IDA.py
+2025-12-07 20:51:21,215 - ida_adapter - DEBUG -   - ExtractPseudocode_IDA.py
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG - 原始目录内容 (E:\WorkSpace\ReBind_demo\tmp):
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample.exe
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample.exe.i64
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample_disassembly
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample_ghidemo
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample_idademo
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample_output
+2025-12-07 20:51:21,216 - ida_adapter - DEBUG -   - Malware_sample_pesudocode
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 文件名清理: Malware_sample.exe -> Malware_sample
+2025-12-07 20:51:21,217 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 清理后的文件名: Malware_sample
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 当前工作目录: E:\WorkSpace\ReBind_demo\tools\IDA_Headless_Demo
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 检查目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_disassembly (绝对路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_disassembly)
+2025-12-07 20:51:21,217 - ida_adapter - DEBUG - 目标路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_disassembly
+2025-12-07 20:51:21,218 - ida_adapter - DEBUG - 移动目录: Malware_sample_disassembly -> E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_disassembly
+2025-12-07 20:51:21,219 - ida_adapter - DEBUG - 检查目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_output (绝对路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_output)
+2025-12-07 20:51:21,219 - ida_adapter - DEBUG - 目标路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_output
+2025-12-07 20:51:21,220 - ida_adapter - DEBUG - 移动目录: Malware_sample_output -> E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_output
+2025-12-07 20:51:21,220 - ida_adapter - DEBUG - 检查目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_pseudocode (绝对路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_pseudocode)
+2025-12-07 20:51:21,221 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_pseudocode
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG - 原始目录内容 (E:\WorkSpace\ReBind_demo\tmp):
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG -   - Malware_sample.exe
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG -   - Malware_sample.exe.i64
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG -   - Malware_sample_ghidemo
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG -   - Malware_sample_idademo
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG -   - Malware_sample_pesudocode
+2025-12-07 20:51:21,221 - ida_adapter - DEBUG - 检查目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_pesudocode (绝对路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_pesudocode)
+2025-12-07 20:51:21,222 - ida_adapter - DEBUG - 目标路径: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_pesudocode
+2025-12-07 20:51:21,223 - ida_adapter - DEBUG - 移动目录: Malware_sample_pesudocode -> E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo\Malware_sample_pesudocode
+2025-12-07 20:51:21,223 - ida_adapter - DEBUG - 删除临时脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 20:51:21,224 - ida_adapter - DEBUG - 删除临时脚本: ExtractDisassembly_IDA.py
+2025-12-07 20:51:21,224 - ida_adapter - DEBUG - 删除临时脚本: ExtractPseudocode_IDA.py
+2025-12-07 20:51:21,224 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_idademo
+2025-12-07 21:12:21,162 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:12:21,163 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:12:21,168 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:12:26,069 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:12:26,069 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:12:31,532 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:12:31,532 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:12:38,585 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:12:38,585 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:12:38,586 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:12:38,586 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_disassembly
+2025-12-07 21:12:38,587 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_binaryinfo
+2025-12-07 21:12:38,587 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_pseudocode
+2025-12-07 21:12:38,587 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_pesudocode
+2025-12-07 21:12:38,589 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:23:06,463 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:23:06,463 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:23:06,469 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:23:11,324 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:23:11,324 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:23:15,372 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:23:15,373 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:23:20,483 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:23:20,484 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:23:20,484 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:23:20,484 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\Malware_sample_exe_disassembly
+2025-12-07 21:23:20,484 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\Malware_sample_exe_binaryinfo
+2025-12-07 21:23:20,484 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\Malware_sample_exe_pseudocode
+2025-12-07 21:23:20,486 - ida_adapter - WARNING - 输出目录不存在: E:\WorkSpace\Malware_sample_exe_pesudocode
+2025-12-07 21:23:20,487 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:27:54,737 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:27:54,738 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:27:54,743 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:27:59,776 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:27:59,776 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:28:03,948 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:28:03,948 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:28:09,083 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:28:09,083 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:28:09,085 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:28:09,086 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:35:07,313 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:35:07,314 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:35:07,334 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:35:11,712 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:35:11,712 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:35:16,033 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:35:16,033 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:35:20,708 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:35:20,708 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:35:20,709 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:35:20,711 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:49:36,028 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:49:36,029 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:49:36,034 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:49:40,417 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:49:40,418 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:49:44,714 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:49:44,714 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:49:49,418 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:49:49,418 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:49:49,418 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:49:49,421 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:54:22,546 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:54:22,547 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:54:22,553 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:54:26,965 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:54:26,965 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:54:31,282 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:54:31,283 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:54:36,010 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:54:36,010 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:54:36,011 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:54:36,013 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:58:35,284 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 21:58:35,284 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 21:58:35,289 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 21:58:39,632 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 21:58:39,633 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 21:58:43,826 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 21:58:43,826 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 21:58:48,420 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 21:58:48,420 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 21:58:48,421 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 21:58:48,423 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:06:18,974 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 22:06:18,975 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:06:18,980 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 22:06:23,266 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 22:06:23,266 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 22:06:27,550 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 22:06:27,550 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 22:06:32,219 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 22:06:32,219 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 22:06:32,221 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 22:06:32,223 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:12:37,896 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 22:12:37,896 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:12:37,901 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 22:12:42,269 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 22:12:42,269 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 22:12:46,527 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 22:12:46,527 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 22:12:51,193 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 22:12:51,193 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 22:12:51,194 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 22:12:51,196 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:13:00,497 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 22:13:00,498 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:13:00,504 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 22:13:05,362 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 22:13:05,362 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 22:13:09,605 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 22:13:09,605 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 22:13:14,725 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 22:13:14,727 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 22:13:14,727 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 22:13:14,729 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:22:32,365 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 22:22:32,366 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:22:32,372 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 22:22:37,203 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 22:22:37,203 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 22:22:41,451 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 22:22:41,451 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 22:22:46,585 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 22:22:46,585 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 22:22:46,586 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 22:22:46,587 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:39:12,514 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-07 22:39:12,515 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo
+2025-12-07 22:39:12,521 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-07 22:39:17,406 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-07 22:39:17,406 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-07 22:39:21,605 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-07 22:39:21,605 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-07 22:39:26,704 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-07 22:39:26,704 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-07 22:39:26,704 - ida_adapter - INFO - 处理输出文件...
+2025-12-07 22:39:26,706 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_idademo

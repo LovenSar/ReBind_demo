@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""
+ReBind Demo 综合脚本
+用于统一调用 Ghidra 和 IDA Headless 分析工具
+"""
+
+import os
+import sys
+import argparse
+from pathlib import Path
+from typing import List, Optional
+
+# 添加工具目录到 Python 路径
+tools_dir = Path(__file__).parent / "tools"
+sys.path.insert(0, str(tools_dir / "Ghidra_Headless_Demo"))
+sys.path.insert(0, str(tools_dir / "IDA_Headless_Demo"))
+
+try:
+    from ghidra_adapter import GhidraAdapter
+except ImportError as e:
+    print(f"警告: 无法导入 GhidraAdapter: {e}")
+    GhidraAdapter = None
+
+try:
+    from ida_adapter import IDAAdapter
+except ImportError as e:
+    print(f"警告: 无法导入 IDAAdapter: {e}")
+    IDAAdapter = None
+
+
+class ReBindDemo:
+    """ReBind Demo 综合分析工具"""
+    
+    def __init__(self, config_path: Optional[str] = None):
+        """初始化综合分析工具
+        
+        Args:
+            config_path: 配置文件路径，如果为None则使用默认路径
+        """
+        self.config_path = config_path
+        self.ghidra_adapter = None
+        self.ida_adapter = None
+        
+        # 初始化适配器
+        if GhidraAdapter:
+            try:
+                ghidra_config = config_path
+                if ghidra_config and not Path(ghidra_config).parent.name == "Ghidra_Headless_Demo":
+                    # 如果配置文件不在 Ghidra 目录下，使用默认配置
+                    ghidra_config = None
+                self.ghidra_adapter = GhidraAdapter(ghidra_config)
+            except Exception as e:
+                print(f"警告: 初始化 GhidraAdapter 失败: {e}")
+        
+        if IDAAdapter:
+            try:
+                ida_config = config_path
+                if ida_config and not Path(ida_config).parent.name == "IDA_Headless_Demo":
+                    # 如果配置文件不在 IDA 目录下，使用默认配置
+                    ida_config = None
+                self.ida_adapter = IDAAdapter(ida_config)
+            except Exception as e:
+                print(f"警告: 初始化 IDAAdapter 失败: {e}")
+    
+    def analyze_with_ghidra(self, input_files: List[str]) -> List[Path]:
+        """使用 Ghidra 分析文件
+        
+        Args:
+            input_files: 输入文件路径列表
+            
+        Returns:
+            输出目录路径列表
+        """
+        if not self.ghidra_adapter:
+            raise RuntimeError("Ghidra 适配器未初始化")
+        
+        return self.ghidra_adapter.analyze_files(input_files)
+    
+    def analyze_with_ida(self, input_files: List[str]) -> List[Path]:
+        """使用 IDA 分析文件
+        
+        Args:
+            input_files: 输入文件路径列表
+            
+        Returns:
+            输出目录路径列表
+        """
+        if not self.ida_adapter:
+            raise RuntimeError("IDA 适配器未初始化")
+        
+        return self.ida_adapter.analyze_files(input_files)
+    
+    def analyze_with_both(self, input_files: List[str]) -> dict:
+        """使用 Ghidra 和 IDA 分析文件
+        
+        Args:
+            input_files: 输入文件路径列表
+            
+        Returns:
+            包含两种工具输出目录的字典
+        """
+        results = {}
+        
+        if self.ghidra_adapter:
+            try:
+                print("使用 Ghidra 分析文件...")
+                results['ghidra'] = self.analyze_with_ghidra(input_files)
+            except Exception as e:
+                print(f"Ghidra 分析失败: {e}")
+                results['ghidra'] = []
+        
+        if self.ida_adapter:
+            try:
+                print("使用 IDA 分析文件...")
+                results['ida'] = self.analyze_with_ida(input_files)
+            except Exception as e:
+                print(f"IDA 分析失败: {e}")
+                results['ida'] = []
+        
+        return results
+
+
+def main():
+    """主函数 - 命令行接口"""
+    parser = argparse.ArgumentParser(
+        description="ReBind Demo 综合分析工具 - 统一调用 Ghidra 和 IDA Headless 分析工具"
+    )
+    
+    # 工具选择参数
+    tool_group = parser.add_mutually_exclusive_group()
+    tool_group.add_argument(
+        "--ghidra",
+        action="store_true",
+        help="仅使用 Ghidra 分析"
+    )
+    tool_group.add_argument(
+        "--ida",
+        action="store_true",
+        help="仅使用 IDA 分析"
+    )
+    tool_group.add_argument(
+        "--both",
+        action="store_true",
+        default=True,
+        help="同时使用 Ghidra 和 IDA 分析（默认）"
+    )
+    
+    # 通用参数
+    parser.add_argument(
+        "input_files",
+        nargs="+",
+        help="要分析的文件路径（支持多个文件）"
+    )
+    parser.add_argument(
+        "-c", "--config",
+        help="配置文件路径（默认: 使用各工具的默认配置）"
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="启用详细输出"
+    )
+    
+    args = parser.parse_args()
+    
+    # 验证输入文件
+    for input_file in args.input_files:
+        if not Path(input_file).exists():
+            print(f"错误: 输入文件不存在: {input_file}", file=sys.stderr)
+            sys.exit(1)
+    
+    try:
+        # 创建综合分析工具
+        demo = ReBindDemo(args.config)
+        
+        # 设置详细输出
+        if args.verbose:
+            if demo.ghidra_adapter:
+                demo.ghidra_adapter.logger.setLevel(10)  # DEBUG level
+                for handler in demo.ghidra_adapter.logger.handlers:
+                    handler.setLevel(10)
+            if demo.ida_adapter:
+                demo.ida_adapter.logger.setLevel(10)  # DEBUG level
+                for handler in demo.ida_adapter.logger.handlers:
+                    handler.setLevel(10)
+        
+        # 确定使用的工具
+        if args.ghidra:
+            if not demo.ghidra_adapter:
+                print("错误: Ghidra 适配器不可用", file=sys.stderr)
+                sys.exit(1)
+            
+            output_dirs = demo.analyze_with_ghidra(args.input_files)
+            
+            print("\n" + "="*60)
+            print("Ghidra 分析完成!")
+            print("输出目录:")
+            for output_dir in output_dirs:
+                print(f"  - {output_dir}")
+            print("="*60)
+            
+        elif args.ida:
+            if not demo.ida_adapter:
+                print("错误: IDA 适配器不可用", file=sys.stderr)
+                sys.exit(1)
+            
+            output_dirs = demo.analyze_with_ida(args.input_files)
+            
+            print("\n" + "="*60)
+            print("IDA 分析完成!")
+            print("输出目录:")
+            for output_dir in output_dirs:
+                print(f"  - {output_dir}")
+            print("="*60)
+            
+        else:
+            # 默认使用两个工具
+            if not demo.ghidra_adapter and not demo.ida_adapter:
+                print("错误: 没有可用的分析适配器", file=sys.stderr)
+                sys.exit(1)
+            
+            results = demo.analyze_with_both(args.input_files)
+            
+            print("\n" + "="*60)
+            print("分析完成!")
+            
+            if results.get('ghidra'):
+                print("\nGhidra 输出目录:")
+                for output_dir in results['ghidra']:
+                    print(f"  - {output_dir}")
+            
+            if results.get('ida'):
+                print("\nIDA 输出目录:")
+                for output_dir in results['ida']:
+                    print(f"  - {output_dir}")
+            
+            print("="*60)
+        
+    except Exception as e:
+        print(f"错误: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
