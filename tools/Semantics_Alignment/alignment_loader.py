@@ -29,9 +29,12 @@ import csv
 import hashlib
 import re
 import sqlite3
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, List
+from typing import Iterable, Optional, Tuple, List, Set
+
+from openpyxl import Workbook
 
 
 @dataclass
@@ -1138,6 +1141,156 @@ def load_ida_view(
 
 
 # =========================
+# SQLite 检查辅助函数（来自 test.py）
+# =========================
+
+
+_INVALID_SHEET_TITLE_RE = re.compile(r"[:\\/?*\[\]]")
+
+
+def _sanitize_sheet_title(name: str) -> str:
+    """生成兼容 Excel 的 sheet 名称。"""
+
+    cleaned = _INVALID_SHEET_TITLE_RE.sub("_", name.strip() if name else "table")
+    title = cleaned[:31] or "table"
+    return title
+
+
+def _unique_sheet_title(base: str, used: Set[str]) -> str:
+    """在已有 sheet 名称中生成不重复的名称。"""
+
+    sanitized = _sanitize_sheet_title(base)
+    candidate = sanitized
+    counter = 1
+    while candidate in used:
+        suffix = f"_{counter}"
+        available = 31 - len(suffix)
+        trimmed = sanitized[:available] or "table"
+        candidate = f"{trimmed}{suffix}"
+        counter += 1
+    used.add(candidate)
+    return candidate
+
+
+def _quote_sqlite_identifier(name: str) -> str:
+    """对 SQLite 标识符加双引号以防注入。"""
+
+    return '"' + name.replace('"', '""') + '"'
+
+
+def export_sqlite_to_workbook(
+    db_path: Path,
+    workbook_path: Path,
+    tables: Iterable[str],
+) -> None:
+    """导出所有表数据到 Excel 工作簿。"""
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        workbook = Workbook()
+        first_sheet = workbook.active
+        used_titles: Set[str] = set()
+        created_sheet = False
+
+        for name in tables:
+            if name.startswith("sqlite_"):
+                continue
+
+            sheet_title = _unique_sheet_title(name, used_titles)
+            if not created_sheet:
+                sheet = first_sheet
+                sheet.title = sheet_title
+                created_sheet = True
+            else:
+                sheet = workbook.create_sheet(sheet_title)
+
+            identifier = _quote_sqlite_identifier(name)
+            cur.execute(f"SELECT * FROM {identifier};")
+            colnames = [d[0] for d in (cur.description or [])]
+            if colnames:
+                sheet.append(colnames)
+            for row in cur:
+                sheet.append([None if v is None else v for v in row])
+
+        if not created_sheet:
+            fallback = _unique_sheet_title("sqlite_meta", used_titles)
+            first_sheet.title = fallback
+            first_sheet.append(["(无可导出表)"])
+
+        workbook_path.parent.mkdir(parents=True, exist_ok=True)
+        workbook.save(str(workbook_path))
+    finally:
+        conn.close()
+
+
+def inspect_sqlite_database(
+    db_path: Path,
+    export_path: Path,
+    workbook_path: Optional[Path] = None,
+) -> None:
+    """打印元信息并导出全量数据（文本 + Excel）。"""
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.cursor()
+        tables = [
+            name
+            for (name,) in cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+            )
+        ]
+        print("=== 所有表 ===")
+        for name in tables:
+            print("-", name)
+
+        print("\n=== 每个表的建表语句 ===")
+        for name in tables:
+            row = cur.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?;",
+                (name,),
+            ).fetchone()
+            sql = row[0] if row else ""
+            print(f"\n-- {name} --")
+            print(textwrap.indent(sql or "", "  "))
+
+        print("\n=== 每个表的行数 ===")
+        for name in tables:
+            if name.startswith("sqlite_"):
+                continue
+            identifier = _quote_sqlite_identifier(name)
+            (cnt,) = cur.execute(f"SELECT COUNT(*) FROM {identifier};").fetchone()
+            print(f"{name:20s} {cnt}")
+
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        with export_path.open("w", encoding="utf-8") as out:
+            out.write(f"DB: {db_path}\n")
+            out.write("=== 每个表的全量数据（注意：可能较大） ===\n")
+            for name in tables:
+                if name.startswith("sqlite_"):
+                    continue
+                out.write(f"\n-- {name} (ALL ROWS) --\n")
+                identifier = _quote_sqlite_identifier(name)
+                cur.execute(f"SELECT * FROM {identifier};")
+                colnames = [d[0] for d in (cur.description or [])]
+                if colnames:
+                    out.write("\t".join(colnames) + "\n")
+                for row in cur:
+                    out.write("\t".join("" if v is None else str(v) for v in row) + "\n")
+
+        print(f"\n全量数据已导出到: {export_path}")
+        if workbook_path:
+            export_sqlite_to_workbook(
+                db_path=db_path,
+                workbook_path=workbook_path,
+                tables=tables,
+            )
+            print(f"Workbook 已导出到: {workbook_path}")
+    finally:
+        conn.close()
+
+
+# =========================
 # 命令行入口：快速测试加载
 # =========================
 
@@ -1177,9 +1330,35 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         default="",
         help="可选：IDA 版本号，记录在 tools 表中",
     )
+    parser.add_argument(
+        "--dump-db",
+        action="store_true",
+        help="打印目标数据库的各表信息并导出全量数据",
+    )
+    parser.add_argument(
+        "--dump-db-output",
+        default="tmp/db_sample_dump.txt",
+        help="与 --dump-db 配合使用，指定导出全量数据的文件路径",
+    )
+    parser.add_argument(
+        "--dump-db-workbook",
+        default="tmp/db_sample_dump.xlsx",
+        help="与 --dump-db 配合使用，导出所有表数据到 Excel 工作簿",
+    )
+    parser.add_argument(
+        "-d",
+        "--delete-db",
+        action="store_true",
+        help="删除已有的数据库文件再重新创建",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     db_path = Path(args.db).resolve()
+    if args.delete_db:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            candidate = db_path.with_name(db_path.name + suffix)
+            if candidate.exists():
+                candidate.unlink()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(db_path))
@@ -1201,6 +1380,18 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             )
     finally:
         conn.close()
+
+    if args.dump_db:
+        workbook_path = (
+            Path(args.dump_db_workbook)
+            if args.dump_db_workbook
+            else None
+        )
+        inspect_sqlite_database(
+            db_path=db_path,
+            export_path=Path(args.dump_db_output),
+            workbook_path=workbook_path,
+        )
 
 
 if __name__ == "__main__":

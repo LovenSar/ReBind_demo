@@ -1,0 +1,25 @@
+# Semantics Alignment LLM 配置
+llm:
+  # LLM 提供商名称（便于文档、目前仅支持 OpenAI）
+  provider: "openai"
+  # 默认使用的模型
+  model: "DeepSeek-V3.2"
+  # 默认 temperature
+  temperature: 0.1
+  # 默认 max_tokens
+  max_tokens: 120000
+  api:
+    # 存放 API key 的环境变量
+    key_env_var: "OPENAI_API_KEY"
+    # OpenAI 兼容 API 的基础 URL
+    base_url: "https://llmapi.blsc.cn/v1"
+    # 若使用 Azure/Enterprise，请按需配置以下字段
+    # api_type: "azure"
+    # api_version: "2024-10-01"
+    # organization: "org-xxxxxxx"
+    # proxy: "http://127.0.0.1:7890"
+  chat_completion_kwargs:
+    # 在此处添加其他参数，会直接透传给 openai.ChatCompletion.create
+    # 例如：
+    # request_timeout: 60
+    # user: "semantics_alignment"

@@ -1,0 +1,1759 @@
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Possible file format: MS-DOS executable (EXE) (C:\Program Files\IDA Professional 9.2\loaders\dos.dll)
+Possible file format: Portable executable for AMD64 (PE) (C:\Program Files\IDA Professional 9.2\loaders\pe.dll)
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+   262144    32 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+  1048576            total memory allocated
+
+Loading file 'E:\WorkSpace\ReBind_demo\Malware_sample.exe' into database...
+Detected file format: Portable executable for AMD64 (PE)
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+  0. Creating a new segment  (0000000000401000-0000000000404000) ... ... OK
+  1. Creating a new segment  (0000000000404000-0000000000405000) ... ... OK
+  2. Creating a new segment  (0000000000405000-0000000000406000) ... ... OK
+  3. Creating a new segment  (0000000000406000-0000000000407000) ... ... OK
+  4. Creating a new segment  (0000000000407000-0000000000408000) ... ... OK
+  5. Creating a new segment  (0000000000408000-0000000000409000) ... ... OK
+  6. Creating a new segment  (0000000000409000-000000000040A000) ... ... OK
+  7. Creating a new segment  (000000000040A000-000000000040B000) ... ... OK
+  8. Creating a new segment  (000000000040B000-000000000040C000) ... ... OK
+Reading imports directory...
+Reading exception directory (.pdata)...
+  9. Creating a new segment  (0000000000409590-000000000040A000) ... ... OK
+ 10. Creating a new segment  (0000000000409318-0000000000409590) ... ... OK
+DWARF: File "E:\WorkSpace\ReBind_demo\Malware_sample.exe" contains DWARF information.
+Assuming __fastcall calling convention by default
+DWARF: Functions: 0 symbols applied
+DWARF: Globals: 0 symbols applied
+Loading COFF symbols...
+main() function at 401C0E, named "main"
+Type library 'mssdk64_win7' loaded. Applying types...
+Types applied to 146 names.
+Plan  FLIRT signature: SEH for vc64 7-14
+Marking typical code sequences...
+Flushing buffers, please wait...ok
+File 'E:\WorkSpace\ReBind_demo\Malware_sample.exe' has been successfully loaded into the database.
+Flushing buffers, please wait...ok
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+IDA is analysing the input file...
+You may start to explore the input file right now.
+[IDAT-Server] Waiting for auto-analysis to finish...
+Using FLIRT signature: SEH for vc64 7-14
+Propagating type information...
+Function argument information has been propagated
+The initial autoanalysis has been finished.
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. Kill the idat process to stop.
+E:\WorkSpace\ReBind_demo\idat_server.py: module 'ida_kernwin' has no attribute 'qsleep'
+Traceback (most recent call last):
+  File "C:\Program Files\IDA Professional 9.2\python\ida_idaapi.py", line 502, in IDAPython_ExecScript
+    exec(code, g)
+  File "E:/WorkSpace/ReBind_demo/idat_server.py", line 221, in <module>
+    main()
+  File "E:/WorkSpace/ReBind_demo/idat_server.py", line 215, in main
+    ida_kernwin.qsleep(1000)
+    ^^^^^^^^^^^^^^^^^^
+AttributeError: module 'ida_kernwin' has no attribute 'qsleep'
+ -> OK
+Flushing buffers, please wait...[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\Malware_sample.exe.id0 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. Kill the idat process to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Renamed 0x4023D0 -> __write_memory_part_0
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.idata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x4023D0
+[IDAT-Server] Renamed 0x401C0E -> main
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401C0E
+[IDAT-Server] Renamed 0x4016F2 -> regkeystart
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.rdata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x4016F2
+[IDAT-Server] Renamed 0x4025A0 -> _pei386_runtime_relocator
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4025A0
+[IDAT-Server] Renamed 0x4022A0 -> _matherr
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4022A0
+[IDAT-Server] Renamed 0x401AA2 -> RegKeyBoardForbidden
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401AA2
+[IDAT-Server] Renamed 0x40188D -> RegTaskmanagerForbidden
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x40188D
+[IDAT-Server] Renamed 0x401902 -> RegEditForbidden
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401902
+[IDAT-Server] Renamed 0x401977 -> RegModifyBackroud
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401977
+[IDAT-Server] Renamed 0x401FA0 -> __security_init_cookie
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401FA0
+[IDAT-Server] Renamed 0x402080 -> __report_gsfailure
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402080
+[IDAT-Server] Renamed 0x401180 -> __tmainCRTStartup
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401180
+[IDAT-Server] Renamed 0x4014B0 -> WinMainCRTStartup
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4014B0
+[IDAT-Server] Renamed 0x4014E0 -> mainCRTStartup
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4014E0
+[IDAT-Server] Renamed 0x401550 -> reproduce
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401550
+[IDAT-Server] Renamed 0x403610 -> __report_error
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403610
+[IDAT-Server] Renamed 0x402A00 -> __mingw_init_ehandler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402A00
+[IDAT-Server] Renamed 0x401010 -> pre_c_init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401010
+[IDAT-Server] Renamed 0x402CE0 -> __mingwthr_run_key_dtors_part_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402CE0
+[IDAT-Server] Renamed 0x402E70 -> __mingw_tlscallback
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402E70
+[IDAT-Server] Renamed 0x401E66 -> _GLOBAL__sub_I_Reproduce
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401E66
+[IDAT-Server] Renamed 0x403460 -> __acrt_iob_func
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403460
+[IDAT-Server] Renamed 0x401E2A -> __static_initialization_and_destruction_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401E2A
+[IDAT-Server] Renamed 0x401F60 -> __main
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401F60
+[IDAT-Server] Renamed 0x401BCE -> DeleteDrive
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401BCE
+[IDAT-Server] Renamed 0x401EF0 -> __do_global_ctors
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401EF0
+[IDAT-Server] Renamed 0x402D50 -> ___w64_mingwthr_add_key_dtor
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402D50
+[IDAT-Server] Renamed 0x402DD0 -> ___w64_mingwthr_remove_key_dtor
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402DD0
+[IDAT-Server] Renamed 0x402180 -> tls_callback_1
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402180
+[IDAT-Server] Renamed 0x403680 -> register_frame_ctor
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403680
+[IDAT-Server] Renamed 0x4021B0 -> tls_callback_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4021B0
+[IDAT-Server] Renamed 0x4031A0 -> _getpeimagebase
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4031A0
+[IDAT-Server] Renamed 0x401E0F -> __tcf_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401E0F
+[IDAT-Server] Renamed 0x402F70 -> _ValidateImageBase
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402F70
+[IDAT-Server] Renamed 0x4030F0 -> __mingw_getsectioncount
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4030F0
+[IDAT-Server] Renamed 0x403130 -> FindPESectionExec
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403130
+[IDAT-Server] Renamed 0x403070 -> __mingw_getsectionforaddress
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403070
+[IDAT-Server] Renamed 0x4031E0 -> _isnonwritableincurrentimage
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4031E0
+[IDAT-Server] Renamed 0x403280 -> __mingw_enum_import_library_names
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403280
+[IDAT-Server] Renamed 0x402FE0 -> FindPESectionByName
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402FE0
+[IDAT-Server] Renamed 0x402860 -> __mingw_seh_error_handler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402860
+[IDAT-Server] Renamed 0x402F50 -> _validateimagebase_part_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402F50
+[IDAT-Server] Renamed 0x4023A0 -> _fpreset
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4023A0
+[IDAT-Server] Renamed 0x403388 -> strlen
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403388
+[IDAT-Server] Renamed 0x4033A8 -> signal_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033A8
+[IDAT-Server] Renamed 0x4033D8 -> free
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033D8
+[IDAT-Server] Renamed 0x4033F8 -> abort
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033F8
+[IDAT-Server] Renamed 0x401E90 -> URLDownloadToFileA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401E90
+[IDAT-Server] Renamed 0x401EA0 -> std__ios_base__Init___Init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401EA0
+[IDAT-Server] Renamed 0x401EA8 -> std__ios_base__Init__Init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401EA8
+[IDAT-Server] Renamed 0x401F90 -> _setargv
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401F90
+[IDAT-Server] Renamed 0x403330 -> __chkstk_ms
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403330
+[IDAT-Server] Renamed 0x403370 -> vfprintf
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403370
+[IDAT-Server] Renamed 0x403378 -> system_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403378
+[IDAT-Server] Renamed 0x403380 -> strncmp
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403380
+[IDAT-Server] Renamed 0x403390 -> strcmp
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403390
+[IDAT-Server] Renamed 0x403398 -> strcat
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403398
+[IDAT-Server] Renamed 0x4033A0 -> srand
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033A0
+[IDAT-Server] Renamed 0x4033B0 -> rand
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033B0
+[IDAT-Server] Renamed 0x4033B8 -> puts
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033B8
+[IDAT-Server] Renamed 0x4033C0 -> memcpy
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033C0
+[IDAT-Server] Renamed 0x4033C8 -> malloc_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033C8
+[IDAT-Server] Renamed 0x4033D0 -> fwrite
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033D0
+[IDAT-Server] Renamed 0x4033E0 -> fprintf
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033E0
+[IDAT-Server] Renamed 0x4033E8 -> exit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033E8
+[IDAT-Server] Renamed 0x4033F0 -> calloc
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033F0
+[IDAT-Server] Renamed 0x403400 -> time
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403400
+[IDAT-Server] Renamed 0x403408 -> _onexit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403408
+[IDAT-Server] Renamed 0x401510 -> atexit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401510
+[IDAT-Server] Renamed 0x403418 -> _initterm
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403418
+[IDAT-Server] Renamed 0x403420 -> _cexit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403420
+[IDAT-Server] Renamed 0x403428 -> _amsg_exit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403428
+[IDAT-Server] Renamed 0x403430 -> __setusermatherr
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403430
+[IDAT-Server] Renamed 0x403438 -> __set_app_type
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403438
+[IDAT-Server] Renamed 0x403448 -> __getmainargs
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403448
+[IDAT-Server] Renamed 0x4034A0 -> __p__acmdln
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034A0
+[IDAT-Server] Renamed 0x4034B0 -> __p__fmode
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034B0
+[IDAT-Server] Renamed 0x4034C0 -> __iob_func
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034C0
+[IDAT-Server] Renamed 0x401130 -> pre_cpp_init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401130
+[IDAT-Server] Renamed 0x401530 -> __gcc_register_frame
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401530
+[IDAT-Server] Renamed 0x402290 -> __mingw_setusermatherr
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402290
+[IDAT-Server] Renamed 0x401000 -> __mingw_invalidparameterhandler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401000
+[IDAT-Server] Renamed 0x401540 -> __gcc_deregister_frame
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401540
+[IDAT-Server] Renamed 0x401EB0 -> __do_global_dtors
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401EB0
+[IDAT-Server] Renamed 0x401F80 -> my_lconv_init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401F80
+[IDAT-Server] Renamed 0x402230 -> __tlregdtor
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402230
+[IDAT-Server] Renamed 0x402240 -> __mingw_raise_matherr
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402240
+[IDAT-Server] Renamed 0x4023B0 -> decode_pointer
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4023B0
+[IDAT-Server] Renamed 0x4023C0 -> encode_pointer
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4023C0
+[IDAT-Server] Renamed 0x402F90 -> _FindPESection
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402F90
+[IDAT-Server] Renamed 0x403410 -> _itoa
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403410
+[IDAT-Server] Renamed 0x403450 -> __C_specific_handler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403450
+[IDAT-Server] Renamed 0x403480 -> mingw_get_invalid_parameter_handler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403480
+[IDAT-Server] Renamed 0x403490 -> mingw_set_invalid_parameter_handler
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403490
+[IDAT-Server] Renamed 0x4034D0 -> RegSetValueExA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034D0
+[IDAT-Server] Renamed 0x4034D8 -> RegQueryValueExA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034D8
+[IDAT-Server] Renamed 0x4034E0 -> RegOpenKeyExA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034E0
+[IDAT-Server] Renamed 0x4034E8 -> RegCreateKeyA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034E8
+[IDAT-Server] Renamed 0x4034F0 -> RegCloseKey
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4034F0
+[IDAT-Server] Renamed 0x403500 -> SHGetSpecialFolderPathA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403500
+[IDAT-Server] Renamed 0x403510 -> ShowWindow
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403510
+[IDAT-Server] Renamed 0x403518 -> MessageBoxA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403518
+[IDAT-Server] Renamed 0x403520 -> GetForegroundWindow
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403520
+[IDAT-Server] Renamed 0x403530 -> VirtualQuery
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403530
+[IDAT-Server] Renamed 0x403538 -> VirtualProtect
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403538
+[IDAT-Server] Renamed 0x403540 -> UnhandledExceptionFilter
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403540
+[IDAT-Server] Renamed 0x403548 -> TlsGetValue
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403548
+[IDAT-Server] Renamed 0x403550 -> TerminateProcess
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403550
+[IDAT-Server] Renamed 0x403558 -> Sleep_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403558
+[IDAT-Server] Renamed 0x403560 -> SetUnhandledExceptionFilter_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403560
+[IDAT-Server] Renamed 0x403568 -> RtlVirtualUnwind
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403568
+[IDAT-Server] Renamed 0x403570 -> RtlLookupFunctionEntry
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403570
+[IDAT-Server] Renamed 0x403580 -> RtlAddFunctionTable
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403580
+[IDAT-Server] Renamed 0x403588 -> QueryPerformanceCounter
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403588
+[IDAT-Server] Renamed 0x403590 -> LeaveCriticalSection
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403590
+[IDAT-Server] Renamed 0x403598 -> InitializeCriticalSection
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403598
+[IDAT-Server] Renamed 0x4035A0 -> GetTickCount
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035A0
+[IDAT-Server] Renamed 0x4035A8 -> GetSystemTimeAsFileTime
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035A8
+[IDAT-Server] Renamed 0x4035B0 -> GetSystemDirectoryA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035B0
+[IDAT-Server] Renamed 0x4035B8 -> GetStartupInfoA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035B8
+[IDAT-Server] Renamed 0x4035C0 -> GetModuleFileNameA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035C0
+[IDAT-Server] Renamed 0x4035C8 -> GetLastError_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035C8
+[IDAT-Server] Renamed 0x4035D0 -> GetCurrentThreadId
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035D0
+[IDAT-Server] Renamed 0x4035D8 -> GetCurrentProcessId
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035D8
+[IDAT-Server] Renamed 0x4035E0 -> GetCurrentProcess
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035E0
+[IDAT-Server] Renamed 0x4035E8 -> EnterCriticalSection
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035E8
+[IDAT-Server] Renamed 0x4035F0 -> DeleteCriticalSection
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035F0
+[IDAT-Server] Renamed 0x4035F8 -> DefineDosDeviceA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4035F8
+[IDAT-Server] Renamed 0x403600 -> CopyFileA
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403600
+[IDAT-Server] Renamed 0x403440 -> __lconv_init
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403440
+[IDAT-Server] Renamed 0x403578 -> rtlcapturecontext_0
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403578
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\Malware_sample.exe.id0 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+Database for file 'E:\WorkSpace\ReBind_demo\Malware_sample.exe.id0' is not closed. Do you want IDA to repair it?
+
+Please note that the repaired database will be upgraded to
+the current version of IDA and may still have problems.
+The best solution is to use the packed database or a backup.
+ -> ~R~epair
+The database has been successfully repaired.
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+DeleteDrive: incorrect back reference '_Z11DeleteDrivePc' at 401BCE...fixed
+FindPESectionByName: incorrect back reference '_FindPESectionByName' at 402FE0...fixed
+FindPESectionExec: incorrect back reference '_FindPESectionExec' at 403130...fixed
+RegCreateKeyA: incorrect back reference 'RegCreateKeyA_0' at 4034E8...fixed
+RegEditForbidden: incorrect back reference '_Z16RegEditForbiddenv' at 401902...fixed
+RegKeyBoardForbidden: incorrect back reference '_Z20RegKeyBoardForbiddenv' at 401AA2...fixed
+RegModifyBackroud: incorrect back reference '_Z17RegModifyBackroudv' at 401977...fixed
+RegTaskmanagerForbidden: incorrect back reference '_Z23RegTaskmanagerForbiddenv' at 40188D...fixed
+VirtualQuery_0: incorrect back reference 'VirtualQuery' at 403530...fixed
+_GLOBAL__sub_I_Reproduce: incorrect back reference '_GLOBAL__sub_I__Z9Reproducev' at 401E66...fixed
+__chkstk_ms: incorrect back reference '___chkstk_ms' at 403330...fixed
+__iob_func: incorrect back reference '__iob_func_0' at 4034C0...fixed
+__mingw_getsectioncount: incorrect back reference '__mingw_GetSectionCount' at 4030F0...fixed
+__mingw_getsectionforaddress: incorrect back reference '__mingw_GetSectionForAddress' at 403070...fixed
+__mingw_seh_error_handler: incorrect back reference '__mingw_SEH_error_handler' at 402860...fixed
+__mingw_tlscallback: incorrect back reference '__mingw_TLScallback' at 402E70...fixed
+__mingwthr_run_key_dtors_part_0: incorrect back reference '__mingwthr_run_key_dtors.part.0' at 402CE0...fixed
+__static_initialization_and_destruction_0: incorrect back reference '_Z41__static_initialization_and_destruction_0ii' at 401E2A...fixed
+__write_memory_part_0: incorrect back reference '__write_memory.part.0' at 4023D0...fixed
+_getpeimagebase: incorrect back reference '_GetPEImageBase' at 4031A0...fixed
+_isnonwritableincurrentimage: incorrect back reference '_IsNonwritableInCurrentImage' at 4031E0...fixed
+_validateimagebase_part_0: incorrect back reference '_ValidateImageBase.part.0' at 402F50...fixed
+regkeystart: incorrect back reference '_Z11RegKeyStartv' at 4016F2...fixed
+reproduce: incorrect back reference '_Z9Reproducev' at 401550...fixed
+std__ios_base__Init__Init: incorrect back reference '_ZNSt8ios_base4InitC1Ev_0' at 401EA8...fixed
+std__ios_base__Init___Init: incorrect back reference '_ZNSt8ios_base4InitD1Ev' at 401EA0...fixed
+tls_callback_0: incorrect back reference 'TlsCallback_0' at 4021B0...fixed
+tls_callback_1: incorrect back reference '__dyn_tls_dtor' at 402180...fixed
+Database still contains inconsistencies, see the message window for the details -> OK
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. Kill the idat process to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\Malware_sample.exe.id0 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+Database for file 'E:\WorkSpace\ReBind_demo\Malware_sample.exe.id0' is not closed. Do you want IDA to repair it?
+
+Please note that the repaired database will be upgraded to
+the current version of IDA and may still have problems.
+The best solution is to use the packed database or a backup.
+ -> ~R~epair
+The database has been successfully repaired.
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+DeleteDrive: incorrect back reference '_Z11DeleteDrivePc' at 401BCE...fixed
+FindPESectionByName: incorrect back reference '_FindPESectionByName' at 402FE0...fixed
+FindPESectionExec: incorrect back reference '_FindPESectionExec' at 403130...fixed
+RegCreateKeyA: incorrect back reference 'RegCreateKeyA_0' at 4034E8...fixed
+RegEditForbidden: incorrect back reference '_Z16RegEditForbiddenv' at 401902...fixed
+RegKeyBoardForbidden: incorrect back reference '_Z20RegKeyBoardForbiddenv' at 401AA2...fixed
+RegModifyBackroud: incorrect back reference '_Z17RegModifyBackroudv' at 401977...fixed
+RegTaskmanagerForbidden: incorrect back reference '_Z23RegTaskmanagerForbiddenv' at 40188D...fixed
+VirtualQuery_0: incorrect back reference 'VirtualQuery' at 403530...fixed
+_GLOBAL__sub_I_Reproduce: incorrect back reference '_GLOBAL__sub_I__Z9Reproducev' at 401E66...fixed
+__chkstk_ms: incorrect back reference '___chkstk_ms' at 403330...fixed
+__iob_func: incorrect back reference '__iob_func_0' at 4034C0...fixed
+__mingw_getsectioncount: incorrect back reference '__mingw_GetSectionCount' at 4030F0...fixed
+__mingw_getsectionforaddress: incorrect back reference '__mingw_GetSectionForAddress' at 403070...fixed
+__mingw_seh_error_handler: incorrect back reference '__mingw_SEH_error_handler' at 402860...fixed
+__mingw_tlscallback: incorrect back reference '__mingw_TLScallback' at 402E70...fixed
+__mingwthr_run_key_dtors_part_0: incorrect back reference '__mingwthr_run_key_dtors.part.0' at 402CE0...fixed
+__static_initialization_and_destruction_0: incorrect back reference '_Z41__static_initialization_and_destruction_0ii' at 401E2A...fixed
+__write_memory_part_0: incorrect back reference '__write_memory.part.0' at 4023D0...fixed
+_getpeimagebase: incorrect back reference '_GetPEImageBase' at 4031A0...fixed
+_isnonwritableincurrentimage: incorrect back reference '_IsNonwritableInCurrentImage' at 4031E0...fixed
+_validateimagebase_part_0: incorrect back reference '_ValidateImageBase.part.0' at 402F50...fixed
+regkeystart: incorrect back reference '_Z11RegKeyStartv' at 4016F2...fixed
+reproduce: incorrect back reference '_Z9Reproducev' at 401550...fixed
+std__ios_base__Init__Init: incorrect back reference '_ZNSt8ios_base4InitC1Ev_0' at 401EA8...fixed
+std__ios_base__Init___Init: incorrect back reference '_ZNSt8ios_base4InitD1Ev' at 401EA0...fixed
+tls_callback_0: incorrect back reference 'TlsCallback_0' at 4021B0...fixed
+tls_callback_1: incorrect back reference '__dyn_tls_dtor' at 402180...fixed
+Database still contains inconsistencies, see the message window for the details -> OK
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. Kill the idat process to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Database save requested via UI action.
+[IDAT-Server] Shutdown flag set, server loop will exit after this request.
+[IDAT-Server] HTTP loop exited.
+[IDAT-Server] Exiting IDA...
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 23688
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+
+==================================================
+[IDAT-Server] Caught Signal: 2 (Ctrl+C). Preparing to exit...
+[IDAT-Server] Saving database to .i64 file...
+Flushing buffers, please wait...ok
+[IDAT-Server] Database saved successfully.
+[IDAT-Server] Exiting IDA now (cleaning up .id0/.id1 files)...
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 2920
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+
+==================================================
+[IDAT-Server] Caught Signal: 2 (Ctrl+C). Preparing to exit...
+[IDAT-Server] Saving database to .i64 file...
+Flushing buffers, please wait...ok
+[IDAT-Server] Database saved successfully.
+[IDAT-Server] Exiting IDA now (cleaning up .id0/.id1 files)...
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+IDA has found an unpacked version of database: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64
+on the disk.
+
+Should we proceed with the unpacked files?
+ -> Pro~c~eed with unpacked base
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 26284
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Renamed 0x4033B8 -> puts_not_revised
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.idata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x4033B8
+[IDAT-Server] Renamed 0x4033A8 -> signal_handler_reset
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x4033A8
+
+==================================================
+[IDAT-Server] Caught Signal: 2 (Ctrl+C). Preparing to exit...
+[IDAT-Server] Saving database to .i64 file...
+Flushing buffers, please wait...ok
+[IDAT-Server] Database saved successfully.
+[IDAT-Server] Exiting IDA now (cleaning up .id0/.id1 files)...
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 23288
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Renamed 0x403378 -> execute_system_command
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.idata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x403378
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+IDA has found an unpacked version of database: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64
+on the disk.
+It appears IDA did not close properly;
+it is probably safer to restart your work from the packed database -> ~R~estore packed base
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 5952
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Renamed 0x4031E0 -> _isnonwritableincurrentimagesection
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.rdata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x4031E0
+[IDAT-Server] Renamed 0x403130 -> FindExecutableSectionByIndex
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x403130
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+IDA has found an unpacked version of database: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64
+on the disk.
+It appears IDA did not close properly;
+it is probably safer to restart your work from the packed database -> ~R~estore packed base
+E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.id0: Permission denied -> OK
+Database initialization failed with error 4
+Open database failed with result: 4
+ -> OK
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+IDA has found an unpacked version of database: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64
+on the disk.
+It appears IDA did not close properly;
+it is probably safer to restart your work from the packed database -> ~R~estore packed base
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 21716
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Renamed 0x402F50 -> _ValidatePEImageBase
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402F50
+[IDAT-Server] Renamed 0x4023D0 -> __write_memory_safe
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.idata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x4023D0
+[IDAT-Server] Renamed 0x402180 -> TlsCallback_MinGW_Runtime
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x402180
+[IDAT-Server] Renamed 0x401F60 -> __cinit
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401F60
+[IDAT-Server] Renamed 0x401977 -> SetMaliciousWallpaper
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401977
+[IDAT-Server] Renamed 0x401550 -> CopySelfToDesktopWithRandomName
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401550
+[IDAT-Server] Renamed 0x401BCE -> RemoveDosDeviceMapping
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Decompilation refreshed for 0x401BCE
+[IDAT-Server] Renamed 0x401AA2 -> DisableKeyboardKeysViaRegistry
+[IDAT-Server] Hex-Rays initialized.
+[autohidden] The decompiler assumes that the segment '.rdata' is read-only because of its NAME.
+All data references to the segment will be replaced by constant values.
+This may lead to drastic changes in the decompiler output.
+If the segment is not read-only, please change the segment NAME.
+
+In general, the decompiler checks the segment permissions, class, and name
+to determine if it is read-only.
+ -> OK
+[IDAT-Server] Decompilation refreshed for 0x401AA2
+[IDAT-Server] Global renamed 0x409318 -> __imp_regclosekey
+[IDAT-Server] Failed to apply type 'FARPROC' at 0x409318: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408610 -> g_mingw_app_type
+[IDAT-Server] Failed to apply type 'int' at 0x408610: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4088E0 -> g_TlsKeyDestructorList
+[IDAT-Server] Failed to apply type 'struct _TLS_KEY_DTOR_NODE *' at 0x4088E0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x402F50 -> g_ValidateImageBaseFunc
+[IDAT-Server] Failed to apply type 'void (*)(void)' at 0x402F50: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408624 -> g_MaxSections
+[IDAT-Server] Failed to apply type 'int' at 0x408624: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4023A0 -> g_fpreset
+[IDAT-Server] Failed to apply type 'void (*)(void)' at 0x4023A0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x403388 -> g_strlen
+[IDAT-Server] Failed to apply type 'int (__cdecl *)(const char *)' at 0x403388: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408008 -> g_IsManagedApplication
+[IDAT-Server] Failed to apply type 'bool' at 0x408008: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401F60 -> g_MainEntryPoint
+[IDAT-Server] Failed to apply type 'int (*)(int, char **)' at 0x401F60: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408640 -> g_pOldExceptionHandler
+[IDAT-Server] Failed to apply type 'LPTOP_LEVEL_EXCEPTION_FILTER' at 0x408640: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408018 -> g_argv
+[IDAT-Server] Failed to apply type 'char **' at 0x408018: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4040B0 -> __security_cookie
+[IDAT-Server] Failed to apply type 'unsigned int' at 0x4040B0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x40800C -> g_mainReturnValue
+[IDAT-Server] Failed to apply type 'int' at 0x40800C: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408960 -> g_lpCmdLine
+[IDAT-Server] Failed to apply type 'char *' at 0x408960: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x403610 -> g_ErrorHandler
+[IDAT-Server] Failed to apply type 'void (*)(const char *)' at 0x403610: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408620 -> g_was_init
+[IDAT-Server] Failed to apply type 'bool' at 0x408620: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x409348 -> g_imp_copyfilea
+[IDAT-Server] Failed to apply type 'FARPROC' at 0x409348: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4031A0 -> g_hModuleBase
+[IDAT-Server] Failed to apply type 'HMODULE' at 0x4031A0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x403460 -> g_stdout
+[IDAT-Server] Failed to apply type 'FILE *' at 0x403460: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4033F8 -> g_abort_function_ptr
+[IDAT-Server] Failed to apply type 'void (*)(void)' at 0x4033F8: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x409558 -> g_GetForegroundWindow
+[IDAT-Server] Failed to apply type 'FARPROC' at 0x409558: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401180 -> g_StartupEntryPoint
+[IDAT-Server] Failed to apply type 'int (__cdecl *)(void)' at 0x401180: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401FA0 -> g_SecurityCookie
+[IDAT-Server] Failed to apply type 'unsigned int' at 0x401FA0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x408050 -> g_mingw_initcharmax
+[IDAT-Server] Failed to apply type 'int' at 0x408050: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4085F0 -> g_mingw_initltssuo_force
+[IDAT-Server] Failed to apply type 'int' at 0x4085F0: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401550 -> g_reproduce
+[IDAT-Server] Failed to apply type 'void (*)()' at 0x401550: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4016F2 -> g_regkeystart
+[IDAT-Server] Failed to apply type 'bool' at 0x4016F2: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x40188D -> g_TaskManagerForbidden
+[IDAT-Server] Failed to apply type 'bool' at 0x40188D: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401902 -> g_regeditforbidden
+[IDAT-Server] Failed to apply type 'bool' at 0x401902: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401977 -> g_regmodifybackroud
+[IDAT-Server] Failed to apply type 'bool' at 0x401977: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401AA2 -> g_regKeyboardForbidden
+[IDAT-Server] Failed to apply type 'bool' at 0x401AA2: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x401BCE -> g_deletedrive
+[IDAT-Server] Failed to apply type 'bool' at 0x401BCE: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x403378 -> g_system_func_ptr
+[IDAT-Server] Failed to apply type 'int (*)(const char *)' at 0x403378: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x403390 -> g_Str2
+[IDAT-Server] Failed to apply type 'const char *' at 0x403390: parse_decl() missing 1 required positional argument: 'pt_flags'
+[IDAT-Server] Global renamed 0x4033B8 -> g_TaskManagerForbidden
+[IDAT-Server] Failed to apply type 'bool' at 0x4033B8: parse_decl() missing 1 required positional argument: 'pt_flags'
+
+==================================================
+[IDAT-Server] Caught Signal: 2 (Ctrl+C). Preparing to exit...
+[IDAT-Server] Saving database to .i64 file...
+Flushing buffers, please wait...ok
+[IDAT-Server] Database saved successfully.
+[IDAT-Server] Exiting IDA now (cleaning up .id0/.id1 files)...
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 31288
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Global renamed 0x401510 -> g_atexit_handlers
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (**)(void)' at 0x401510 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033D8 -> g_ThreadLocalStorageListHead
+Syntax error near: _QWORD
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'struct _QWORD *' at 0x4033D8 (all strategies failed)
+[IDAT-Server] Global renamed 0x408010 -> g_envp
+[IDAT-Server] Failed to apply type 'const char **' at 0x408010 (all strategies failed)
+[IDAT-Server] Global renamed 0x408020 -> g_argc
+[IDAT-Server] Failed to apply type 'int' at 0x408020 (all strategies failed)
+[IDAT-Server] Global renamed 0x408030 -> g_StdIOInitFlag
+[IDAT-Server] Failed to apply type 'bool' at 0x408030 (all strategies failed)
+[IDAT-Server] Global renamed 0x401C0E -> g_mainThreadId
+[IDAT-Server] Failed to apply type 'DWORD' at 0x401C0E (all strategies failed)
+[IDAT-Server] Global renamed 0x4033C0 -> g_memcpy
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void *, const void *, size_t)' at 0x4033C0 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033E8 -> g_ExitCode
+[IDAT-Server] Failed to apply type 'int' at 0x4033E8 (all strategies failed)
+[IDAT-Server] Global renamed 0x403418 -> g_pInitTerm
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void)' at 0x403418 (all strategies failed)
+[IDAT-Server] Global renamed 0x403420 -> g_atexit_funcs
+Functions cannot return functions or arrays
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void)[]' at 0x403420 (all strategies failed)
+[IDAT-Server] Global renamed 0x403428 -> g_amsg_exit_handler
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(int)' at 0x403428 (all strategies failed)
+[IDAT-Server] Global renamed 0x4034A0 -> g_pCommandLine
+[IDAT-Server] Failed to apply type 'char **' at 0x4034A0 (all strategies failed)
+[IDAT-Server] Received remote save_and_exit command.
+[IDAT-Server] HTTP loop exited.
+The current debugger backend (gdb) does not provide memory information to IDA.
+Therefore the memory contents may be invisible by default.
+Please use the Debugger/Manual memory regions menu item to configure the memory layout.
+It is possible to define just one big region for the whole memory
+(IDA will display question marks for missing memory regions in this case). -> OK
+Auto analysis completed
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 4904
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Global renamed 0x408040 -> g_Initialized
+[IDAT-Server] Failed to apply type 'bool' at 0x408040 (all strategies failed)
+[IDAT-Server] Global renamed 0x4023D0 -> g_WriteMemoryFunction
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void *, const void *, size_t)' at 0x4023D0 (all strategies failed)
+[IDAT-Server] Global renamed 0x403330 -> g_StackCheckGuard
+[IDAT-Server] Failed to apply type 'unsigned int' at 0x403330 (all strategies failed)
+[IDAT-Server] Global renamed 0x409538 -> g_imp_ShGetSpecialFolderPathA
+[IDAT-Server] Applied type 'FARPROC' at 0x409538
+[IDAT-Server] Global renamed 0x4033C8 -> g_malloc
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void *(*)(size_t)' at 0x4033C8 (all strategies failed)
+[IDAT-Server] Global renamed 0x404050 -> g_crt_mt
+[IDAT-Server] Failed to apply type 'int' at 0x404050 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033E0 -> g_fprintf
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'int (*)(FILE *stream, const char *format, ...)' at 0x4033E0 (all strategies failed)
+[IDAT-Server] Global renamed 0x405300 -> g_UninitializedData
+[IDAT-Server] Failed to apply type 'void*' at 0x405300 (all strategies failed)
+[IDAT-Server] Global renamed 0x401E90 -> g_UrlDownloadToFileA
+[IDAT-Server] Applied type 'FARPROC' at 0x401E90
+[IDAT-Server] Global renamed 0x403398 -> g_DesktopPathBuffer
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'char[260]' at 0x403398 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033A0 -> g_srand_seed
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'int (*)(unsigned int)' at 0x4033A0 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033B0 -> g_RandomSeed
+[IDAT-Server] Failed to apply type 'unsigned int' at 0x4033B0 (all strategies failed)
+[IDAT-Server] Global renamed 0x403400 -> g_SeedTime
+[IDAT-Server] Failed to apply type 'time_t' at 0x403400 (all strategies failed)
+[IDAT-Server] Global renamed 0x403370 -> g_stdout_stderr
+[IDAT-Server] Failed to apply type 'FILE *' at 0x403370 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033D0 -> g_stderr
+[IDAT-Server] Failed to apply type 'FILE *' at 0x4033D0 (all strategies failed)
+[IDAT-Server] Global renamed 0x405440 -> g_RDataSectionBase
+[IDAT-Server] Failed to apply type 'const void*' at 0x405440 (all strategies failed)
+[IDAT-Server] Global renamed 0x402860 -> g_SEH_ErrorHandler
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(int, struct _EXCEPTION_POINTERS *)' at 0x402860 (all strategies failed)
+[IDAT-Server] Global renamed 0x402FE0 -> g_pFindPESectionByName
+[IDAT-Server] Applied type 'FARPROC' at 0x402FE0
+[IDAT-Server] Global renamed 0x403130 -> g_findPESectionExec
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'int (BOOL)' at 0x403130 (all strategies failed)
+[IDAT-Server] Global renamed 0x405550 -> g_UninitializedData
+[IDAT-Server] Failed to apply type 'void *' at 0x405550 (all strategies failed)
+[IDAT-Server] Global renamed 0x401F90 -> g_setargv
+[IDAT-Server] Failed to apply type 'int' at 0x401F90 (all strategies failed)
+[IDAT-Server] Global renamed 0x4022A0 -> g_matherr
+[IDAT-Server] Failed to apply type '_exception *' at 0x4022A0 (all strategies failed)
+[IDAT-Server] Global renamed 0x403438 -> g_AppType
+[IDAT-Server] Failed to apply type 'int' at 0x403438 (all strategies failed)
+[IDAT-Server] Global renamed 0x4034B0 -> g_p_fmode
+[IDAT-Server] Failed to apply type 'int *' at 0x4034B0 (all strategies failed)
+[IDAT-Server] Global renamed 0x404060 -> g_DebugMatherrInstalled
+[IDAT-Server] Failed to apply type 'int' at 0x404060 (all strategies failed)
+[IDAT-Server] Global renamed 0x408630 -> g_fmode
+[IDAT-Server] Failed to apply type 'int' at 0x408630 (all strategies failed)
+[IDAT-Server] Global renamed 0x405290 -> gs_pExceptionPointers
+[IDAT-Server] Failed to apply type 'EXCEPTION_POINTERS*' at 0x405290 (all strategies failed)
+[IDAT-Server] Global renamed 0x408060 -> gs_ContextRecord
+[IDAT-Server] Failed to apply type 'struct CONTEXT_RECORD *' at 0x408060 (all strategies failed)
+[IDAT-Server] Global renamed 0x402CE0 -> g_pMingwThreadKeyDtors
+Functions cannot return functions or arrays
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void)[]' at 0x402CE0 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033A8 -> g_signal_handlers
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type '_crt_signal_t[NSIG]' at 0x4033A8 (all strategies failed)
+[IDAT-Server] Global renamed 0x401EA8 -> g_ios_base_init_flag
+[IDAT-Server] Failed to apply type 'bool' at 0x401EA8 (all strategies failed)
+[IDAT-Server] Global renamed 0x4034C0 -> g_iob_func_ptr
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'FILE *(*)(void)' at 0x4034C0 (all strategies failed)
+[IDAT-Server] Global renamed 0x403380 -> g_StrncmpFunctionPtr
+ignored: __cdecl is not supported by the current architecture
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'int (__cdecl *)(const char *, const char *, size_t)' at 0x403380 (all strategies failed)
+[IDAT-Server] Global renamed 0x401EB0 -> g_pRegisteredAtExitFunction
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)(void)' at 0x401EB0 (all strategies failed)
+[IDAT-Server] Global renamed 0x4033F0 -> g_pKeyDtorList
+[IDAT-Server] Failed to apply type 'struct __mingwthr_key_dtor **' at 0x4033F0 (all strategies failed)
+[IDAT-Server] Global renamed 0x403698 -> g_ctors
+Functions cannot return functions or arrays
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)()[]' at 0x403698 (all strategies failed)
+[IDAT-Server] Global renamed 0x401EA0 -> g_IosBaseInitDtor
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (*)()' at 0x401EA0 (all strategies failed)
+[IDAT-Server] Global renamed 0x401530 -> g_GCCFrameInfo
+[IDAT-Server] Failed to apply type 'void *' at 0x401530 (all strategies failed)
+[IDAT-Server] Global renamed 0x408600 -> g_stUserMathErr
+[IDAT-Server] Failed to apply type 'struct MATH_ERR *' at 0x408600 (all strategies failed)
+[IDAT-Server] Global renamed 0x408950 -> g_invalid_parameter_handler
+[IDAT-Server] Failed to apply type '_invalid_parameter_handler*' at 0x408950 (all strategies failed)
+[IDAT-Server] Global renamed 0x404010 -> g_UnnamedData
+[IDAT-Server] Failed to apply type 'void *' at 0x404010 (all strategies failed)
+[IDAT-Server] Global renamed 0x403408 -> g_onexit
+[IDAT-Server] Failed to apply type '_onexit_t *' at 0x403408 (all strategies failed)
+[IDAT-Server] Global renamed 0x409548 -> g_imp_UrlDownloadToFileA
+[IDAT-Server] Applied type 'FARPROC' at 0x409548
+[IDAT-Server] Global renamed 0x403430 -> g_stUserMathErr
+[IDAT-Server] Applied type '_UserMathErrorFunctionPointer' at 0x403430
+[IDAT-Server] Global renamed 0x403448 -> g_pNewMode
+[IDAT-Server] Failed to apply type 'int *' at 0x403448 (all strategies failed)
+[IDAT-Server] Global renamed 0x404030 -> g_dowildcard
+[IDAT-Server] Failed to apply type 'int' at 0x404030 (all strategies failed)
+[IDAT-Server] Global renamed 0x4085E0 -> g_newmode
+[IDAT-Server] Failed to apply type 'int' at 0x4085E0 (all strategies failed)
+[IDAT-Server] Global renamed 0x409428 -> __imp___c_specific_handler
+ignored: __cdecl is not supported by the current architecture
+Syntax error near: dummy_var_for_parse
+Bad declaration. See the message window for details. -> OK
+[IDAT-Server] Failed to apply type 'void (__cdecl *)(void)' at 0x409428 (all strategies failed)
+[IDAT-Server] Received remote save_and_exit command.
+[IDAT-Server] HTTP loop exited.
+The current debugger backend (gdb) does not provide memory information to IDA.
+Therefore the memory contents may be invisible by default.
+Please use the Debugger/Manual memory regions menu item to configure the memory layout.
+It is possible to define just one big region for the whole memory
+(IDA will display question marks for missing memory regions in this case). -> OK
+Auto analysis completed
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe.i64 already exists.
+Do you want to overwrite it? -> ~L~oad existing
+
+  bytes   pages size description
+--------- ----- ---- --------------------------------------------
+   524288    64 8192 allocating memory for b-tree...
+    81920    10 8192 allocating memory for virtual array...
+   262144    32 8192 allocating memory for name pointers...
+-----------------------------------------------------------------
+   868352            total memory allocated
+
+Loading processor module C:\Program Files\IDA Professional 9.2\procs\pc.dll for metapc...OK
+Loading type libraries...
+Autoanalysis subsystem has been initialized.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Database for file 'Malware_sample.exe' has been loaded.
+Hex-Rays Decompiler plugin has been loaded (v9.2.0.250908)
+  The hotkeys are F5: decompile, Ctrl-F5: decompile all.
+
+  Please check the Edit/Plugins menu for more information.
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\bindiff8_ida64.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll) error: 找不到指定的程序。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida.dll: can't load file
+
+LoadLibrary(C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll) error: 找不到指定的模块。
+C:\Users\jaube\AppData\Roaming\Hex-Rays\IDA Pro\plugins\binexport12_ida64.dll: can't load file
+Hex-rays version 9.2.0.250908 has been detected, gooMBA plugin ready to use
+[MCP] Plugin loaded, use Edit -> Plugins -> MCP (Ctrl+Alt+M) to start the server
+[IDAT-Server] Waiting for auto-analysis to finish...
+[IDAT-Server] Auto-analysis finished.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Server running. PID: 19308
+[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.
+[IDAT-Server] Listening on http://127.0.0.1:12345 ...
+[IDAT-Server] Press Ctrl+C to save and exit safely.
+[IDAT-Server] Received remote save_and_exit command.
+[IDAT-Server] HTTP loop exited.
+The current debugger backend (gdb) does not provide memory information to IDA.
+Therefore the memory contents may be invisible by default.
+Please use the Debugger/Manual memory regions menu item to configure the memory layout.
+It is possible to define just one big region for the whole memory
+(IDA will display question marks for missing memory regions in this case). -> OK
+Auto analysis completed
+Flushing buffers, please wait...ok
+Unloading IDP module C:\Program Files\IDA Professional 9.2\procs\pc.dll...
