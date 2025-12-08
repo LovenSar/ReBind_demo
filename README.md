@@ -20,30 +20,67 @@ ReBind Demo 是一个专注于二进制语义对齐技术的综合工具集，�
 ```
 ReBind_demo/
 ├── rebind_demo.py              # 综合分析脚本 - 主入口
+├── .env                        # 环境变量配置（OPENAI_API_KEY 等）
+├── .gitignore                  # Git 忽略文件配置
+├── README.md                   # 项目说明文档
 ├── tools/                      # 工具集目录
 │   ├── Ghidra_Headless_Demo/   # Ghidra Headless 分析工具
 │   │   ├── ghidra_adapter.py   # Ghidra Python 适配器
 │   │   ├── ExtractBinaryInfo.py     # 提取符号/字符串/段/交叉引用
 │   │   ├── ExtractDisassembly.py    # 提取按函数拆分的反汇编
 │   │   ├── ExtractPseudocode.py     # 提取按函数拆分的伪代码
-│   │   ├── config.yaml        # Ghidra 配置文件
-│   │   └── input_prehandle_start.bat # Windows 批处理入口
-│   ├── IDA_Headless_Demo/     # IDA Headless 分析工具
-│       ├── ida_adapter.py     # IDA Python 适配器
-│       ├── ExtractBinaryInfo_IDA.py  # IDA 版本信息提取脚本
-│       ├── ExtractDisassembly_IDA.py # IDA 版本反汇编提取脚本
-│       ├── ExtractPseudocode_IDA.py  # IDA 版本伪代码提取脚本
-│       ├── config.yaml        # IDA 配置文件
-│       ├── input_prehandle_start.bat # Windows 批处理入口
-│       └── single_test.bat    # 单文件测试脚本
-│   └── Semantics_Alignment/    # 语义对齐流水线
-│       ├── alignment_loader.py # 构建对齐数据库
-│       ├── semantic_align.py   # 一键流水线入口脚本
+│   │   ├── config.yaml              # Ghidra 配置文件
+│   │   ├── input_prehandle_start.bat # Windows 批处理入口
+│   │   ├── ghidra_adapter.log       # Ghidra 运行日志
+│   │   ├── README.md                # Ghidra 工具说明文档
+│   │   ├── .gitignore               # Ghidra 工具 Git 忽略配置
+│   │   └── __pycache__/             # Python 缓存目录
+│   ├── IDA_Headless_Demo/           # IDA Headless 分析工具
+│   │   ├── ida_adapter.py           # IDA Python 适配器
+│   │   ├── ExtractBinaryInfo_IDA.py  # IDA 版本信息提取脚本
+│   │   ├── ExtractDisassembly_IDA.py # IDA 版本反汇编提取脚本
+│   │   ├── ExtractPseudocode_IDA.py  # IDA 版本伪代码提取脚本
+│   │   ├── config.yaml              # IDA 配置文件
+│   │   ├── input_prehandle_start.bat # Windows 批处理入口
+│   │   ├── single_test.bat          # 单文件测试脚本
+│   │   ├── ida_adapter.log          # IDA 运行日志
+│   │   ├── README.md                # IDA 工具说明文档
+│   │   └── __pycache__/             # Python 缓存目录
+│   └── Semantics_Alignment/         # 语义对齐流水线
+│       ├── alignment_loader.py      # 构建对齐数据库
+│       ├── semantic_align.py        # 一键流水线入口脚本
 │       ├── knowledge_propagation.py # LLM + 知识传播主流程
-│       ├── idat_server.py      # IDA 同步 HTTP 服务
-│       └── config.yaml         # LLM 配置
+│       ├── idat_server.py           # IDA 同步 HTTP 服务
+│       ├── config.yaml              # LLM 配置文件
+│       ├── 语义对齐技术.md          # 语义对齐技术详细文档
+│       └── __pycache__/             # Python 缓存目录
 ├── tmp/                        # 临时输出目录
-└── 语义对齐技术.md             # 详细技术文档
+│   ├── Malware_sample.exe      # 示例二进制文件
+│   ├── Malware_sample.exe.i64  # IDA 数据库文件
+│   ├── db_sample_dump.txt      # 数据库导出文本
+│   ├── idat_log.txt            # IDA 同步服务日志
+│   ├── Malware_sample_exe_ghidemo/  # Ghidra 分析输出
+│   │   ├── ghidra_adapter.py        # Ghidra 适配器副本
+│   │   ├── Malware_sample_exe_binaryinfo/   # 二进制信息
+│   │   │   ├── Malware_sample_exe_symbols.csv   # 符号表
+│   │   │   ├── Malware_sample_exe_segments.csv  # 段信息
+│   │   │   ├── Malware_sample_exe_sections.csv  # 节信息
+│   │   │   └── Malware_sample_exe_xrefs/        # 交叉引用目录
+│   │   ├── Malware_sample_exe_disassembly/      # 反汇编代码
+│   │   │   └── 0x{address}_{function_name}.asm  # 每个函数一个文件
+│   │   └── Malware_sample_exe_pseudocode/       # 伪代码
+│   │       └── 0x{address}_{function_name}.c    # 每个函数一个文件
+│   └── Malware_sample_exe_idademo/  # IDA 分析输出
+│       ├── Malware_sample_exe_binaryinfo/       # 二进制信息
+│       │   ├── Malware_sample_exe_symbols.csv   # 符号表
+│       │   ├── Malware_sample_exe_segments.csv  # 段信息
+│       │   ├── Malware_sample_exe_sections.csv  # 节信息
+│       │   └── Malware_sample_exe_xrefs/        # 交叉引用目录
+│       ├── Malware_sample_exe_disassembly/      # 反汇编代码
+│       │   └── 0x{address}_{function_name}.asm  # 每个函数一个文件
+│       └── Malware_sample_exe_pesudocode/       # 伪代码（注意拼写）
+│           └── 0x{address}_{function_name}.c    # 每个函数一个文件
+└── __pycache__/                # Python 缓存目录
 ```
 
 ## 环境要求
