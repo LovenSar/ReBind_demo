@@ -2,3 +2,6 @@
 tmp/*
 .env
 *.i64
+*.log
+
+tools/IDA_Headless_Demo/*.log

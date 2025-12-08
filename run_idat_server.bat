@@ -1,1 +1,0 @@
-idat -A -L"idat_log.txt" -S"E:\WorkSpace\ReBind_demo\idat_server.py" "E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe"

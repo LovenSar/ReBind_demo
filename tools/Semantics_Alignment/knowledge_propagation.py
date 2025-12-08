@@ -65,6 +65,9 @@ logger = logging.getLogger(__name__)
 # 超时：连续收到空响应时持续重试的最长等待时间（秒）
 EMPTY_RESPONSE_RETRY_TIMEOUT = 90.0
 
+# 单个函数在第四阶段局部变量重命名中，最多尝试的分析轮数
+MAX_LVAR_PASSES = 1
+
 
 # =========================
 # 数据结构定义
@@ -385,6 +388,18 @@ CALL_REF_TYPES: Set[str] = {
     "19",
     "21",
 }
+
+# 第四阶段：用于检测仍然存在的“默认局部变量名”（a1/v1/var_10 等）
+GENERIC_LVAR_PATTERN = re.compile(
+    r"\b(?:a\d+|arg\d+|arg_\d+|v\d+|var_[0-9A-Fa-f]+)\b"
+)
+
+
+def _find_generic_lvar_names(code: str) -> Set[str]:
+    """在伪代码文本中查找疑似默认局部变量名集合。"""
+    if not code:
+        return set()
+    return {m.group(0) for m in GENERIC_LVAR_PATTERN.finditer(code)}
 
 
 def build_function_graph(conn: sqlite3.Connection, view_id: int) -> FunctionGraph:
@@ -3206,9 +3221,11 @@ def analyze_one_function_vars(
                 clean_map[k] = v
 
     changed = False
+    total_renamed = 0
+    updated_code: Optional[str] = None
 
     if not clean_map:
-        print("[LVAR] LLM 未提供有效的重命名建议 (本函数标记为已优化，不再重复分析)。")
+        print("[LVAR] LLM 未提供有效的重命名建议。")
         # 若有原始 JSON，可用于调试
         if result:
             try:
@@ -3231,28 +3248,86 @@ def analyze_one_function_vars(
         )
         conn.commit()
         changed = True
+        total_renamed = len(clean_map)
 
         # 5. 同步到 IDA (如果启用)，并尽量使用 IDA 端返回的最新伪代码覆盖本地版本
         if ida_sync and ida_url:
             updated = _sync_lvars_with_ida(node.entry_va, clean_map, ida_url)
             if updated:
+                updated_code = updated
                 cur.execute(
                     "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
                     (updated, best_fid),
                 )
                 conn.commit()
 
-    # 标记该函数的局部变量已经被优化过（即使最终没有重命名）
+    # 重新从数据库读取最终伪代码，并检查是否仍存在默认变量名（a1/v1/var_10 等）
+    final_code: Optional[str]
+    cur.execute(
+        "SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;",
+        (best_fid,),
+    )
+    row2 = cur.fetchone()
+    if row2 and row2[0]:
+        final_code = row2[0]
+    else:
+        # 回退：优先使用 IDA 返回的版本，其次是本地替换版，最后是原始版本
+        if updated_code is not None:
+            final_code = updated_code
+        elif changed:
+            final_code = new_code
+        else:
+            final_code = original_code
+
+    remaining_generics = _find_generic_lvar_names(final_code or "")
+    # 当前策略：只要本轮已成功完成一次 LVAR 尝试（无论是否仍有默认名残留），
+    # 就将该函数标记为“已检查”，避免在后续运行中反复进入第四阶段。
+    mark_optimized = True
+
+    # 更新 lvar_optimized 标记
     try:
         cur.execute(
-            "UPDATE analysis_status SET lvar_optimized = 1 WHERE function_id = ?;",
-            (best_fid,),
+            "UPDATE analysis_status SET lvar_optimized = ? WHERE function_id = ?;",
+            (1 if mark_optimized else 0, best_fid),
         )
         conn.commit()
     except Exception as exc:
         logger.warning(
             "更新 lvar_optimized 状态失败 function_id=%s: %s", best_fid, exc
         )
+
+    # 清晰的结论性输出，便于在进度条中看出本函数是否真正发生了改名
+    if remaining_generics:
+        generic_list = sorted(remaining_generics)
+        if len(generic_list) > 8:
+            generic_preview = ", ".join(generic_list[:8]) + ", ..."
+        else:
+            generic_preview = ", ".join(generic_list)
+    else:
+        generic_preview = ""
+
+    if changed:
+        if mark_optimized:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} 局部变量重命名完成，共修改 {total_renamed} 个标识符，"
+                "已标记为已检查。"
+            )
+        else:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} 已重命名 {total_renamed} 个标识符，"
+                f"但仍检测到 {len(remaining_generics)} 个默认变量名：{generic_preview}"
+            )
+    else:
+        if mark_optimized:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} 未进行局部变量重命名，"
+                "已标记为已检查。"
+            )
+        else:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} LLM 未提供有效重命名建议，且仍存在 "
+                f"{len(remaining_generics)} 个默认变量名：{generic_preview}"
+            )
 
     return changed
 

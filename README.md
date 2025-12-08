@@ -13,6 +13,7 @@ ReBind Demo 是一个专注于二进制语义对齐技术的综合工具集，�
   - 语义对齐层：高级伪代码语句与变量的映射
 - **自动化流水线**：提供批处理和 Python 脚本两种使用方式
 - **标准化输出**：统一的输出格式便于后续数据处理和分析
+- **语义对齐流水线**：`rebind_demo.py` 在 `--both` 模式完成 Ghidra+IDA 后会自动调用 `tools/Semantics_Alignment/semantic_align.py`，串联 `alignment_loader`、`idat_server.py` 与 `knowledge_propagation.py`，并可同步 IDA 以获得基于 LLM 的函数语义摘要。
 
 ## 项目结构
 
@@ -27,7 +28,7 @@ ReBind_demo/
 │   │   ├── ExtractPseudocode.py     # 提取按函数拆分的伪代码
 │   │   ├── config.yaml        # Ghidra 配置文件
 │   │   └── input_prehandle_start.bat # Windows 批处理入口
-│   └── IDA_Headless_Demo/     # IDA Headless 分析工具
+│   ├── IDA_Headless_Demo/     # IDA Headless 分析工具
 │       ├── ida_adapter.py     # IDA Python 适配器
 │       ├── ExtractBinaryInfo_IDA.py  # IDA 版本信息提取脚本
 │       ├── ExtractDisassembly_IDA.py # IDA 版本反汇编提取脚本
@@ -35,6 +36,12 @@ ReBind_demo/
 │       ├── config.yaml        # IDA 配置文件
 │       ├── input_prehandle_start.bat # Windows 批处理入口
 │       └── single_test.bat    # 单文件测试脚本
+│   └── Semantics_Alignment/    # 语义对齐流水线
+│       ├── alignment_loader.py # 构建对齐数据库
+│       ├── semantic_align.py   # 一键流水线入口脚本
+│       ├── knowledge_propagation.py # LLM + 知识传播主流程
+│       ├── idat_server.py      # IDA 同步 HTTP 服务
+│       └── config.yaml         # LLM 配置
 ├── tmp/                        # 临时输出目录
 └── 语义对齐技术.md             # 详细技术文档
 ```
@@ -45,6 +52,7 @@ ReBind_demo/
 - **操作系统**：Windows 10/11
 - **Python**：3.7+ （推荐 3.9+）
 - **依赖库**：PyYAML
+- **语义对齐依赖**：`openai`、`requests`、`tqdm`，用于 `tools/Semantics_Alignment` 中的 LLM 和 HTTP 同步；务必通过环境变量 `OPENAI_API_KEY`（可在仓库根目录的 `.env` 中配置）提供密钥。
 
 ### Ghidra 环境
 - **Ghidra**：11.4.3+ （推荐 PUBLIC 版本）
@@ -204,6 +212,51 @@ python alignment_loader.py ^
 - `functions(entry_va)`（函数入口地址）
 
 进行函数级的物理 + 伪代码对齐，为后续在 `语义对齐技术.md` 中设计的“语句级 / 变量级对齐”提供了可操作的基础数据集。
+
+## 语义对齐流水线
+
+### ReBind Demo 与自动语义对齐
+
+- `rebind_demo.py` 默认在 `--both` 模式下完成 Ghidra 与 IDA 分析后会调用 `tools/Semantics_Alignment/semantic_align.py`，`run_semantic_align` 会依次串联 `alignment_loader`、`idat_server.py` 和 `knowledge_propagation.py`，并尝试将 LLM 生成的函数签名/摘要同步回 IDA。
+- 如需只运行单一工具并跳过语义对齐，可明确传入 `--ghidra` 或 `--ida`，这些参数会绕过上面的链路。
+
+### 手动运行 semantic_align.py
+
+默认等价于依次执行 `alignment_loader`、以 `idat_server.py` 启动 IDA（`idat`）再调用 `knowledge_propagation.py`。样例命令：
+
+```bash
+python tools/Semantics_Alignment/semantic_align.py --sample tmp/Malware_sample.exe
+```
+
+可调参数包括：
+
+- `--db` / `--ghidra-dir` / `--ida-dir`：自定义 SQLite 数据库与分析目录。
+- `--max-functions` / `--max-lvar-funcs`：控制本次知识传播与局部变量整理处理多少个函数。
+- `--ida-start-delay`：在启动 `idat` 后等待的秒数（默认 3 秒）。
+- `--no-align`：跳过 `alignment_loader` 阶段以复用已有数据库。
+- `--no-ida`：只执行离线 `knowledge_propagation.py`，不启动 IDA 且不做 IDA 同步。
+- `--idat-exe` / `--ida-script` / `--ida-url`：分别指定 `idat` 可执行文件、`idat_server.py` 路径与 HTTP 服务地址。
+
+脚本会在样本目录下生成 `demo.db`、`db_sample_dump.txt/.xlsx` 和 `idat_log.txt` 等产物，方便后续审阅。
+
+### 配置与 LLM 环境
+
+`semantic_align.py` 与 `knowledge_propagation.py` 共享 `tools/Semantics_Alignment/config.yaml` 中的 LLM 配置（模型、temperature、max_tokens、API 地址/类型），并会尝试从仓库根目录的 `.env` 中读取 `OPENAI_API_KEY`。请根据自己的 LLM 提供商更新 YAML，在版本控制中避免泄露真实密钥（可通过 `.env` 或系统环境变量设置）。
+
+### IDA 同步服务
+
+`tools/Semantics_Alignment/idat_server.py` 在 `idat` 中开启一个轻量 HTTP 服务（默认监听 `127.0.0.1:12345`），响应 `rename_and_sync`、`rename_global`、`rename_lvar` 与 `save_and_exit` 请求，支持函数/全局/局部变量重命名、类型应用、伪代码刷新，并在退出时优雅保存数据库、清理 `.id0/.id1`。
+
+### 知识传播阶段概览
+
+`knowledge_propagation.py` 使用 `alignment_loader` 生成的 SQLite 数据库，在 `analysis_status` 表上维护 `PENDING`/`ANALYZED`/`LOCKED` 状态后构建跨视图统一图（`UnifiedGraph`），并按启发式分数逐个函数调用 LLM 生成签名与语义摘要，结果写回 `analysis_status`：
+
+- **阶段 1**：LLM 知识传播（`--max-functions`、`--dry-run` 控制）；可选开启 `--ida-sync` 把更新同步给 IDA。
+- **阶段 2**：调用链 Top-down 校验（`--skip-validation` 跳过）。
+- **阶段 3**：全局变量重命名与类型推断（`--skip-global` 跳过）。
+- **阶段 4**：局部变量可读性整理（`--skip-lvar` 或 `--max-lvar-funcs` 控制）。
+
+默认会上传 `tools/Semantics_Alignment/config.yaml` 中的 API 设置并在 `<db>.knowledge.log` 中记录进度，便于调试与复现。
 
 ## 技术原理
 

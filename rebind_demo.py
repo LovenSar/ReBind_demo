@@ -7,6 +7,7 @@ ReBind Demo 综合脚本
 import os
 import sys
 import argparse
+import subprocess
 from pathlib import Path
 from typing import List, Optional
 
@@ -26,6 +27,31 @@ try:
 except ImportError as e:
     print(f"警告: 无法导入 IDAAdapter: {e}")
     IDAAdapter = None
+
+
+SEMANTIC_ALIGN_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "semantic_align.py"
+
+
+def run_semantic_align(sample_paths: List[Path]) -> None:
+    """Call semantic_align.py for each sample after both headless tools finish."""
+
+    if not sample_paths:
+        return
+
+    for sample_path in sample_paths:
+        cmd = [
+            sys.executable,
+            str(SEMANTIC_ALIGN_SCRIPT),
+            "--sample",
+            str(sample_path),
+        ]
+        print("\n[ReBindDemo] 执行 semantic_align.py 以推进语义对齐...")
+        print("  命令:", " ".join(cmd))
+        result = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parent))
+        if result.returncode != 0:
+            raise SystemExit(
+                f"[ReBindDemo] semantic_align.py 返回非零退出码：{result.returncode}"
+            )
 
 
 class ReBindDemo:
@@ -123,7 +149,7 @@ class ReBindDemo:
 def main():
     """主函数 - 命令行接口"""
     parser = argparse.ArgumentParser(
-        description="ReBind Demo 综合分析工具 - 统一调用 Ghidra 和 IDA Headless 分析工具"
+        description="ReBind Demo 综合分析工具 - 统一调用 Ghidra 和 IDA Headless 分析工具",
     )
     
     # 工具选择参数
@@ -164,10 +190,13 @@ def main():
     args = parser.parse_args()
     
     # 验证输入文件
+    sample_paths = []
     for input_file in args.input_files:
-        if not Path(input_file).exists():
+        path = Path(input_file)
+        if not path.exists():
             print(f"错误: 输入文件不存在: {input_file}", file=sys.stderr)
             sys.exit(1)
+        sample_paths.append(path.resolve())
     
     try:
         # 创建综合分析工具
@@ -235,6 +264,9 @@ def main():
                     print(f"  - {output_dir}")
             
             print("="*60)
+            # 语义对齐仅在同时使用 Ghidra + IDA 后执行
+            if args.both:
+                run_semantic_align(sample_paths)
         
     except Exception as e:
         print(f"错误: {e}", file=sys.stderr)

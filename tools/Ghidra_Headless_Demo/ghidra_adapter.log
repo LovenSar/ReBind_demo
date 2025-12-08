@@ -1688,3 +1688,21 @@
 2025-12-08 09:51:01,512 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_binaryinfo
 2025-12-08 09:51:01,513 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_pseudocode
 2025-12-08 09:51:01,514 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_ghidemo
+2025-12-08 21:11:38,737 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-08 21:11:38,738 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_ghidemo
+2025-12-08 21:11:38,748 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-08 21:13:32,201 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-08 21:13:32,202 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-08 21:13:32,202 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_disassembly
+2025-12-08 21:13:32,203 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_binaryinfo
+2025-12-08 21:13:32,203 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_pseudocode
+2025-12-08 21:13:32,205 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_ghidemo
+2025-12-08 21:29:57,149 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\Malware_sample.exe
+2025-12-08 21:29:57,149 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_ghidemo
+2025-12-08 21:29:57,158 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-08 21:31:49,152 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-08 21:31:49,153 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-08 21:31:49,153 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_disassembly
+2025-12-08 21:31:49,154 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_binaryinfo
+2025-12-08 21:31:49,154 - ghidra_adapter - WARNING - 输出目录不存在: Malware_sample.exe_pseudocode
+2025-12-08 21:31:49,156 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\Malware_sample_exe_ghidemo

@@ -1,1 +1,0 @@
-C:/Users/jaube/.pyenv/pyenv-win/versions/3.11.9/python.exe e:/WorkSpace/ReBind_demo/tools/Semantics_Alignment/knowledge_propagation.py --db tmp\demo.db --ida-sync --max-functions 0 --max-lvar-funcs 0
