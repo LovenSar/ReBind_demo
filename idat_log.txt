@@ -3386,3 +3386,6 @@ Bad declaration. See the message window for details. -> OK
 [IDAT-Server] Hex-Rays initialized.
 [IDAT-Server] Hex-Rays initialized.
 [IDAT-Server] Lvar rename at 0x4033A0: Seed -> seed
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Hex-Rays initialized.
+[IDAT-Server] Lvar rename at 0x4033B8: Buffer -> str
