@@ -29,6 +29,7 @@ import ida_pro
 import idc
 import ida_loader  # [关键] 用于显式保存数据库
 import ida_typeinf
+import ida_funcs
 
 PORT = 12345
 
@@ -121,6 +122,10 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 status_code = 200
             elif action == "rename_global":
                 result = self._execute_in_main_thread(self._handle_rename_global, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
+            elif action == "rename_lvar":
+                result = self._execute_in_main_thread(self._handle_rename_lvar, payload)
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
             elif action == "ping":
@@ -310,6 +315,148 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             pass
 
         return res
+
+    def _handle_rename_lvar(self, payload: dict) -> dict:
+        """
+        处理局部变量重命名请求：
+        使用直接修改 lvar_t 对象并保存用户命名的方式，
+        避免依赖 ida_hexrays.rename_lvar 等高层 API 在不同版本下的签名差异。
+        """
+        ea = payload.get("ea")
+        renames = payload.get("renames") or {}
+
+        if ea is None:
+            return {"status": "error", "msg": "missing 'ea'"}
+
+        # 转换 ea（支持十六进制和十进制字符串）
+        if isinstance(ea, str):
+            s = ea.strip()
+            try:
+                if s.lower().startswith("0x"):
+                    ea = int(s, 16)
+                else:
+                    ea = int(s)
+            except ValueError:
+                return {"status": "error", "msg": f"invalid ea: {ea!r}"}
+        ea = int(ea)
+
+        if not isinstance(renames, dict) or not renames:
+            return {"status": "error", "msg": "missing or invalid 'renames' dict"}
+
+        if not init_hexrays():
+            return {"status": "error", "msg": "Hex-Rays decompiler not available"}
+
+        res: dict = {"status": "ok", "ea": ea, "applied": {}}
+
+        try:
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"status": "error", "msg": f"no function at 0x{ea:X}"}
+
+            try:
+                ida_hexrays.clear_cached_cfuncs()
+            except Exception:
+                pass
+
+            cfunc = ida_hexrays.decompile(func.start_ea)
+            if not cfunc:
+                return {
+                    "status": "error",
+                    "msg": f"decompile failed at 0x{func.start_ea:X}",
+                }
+
+            # 建立 name -> lvar 映射
+            lvars = cfunc.get_lvars()
+            lvars_by_name = {lv.name: lv for lv in lvars}
+
+            applied: dict = {}
+            modified = False
+
+            for old_name, new_name in renames.items():
+                if not isinstance(old_name, str) or not isinstance(new_name, str):
+                    continue
+
+                # 先按原名查找，若失败且不以 v 开头，尝试 v+old_name
+                lvar = lvars_by_name.get(old_name)
+                if not lvar and not old_name.startswith("v"):
+                    lvar = lvars_by_name.get("v" + old_name)
+                if not lvar:
+                    continue
+
+                # 清洗新名字，保持 C 风格
+                raw_new = new_name.strip()
+                safe_new = "".join(
+                    c if (c.isalnum() or c == "_") else "_" for c in raw_new
+                )
+                if not safe_new:
+                    continue
+                if safe_new[0].isdigit():
+                    safe_new = "v_" + safe_new
+
+                if safe_new == lvar.name:
+                    continue
+
+                try:
+                    # 直接修改 lvar_t 名字，并标记为用户命名
+                    lvar.name = safe_new
+                    if hasattr(lvar, "set_user_name"):
+                        try:
+                            lvar.set_user_name()
+                        except Exception:
+                            pass
+
+                    applied[old_name] = safe_new
+                    lvars_by_name[safe_new] = lvar
+                    if old_name in lvars_by_name:
+                        del lvars_by_name[old_name]
+
+                    modified = True
+                    print(
+                        f"[IDAT-Server] Lvar rename at 0x{func.start_ea:X}: "
+                        f"{old_name} -> {safe_new}"
+                    )
+                except Exception as exc:
+                    print(f"[IDAT-Server] Error setting lvar name: {exc}")
+
+            if modified:
+                # 尝试保存局部变量用户设置
+                if hasattr(cfunc, "save_user_lvars"):
+                    try:
+                        cfunc.save_user_lvars()
+                    except Exception as exc:
+                        print(f"[IDAT-Server] save_user_lvars failed: {exc}")
+                        return {"status": "error", "msg": f"save failed: {exc}"}
+
+                # 为了获取最新伪代码，可再次反编译
+                try:
+                    cfunc = ida_hexrays.decompile(func.start_ea)
+                except Exception:
+                    pass
+
+            res["applied"] = applied
+
+            # 获取最新伪代码
+            updated_code: str | None = None
+            if cfunc:
+                try:
+                    lines = []
+                    for pline in cfunc.get_pseudocode():
+                        try:
+                            text = ida_lines.tag_remove(pline.line)
+                        except Exception:
+                            text = str(pline.line)
+                        lines.append(text)
+                    updated_code = "\n".join(lines)
+                except Exception:
+                    updated_code = None
+
+            res["updated_pseudocode"] = updated_code
+            return res
+        except Exception as exc:
+            import traceback
+
+            traceback.print_exc()
+            return {"status": "error", "msg": str(exc)}
 
     def _handle_save_and_exit_request(self, payload: dict):
         """

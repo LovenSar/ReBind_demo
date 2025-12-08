@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 
 
 # 超时：连续收到空响应时持续重试的最长等待时间（秒）
-EMPTY_RESPONSE_RETRY_TIMEOUT = 30.0
+EMPTY_RESPONSE_RETRY_TIMEOUT = 90.0
 
 
 # =========================
@@ -275,6 +275,15 @@ def ensure_analysis_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    # 为第四阶段局部变量优化增加断点续工标记列（若已存在则忽略错误）
+    try:
+        conn.execute(
+            "ALTER TABLE analysis_status "
+            "ADD COLUMN lvar_optimized INTEGER DEFAULT 0;"
+        )
+    except sqlite3.OperationalError:
+        # 列已存在或其他模式下不支持 ALTER，忽略
+        pass
     conn.commit()
 
 
@@ -1172,7 +1181,24 @@ def build_global_var_graph(
     placeholders = ",".join("?" for _ in view_ids)
 
     # 1) 按 address_va 聚合所有视图中的全局 data 符号
+    #    同时增加多层过滤，避免把代码入口 / 段首 / 导入函数当成“全局变量”：
+    #      - 若地址在统一函数图的 entry_va 集合中，视为代码入口，跳过；
+    #      - 若符号名是典型段名（.text/.data/.ctors 等），跳过；
+    #      - 若 kind 显式标记为函数 / 导入 / thunk，跳过。
     globals_by_addr: Dict[int, GlobalVarNode] = {}
+    code_entry_addrs: Set[int] = set(graph.nodes.keys())
+    segment_name_blacklist: Set[str] = {
+        ".text",
+        ".data",
+        ".rdata",
+        ".idata",
+        ".edata",
+        ".bss",
+        ".tls",
+        ".crt",
+        ".ctors",
+        ".dtors",
+    }
     cur.execute(
         f"""
         SELECT view_id, address_va, name, kind, COALESCE(is_global, 0)
@@ -1185,8 +1211,21 @@ def build_global_var_graph(
         if addr_va is None:
             continue
         addr = int(addr_va)
+        # A. 若该地址本身就是某个统一函数的入口地址，则视为代码入口，跳过
+        if addr in code_entry_addrs:
+            continue
+
+        # B. 过滤典型段名符号（段首标签，而非真实变量）
+        name_str = (name or "").strip()
+        if name_str and name_str.strip().lower() in segment_name_blacklist:
+            continue
+
         k = (kind or "").strip().lower()
-        # 仅关注全局 data 对象
+        # C. 排除显式函数 / 导入 / thunk 类符号
+        if any(key in k for key in ("func", "code", "import", "thunk")):
+            continue
+
+        # D. 仅关注全局 data 对象
         if int(is_global or 0) != 1 and k not in ("data", "object", "obj"):
             continue
         node = globals_by_addr.get(addr)
@@ -1366,6 +1405,10 @@ def validate_one_function(
     对单个物理函数执行第二阶段 Top-down 校验。
     返回该节点的“后验置信度”（用于向下传播）。
     """
+    # 在启用 IDA 同步的情况下，每次校验前都确认 idat_server 在线
+    if ida_sync and ida_url:
+        wait_for_ida_server(ida_url)
+
     node = graph.nodes[entry_va]
     display_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
 
@@ -2281,6 +2324,7 @@ def call_llm_analyze_function(
     request_kwargs: Dict[str, Any],
     api_settings: Dict[str, Any],
     max_attempts: int = 3,
+    return_raw_on_error: bool = False,
 ) -> dict:
     """
     调用 OpenAI ChatCompletion，让模型对单个函数进行分析。
@@ -2346,6 +2390,15 @@ def call_llm_analyze_function(
                 break
 
             text_str = (text or "").strip()
+            # 若模型返回 Markdown 代码块包裹的 JSON，先尝试剥离 ``` 包围
+            if text_str.startswith("```"):
+                lines = text_str.splitlines()
+                if lines and lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text_str = "\n".join(lines).strip()
+
             if text_str:
                 break
 
@@ -2385,6 +2438,14 @@ def call_llm_analyze_function(
             last_error = (
                 f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{text_str_json!r}"
             )
+            # 根据需要，将原始文本返回给调用方用于调试
+            if return_raw_on_error and attempt == max_attempts:
+                logger.warning(
+                    "%s\n完整的 LLM 回复：%s",
+                    last_error,
+                    text_str,
+                )
+                return {"_raw_error": last_error, "_raw_text": text_str}
             logger.warning(
                 "%s\n完整的 LLM 回复：%s",
                 last_error,
@@ -2476,6 +2537,10 @@ def _sync_global_with_ida_and_update_db(
         )
         return
 
+    # 每次与 IDA 同步前，都先确认 idat_server 在线
+    if ida_url:
+        wait_for_ida_server(ida_url)
+
     payload = {
         "action": "rename_global",
         "ea": address_va,
@@ -2509,16 +2574,35 @@ def _sync_global_with_ida_and_update_db(
         data = resp.json()
     except Exception:
         data = {}
+    # 确认 IDA 端是否成功处理
+    if (data or {}).get("status") != "ok":
+        logger.error(
+            "[IDA-Sync] rename_global IDA 返回错误: %s",
+            data or resp.text[:200],
+        )
+        return
+
+    ida_new_name = data.get("new_name") or new_name
+    if data.get("new_name") and data["new_name"] != new_name:
+        logger.warning(
+            "[IDA-Sync] rename_global 名字不一致：requested=%s, applied=%s (addr=0x%08X)",
+            new_name,
+            data["new_name"],
+            address_va,
+        )
+    applied_type = data.get("applied_type")
     logger.info(
-        "[IDA-Sync] rename_global 响应: %s",
-        data or resp.text[:200],
+        "[IDA-Sync] rename_global 成功: addr=0x%08X, name=%s, applied_type=%s",
+        address_va,
+        ida_new_name,
+        applied_type or type_str,
     )
 
     # 同步 demo.db 中 symbols 表的名字
     cur = conn.cursor()
     cur.execute(
         "UPDATE symbols SET name = ? WHERE address_va = ?;",
-        (new_name, address_va),
+        (ida_new_name, address_va),
     )
     conn.commit()
     logger.debug(
@@ -2598,6 +2682,10 @@ def _sync_with_ida_and_update_db(
         )
         return
 
+    # 每次与 IDA 同步前，都先确认 idat_server 在线（支持断链自动重试 + 人工立即重试）
+    if ida_url:
+        wait_for_ida_server(ida_url)
+
     # 选出 IDA 视图上的 function_id（如果存在），优先同步该视图的伪代码
     ida_function_id: Optional[int] = None
     for fid in node.function_ids:
@@ -2673,6 +2761,16 @@ def _sync_with_ida_and_update_db(
     if data.get("status") != "ok":
         logger.error("[IDA-Sync] IDA 返回错误: %s", data)
         return
+
+    # 以 IDA 返回的新名字为准，确保 demo.db 与实际 .i64 状态一致
+    ida_new_name = data.get("new_name")
+    if ida_new_name and ida_new_name != final_name:
+        logger.warning(
+            "[IDA-Sync] IDA 实际应用的函数名与建议名不一致：requested=%s, applied=%s",
+            final_name,
+            ida_new_name,
+        )
+        final_name = ida_new_name
 
     updated_code = data.get("updated_pseudocode") or ""
     logger.info(
@@ -2841,6 +2939,394 @@ def build_unified_prompt(
     lines.append("\n[多视图伪代码（可能互相矛盾，请综合判断）]\n" + decompilation_text)
 
     return "\n".join(lines)
+
+
+def build_local_var_prompt(
+    node: UnifiedFunctionNode,
+    code: str,
+    signature: str,
+    summary: str,
+) -> str:
+    """
+    构造第四阶段 Prompt：请求 LLM 识别并重命名局部变量。
+    """
+    display_name = "/".join(sorted(node.names)) if node.names else f"sub_{node.entry_va:08X}"
+
+    prompt = f"""
+你是一个代码重构专家。当前任务是优化反编译代码的可读性，重点是**重命名局部变量和函数参数**。
+
+函数：{display_name}
+Signature: {signature}
+Summary: {summary}
+
+[伪代码]
+{code}
+
+[任务]
+1. 分析伪代码逻辑，识别无意义的默认命名：
+   - 重点关注参数：a1, a2, a3, arg1, arg2...
+   - 重点关注局部变量：v1, v2, v3, var_C, var_10...
+2. 根据上下文推断它们的实际含义，并赋予有意义的变量名（如 index, user_id, connection_handle）。
+3. 请适度激进一些：
+   - 如果 a1 明显是源缓冲区，可以重命名为 src_buf；
+   - 如果 v5 明显是循环变量，可以重命名为 i 或 idx；
+   - 如果 v8 接收了函数返回值并用于判断，可以重命名为 ret_val 或 status。
+4. 如果变量名已经具有清晰语义（如 file_name、buffer_ptr），请不要修改它。
+5. 如果确实无法推断任何变量含义，请返回空 JSON。
+
+请严格返回 JSON 对象，格式为 "旧名字": "新名字" 的映射：
+{{
+  "a1": "socket_fd",
+  "a2": "buffer_ptr",
+  "v5": "loop_idx",
+  "v12": "bytes_received"
+}}
+"""
+    return prompt.strip()
+
+
+def apply_local_var_renames(code: str, rename_map: Dict[str, str]) -> str:
+    """
+    使用正则将 rename_map 应用到伪代码文本中。
+    使用 Word Boundary (\b) 防止部分匹配错误（如把 v10 中的 v1 替换了）。
+    """
+    if not rename_map:
+        return code
+
+    new_code = code
+    # 按变量名长度降序，避免 v11 先被 v1 匹配
+    sorted_keys = sorted(rename_map.keys(), key=len, reverse=True)
+
+    for old_name in sorted_keys:
+        new_name = rename_map[old_name]
+        if old_name == new_name:
+            continue
+
+        pattern = r"\b" + re.escape(old_name) + r"\b"
+        new_code = re.sub(pattern, new_name, new_code)
+
+    return new_code
+
+
+def _sync_lvars_with_ida(
+    entry_va: int,
+    rename_map: Dict[str, str],
+    ida_url: str,
+) -> Optional[str]:
+    """
+    将局部变量重命名同步到 IDA。需要 idat_server 支持 'rename_lvar' 动作。
+    如 IDA 返回 updated_pseudocode，则将其以字符串形式返回，便于调用方覆盖本地伪代码。
+    """
+    if requests is None or not rename_map:
+        return None
+
+    payload = {
+        "action": "rename_lvar",  # 服务端需要处理此 action
+        "ea": entry_va,
+        "renames": rename_map,  # { "v1": "name", ... }
+    }
+
+    try:
+        resp = requests.post(ida_url, json=payload, timeout=10.0)
+    except Exception as exc:
+        logger.warning(f"[IDA-Sync-Lvar] 同步局部变量失败 0x{entry_va:08X}: {exc}")
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[IDA-Sync-Lvar] HTTP %s when syncing lvars for 0x%08X: %s",
+            resp.status_code,
+            entry_va,
+            resp.text[:200],
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync-Lvar] 解析 IDA 返回的 JSON 失败 0x%08X: %s; body=%s",
+            entry_va,
+            exc,
+            resp.text[:200],
+        )
+        return None
+
+    if data.get("status") != "ok":
+        logger.warning("[IDA-Sync-Lvar] IDA 返回错误 0x%08X: %s", entry_va, data)
+        return None
+
+    updated_code = data.get("updated_pseudocode")
+    if isinstance(updated_code, str) and updated_code.strip():
+        logger.info(
+            "[IDA-Sync-Lvar] 0x%08X 返回更新伪代码，长度=%d",
+            entry_va,
+            len(updated_code),
+        )
+        return updated_code
+
+    return None
+
+
+def analyze_one_function_vars(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    node: UnifiedFunctionNode,
+    analysis_info: Dict[int, dict],
+    llm_settings: LLMSettings,
+    ida_sync: bool,
+    ida_url: str,
+    dry_run: bool = False,
+) -> bool:
+    """
+    第四阶段核心逻辑：单函数局部变量分析与重命名。
+    返回 True 表示进行了修改。
+    """
+    # 1. 获取当前最佳的伪代码和签名信息：
+    #    - 只考虑 ANALYZED/LOCKED 的结果；
+    #    - 若启用 IDA 同步，则优先选择 IDA 视图对应的 function_id；
+    #    - 否则按置信度最高选择。
+    best_fid: Optional[int] = None
+    best_conf = -1
+    signature = ""
+    summary = ""
+
+    preferred_tool = "ida" if ida_sync else None
+    candidates: List[Dict[str, Any]] = []
+
+    for fid in node.function_ids:
+        info = analysis_info.get(fid)
+        if not info:
+            continue
+        state = info.get("analysis_state", "")
+        if state not in ("ANALYZED", "LOCKED"):
+            continue
+
+        score = int(info.get("confidence_score", 0) or 0)
+        tool_name = graph.func_tool.get(fid, "").lower()
+        candidates.append(
+            {
+                "fid": fid,
+                "score": score,
+                "tool": tool_name,
+                "info": info,
+            }
+        )
+
+    if not candidates:
+        return False
+
+    chosen: Optional[Dict[str, Any]] = None
+
+    if preferred_tool:
+        ida_candidates = [c for c in candidates if preferred_tool in c["tool"]]
+        if ida_candidates:
+            ida_candidates.sort(key=lambda c: c["score"], reverse=True)
+            chosen = ida_candidates[0]
+
+    if chosen is None:
+        candidates.sort(key=lambda c: c["score"], reverse=True)
+        chosen = candidates[0]
+        if ida_sync and preferred_tool:
+            print(
+                f"[LVAR-WARN] 0x{node.entry_va:08X} 想要同步 IDA，但未找到 IDA 视图的已分析记录，"
+                f"回退使用工具={chosen['tool'] or 'unknown'}，重命名可能无法在 IDA 中完全生效。"
+            )
+
+    best_fid = int(chosen["fid"])
+    best_conf = int(chosen["score"])
+    chosen_info = chosen["info"]
+    signature = chosen_info.get("summary_signature", "") or ""
+    summary = chosen_info.get("semantic_summary", "") or ""
+
+    # 设定一个门槛，只处理相对可信的函数
+    if best_fid is None or best_conf < 60:
+        return False
+
+    # 读取伪代码
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;",
+        (best_fid,),
+    )
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return False
+
+    original_code = row[0]
+
+    # 2. 构造 Prompt
+    prompt = build_local_var_prompt(node, original_code, signature, summary)
+    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+    print(
+        f"[LVAR] Analyzing 0x{node.entry_va:08X} "
+        f"(tool={chosen.get('tool') or 'unknown'}, score={best_conf})..."
+    )
+
+    if dry_run:
+        print(f"[LVAR-DRY] Prompt preview:\n{prompt[:500]}...")
+        return False
+
+    # 3. 调用 LLM
+    result = call_llm_analyze_function(
+        conversation=conversation,
+        request_kwargs=request_kwargs,
+        api_settings=llm_settings.api_settings,
+        return_raw_on_error=True,
+    )
+
+    # 可能返回包含原始错误信息的字典，便于调试
+    if isinstance(result, dict) and "_raw_text" in result:
+        raw_text = result.get("_raw_text", "")
+        raw_err = result.get("_raw_error", "")
+        print(
+            f"[LVAR] JSON 解析失败，保持该函数为待优化状态以便后续重试。\n"
+            f"[LVAR-ERROR] {raw_err}\n"
+            f"[LVAR-RAW]\n{'-' * 40}\n{raw_text}\n{'-' * 40}"
+        )
+        return False
+
+    if not result:
+        # 网络错误或多次尝试完全失败，不标记为已完成，方便后续重试
+        return False
+
+    # result 本身就是 map，因为 Prompt 要求返回 {old: new}
+    # 但为了稳健，如果 LLM 包裹了一层 key，兼容一下
+    rename_map: Dict[str, str] = result  # type: ignore[assignment]
+    if "renames" in result and isinstance(result["renames"], dict):
+        rename_map = result["renames"]
+
+    # 过滤掉非法的 Key/Value
+    clean_map: Dict[str, str] = {}
+    for k, v in rename_map.items():
+        if isinstance(k, str) and isinstance(v, str) and k != v:
+            # 简单的安全检查：新名字必须是合法标识符
+            if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+                clean_map[k] = v
+
+    changed = False
+
+    if not clean_map:
+        print("[LVAR] LLM 未提供有效的重命名建议 (本函数标记为已优化，不再重复分析)。")
+        # 若有原始 JSON，可用于调试
+        if result:
+            try:
+                print(
+                    f"[LVAR-DEBUG] LLM 原始 JSON: "
+                    f"{json.dumps(result, ensure_ascii=False)}"
+                )
+            except Exception:
+                print(f"[LVAR-DEBUG] LLM 原始 JSON（无法编码）: {result!r}")
+    else:
+        print(f"[LVAR] 应用重命名: {json.dumps(clean_map, ensure_ascii=False)}")
+
+        # 4. 更新本地数据库 (伪代码文本替换)
+        new_code = apply_local_var_renames(original_code, clean_map)
+
+        # 这里选择只更新 best_fid，避免破坏其他工具的原始结构太严重
+        cur.execute(
+            "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+            (new_code, best_fid),
+        )
+        conn.commit()
+        changed = True
+
+        # 5. 同步到 IDA (如果启用)，并尽量使用 IDA 端返回的最新伪代码覆盖本地版本
+        if ida_sync and ida_url:
+            updated = _sync_lvars_with_ida(node.entry_va, clean_map, ida_url)
+            if updated:
+                cur.execute(
+                    "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+                    (updated, best_fid),
+                )
+                conn.commit()
+
+    # 标记该函数的局部变量已经被优化过（即使最终没有重命名）
+    try:
+        cur.execute(
+            "UPDATE analysis_status SET lvar_optimized = 1 WHERE function_id = ?;",
+            (best_fid,),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning(
+            "更新 lvar_optimized 状态失败 function_id=%s: %s", best_fid, exc
+        )
+
+    return changed
+
+
+def run_local_var_phase(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    llm_settings: LLMSettings,
+    ida_sync: bool,
+    ida_url: str,
+    dry_run: bool = False,
+    max_funcs: int = 0,
+) -> None:
+    """
+    第四阶段入口：遍历高置信度函数，优化局部变量名。
+    """
+    if ida_sync and ida_url:
+        wait_for_ida_server(ida_url)
+
+    # 确保 analysis_status 表以及 lvar_optimized 字段存在
+    ensure_analysis_schema(conn)
+    analysis_info = load_analysis_info(conn)
+
+    # 预加载已完成局部变量优化的函数，支持断点续工
+    cur = conn.cursor()
+    cur.execute("SELECT function_id FROM analysis_status WHERE lvar_optimized = 1;")
+    optimized_fids: Set[int] = {int(row[0]) for row in cur.fetchall()}
+
+    # 筛选候选函数：已分析且分数较高，且尚未做过局部变量优化
+    candidates: List[Tuple[int, int]] = []
+    for entry_va, node in graph.nodes.items():
+        max_score = 0
+        already_optimized = False
+        for fid in node.function_ids:
+            if fid in optimized_fids:
+                already_optimized = True
+            info = analysis_info.get(fid)
+            if info:
+                max_score = max(max_score, info.get("confidence_score", 0))
+
+        if not already_optimized and max_score >= 70:
+            candidates.append((entry_va, max_score))
+
+    # 按分数从高到低排序
+    candidates.sort(key=lambda x: x[1], reverse=True)
+
+    if max_funcs > 0:
+        candidates = candidates[:max_funcs]
+
+    print(f"[Phase 4] Local Variable Renaming: 目标函数数量 {len(candidates)}")
+
+    pbar = tqdm(total=len(candidates), desc="Phase 4: Local Vars", unit="func")
+
+    processed_count = 0
+    for entry_va, score in candidates:
+        node = graph.nodes[entry_va]
+        pbar.set_description(f"Phase 4: 0x{entry_va:08X} (score={score})")
+
+        changed = analyze_one_function_vars(
+            conn=conn,
+            graph=graph,
+            node=node,
+            analysis_info=analysis_info,
+            llm_settings=llm_settings,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+            dry_run=dry_run,
+        )
+        if changed:
+            processed_count += 1
+        pbar.update(1)
+
+    pbar.close()
+    print(f"[Phase 4] 完成，共优化了 {processed_count} 个函数的局部变量。")
 
 
 def analyze_one_function(
@@ -3188,6 +3674,17 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="跳过第三阶段全局变量重命名与类型推断。",
     )
     parser.add_argument(
+        "--skip-lvar",
+        action="store_true",
+        help="跳过第四阶段局部变量（v1, a2...）的易读性整理。",
+    )
+    parser.add_argument(
+        "--max-lvar-funcs",
+        type=int,
+        default=20,
+        help="第四阶段最多处理多少个函数（默认20，0表示不限制）。",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="仅构建依赖图并计算评分，不实际调用 LLM。",
@@ -3222,6 +3719,11 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     db_path = Path(args.db).resolve()
     if not db_path.exists():
         raise SystemExit(f"数据库文件不存在：{db_path}")
+
+    # 初始化日志系统（按数据库路径派生日志文件名，便于多数据集区分）
+    log_path = db_path.with_suffix(db_path.suffix + ".knowledge.log")
+    setup_logging(log_path)
+    logger.info("知识传播管线启动，数据库: %s", db_path)
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -3388,6 +3890,22 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             )
         finally:
             conn3.close()
+
+    # 第四阶段：局部变量易读性整理
+    if not args.skip_lvar:
+        conn4 = sqlite3.connect(str(db_path))
+        try:
+            run_local_var_phase(
+                conn=conn4,
+                graph=unified_graph,
+                llm_settings=llm_settings,
+                ida_sync=args.ida_sync,
+                ida_url=args.ida_url,
+                dry_run=args.dry_run,
+                max_funcs=args.max_lvar_funcs,
+            )
+        finally:
+            conn4.close()
 
     # 若启用了 IDA 同步，在所有分析结束后请求 idat 端保存并退出
     if args.ida_sync and requests is not None:
