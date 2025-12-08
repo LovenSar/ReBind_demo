@@ -143,6 +143,68 @@ python ida_adapter.py path/to/binary.exe
 └── [filename]_pseudocode/       # 每个函数一个 .c 伪代码文件（需要 Hex-Rays）
 ```
 
+## 阶段 1：统一对齐数据库（alignment_loader.py）
+
+在不修改 Ghidra / IDA 脚本的前提下，本项目先实现了一个“阶段 1 的统一对齐数据库”，用于把两套工具的输出汇总到一个 SQLite 中，形成后续物理/结构/语义对齐的基础视图。
+
+### 阶段 1 目标
+
+- 仅使用现有输出文件：
+  - `*_binaryinfo/*.csv`（segments / sections / symbols / strings / xrefs）
+  - `*_disassembly/*.asm`（每个函数一个反汇编）
+  - `*_pseudocode/*.c` 或 `*_pesudocode/*.c`（每个函数一个伪代码）
+- 不做 basic block 和语句级拆分，只做到：
+  - 段 / 节 / 符号 / 字符串 / 交叉引用
+  - 函数 + 指令序列
+  - 函数级伪代码文本
+- 为后续的“三层金字塔对齐法”提供一个“工具无关”的基础数据模型。
+
+### 使用方式
+
+1. 先用前文的方法跑出 Ghidra / IDA 的 demo 输出，例如：
+   - `tmp/Malware_sample_exe_ghidemo/`
+   - `tmp/Malware_sample_exe_idademo/`
+2. 在仓库根目录运行：
+
+```bash
+python alignment_loader.py ^
+  --db tmp/alignment_demo.db ^
+  --ghidra-dir tmp/Malware_sample_exe_ghidemo ^
+  --ida-dir    tmp/Malware_sample_exe_idademo
+```
+
+执行完成后，会在 `tmp/alignment_demo.db` 里生成统一的对齐视图，可用任何 SQLite 浏览器或 `sqlite3`/Python 直接查看。
+
+### 表结构概览（阶段 1）
+
+当前版本的对齐数据库主要包含如下几类表（字段详见 `alignment_loader.py`）：
+
+- **工具与二进制视图**
+  - `tools`：记录分析工具信息（`ghidra` / `ida`、版本号等）。
+  - `binaries`：逻辑上的“同一个二进制”（用视图目录名去掉 `_ghidemo/_idademo` 作为键）。
+  - `binary_views`：某工具对某个二进制的一次分析视图（包含 `output_dir`、`image_base`）。
+
+- **物理层相关**
+  - `segments`：段信息，来自 `*_segments.csv`，带读写执行权限。
+  - `sections`：节信息，来自 `*_sections.csv`。
+  - `symbols`：符号表，统一解析 Ghidra/IDA 的 `*_symbols.csv`，并归一化 `kind=function/label/data/import`。
+  - `strings`：IDA 输出的字符串表，来自 `*_strings.csv`。
+
+- **函数与反汇编**
+  - `functions`：函数入口 VA + 函数名 + 来源文件（`.asm/.c`），按 `view_id + entry_va` 唯一。
+  - `instructions`：每条指令的 `address_va / bytes / mnemonic / op_str / raw_line`，从各函数的 `.asm` 中解析。
+
+- **伪代码与交叉引用**
+  - `pseudo_functions`：函数级伪代码视图，保存 prototype 和完整 C 函数体。
+  - `xrefs`：统一的交叉引用视图，从 Ghidra/IDA 的 `*_xrefs/*.csv` 抽象为 `src_va → dst_va/dst_name`。
+
+在这个阶段，IDA 和 Ghidra 的视图已经可以通过：
+
+- `binaries.filename`（逻辑二进制名称）
+- `functions(entry_va)`（函数入口地址）
+
+进行函数级的物理 + 伪代码对齐，为后续在 `语义对齐技术.md` 中设计的“语句级 / 变量级对齐”提供了可操作的基础数据集。
+
 ## 技术原理
 
 ### 三层金字塔对齐法

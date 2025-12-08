@@ -1,0 +1,1207 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+alignment_loader.py
+
+阶段 1 的对齐数据加载模块：
+从 Ghidra / IDA 的现有 CSV / ASM / C 输出中，构建一个统一的 SQLite 数据库，
+为后续的物理层 / 结构层 / 函数级语义层对齐提供基础数据。
+
+设计目标（阶段 1）：
+- 只依赖当前已经生成的文件，不修改 Ghidra / IDA 的脚本：
+  - *_binaryinfo/*.csv  （segments / sections / symbols / strings / xrefs）
+  - *_disassembly/*.asm （每个函数一个反汇编）
+  - *_pseudocode/*.c 或 *_pesudocode/*.c （每个函数一个伪代码）
+- 不做 basic block 和语句级拆分，仅精确到：
+  - 段 / 节 / 符号 / 字符串 / 引用关系（xrefs）
+  - 函数 + 指令序列
+  - 函数级伪代码文本
+
+后续阶段可以在此基础上扩展：
+- 新增语句 / token / 变量层的表结构
+- 在 Ghidra / IDA 的导出脚本中加入 “语句/变量 ↔ 指令 EA” 的映射，再填充扩展表
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import re
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Optional, Tuple, List
+
+
+@dataclass
+class ToolInfo:
+    """表示一个分析工具（Ghidra / IDA）的基本信息。"""
+
+    name: str          # "ghidra" / "ida"
+    version: str = ""  # 可选：工具版本号，留空表示未知
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    """
+    初始化 SQLite 数据库的表结构。
+
+    如果表已存在则跳过（使用 IF NOT EXISTS），方便重复执行。
+    """
+    # 开启外键约束（SQLite 默认关闭）
+    conn.execute("PRAGMA foreign_keys = ON;")
+
+    # 工具表：记录 Ghidra / IDA 等工具
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tools (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,  -- 工具名: ghidra / ida
+            version     TEXT,                 -- 版本号，可为空
+            extra       TEXT                  -- 预留字段，存 JSON 配置等
+        );
+        """
+    )
+
+    # 二进制文件表：记录逻辑上的“同一个二进制”
+    # 注意：这里不强求真实路径唯一，仅用 filename 作为简化的逻辑键。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS binaries (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename    TEXT NOT NULL,   -- 逻辑名称，例如 Malware_sample_exe
+            path        TEXT,            -- 实际路径（如果能推断）
+            hash_md5    TEXT,            -- 可选：二进制 MD5
+            hash_sha256 TEXT,            -- 可选：二进制 SHA256
+            arch        TEXT,            -- 架构信息，例如 x86_64
+            bits        INTEGER          -- 位宽，例如 32 / 64
+        );
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_binaries_filename "
+        "ON binaries(filename);"
+    )
+
+    # binary_views：某个工具对某个二进制的一次分析视图
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS binary_views (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            binary_id   INTEGER NOT NULL,
+            tool_id     INTEGER NOT NULL,
+            output_dir  TEXT NOT NULL,   -- 对应 *_ghidemo / *_idademo 目录
+            image_base  INTEGER,         -- 该视图认为的 ImageBase
+            created_at  TEXT,            -- 分析时间，当前版本不强制填写
+            config_path TEXT,            -- 可选：分析时的配置文件路径
+            FOREIGN KEY(binary_id) REFERENCES binaries(id),
+            FOREIGN KEY(tool_id) REFERENCES tools(id)
+        );
+        """
+    )
+
+    # 段信息（segments）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS segments (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id     INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            start_va    INTEGER NOT NULL,
+            end_va      INTEGER NOT NULL,
+            length      INTEGER,
+            perm_r      INTEGER,         -- 0/1 代表 False/True
+            perm_w      INTEGER,
+            perm_x      INTEGER,
+            raw_perm    TEXT,            -- Ghidra: R/W/X 字段组合；IDA: Perm 原始值
+            FOREIGN KEY(view_id) REFERENCES binary_views(id)
+        );
+        """
+    )
+
+    # 节信息（sections）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sections (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id     INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            start_va    INTEGER NOT NULL,
+            end_va      INTEGER NOT NULL,
+            length      INTEGER,
+            FOREIGN KEY(view_id) REFERENCES binary_views(id)
+        );
+        """
+    )
+
+    # 符号（symbols）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS symbols (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id     INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            address_va  INTEGER,         -- 可解析的真实 VA；外部符号则可能为 NULL
+            raw_address TEXT,            -- 原始地址字符串，例如 "0xEXTERNAL:00000001"
+            kind        TEXT,            -- 归一化类型: function/label/data/import/other
+            raw_type    TEXT,            -- 工具原始类型字段，例如 FUNC / Function
+            source      TEXT,            -- 来源：auto / IMPORTED / N/A 等
+            is_global   INTEGER,
+            is_primary  INTEGER,
+            is_external INTEGER,
+            namespace   TEXT,
+            FOREIGN KEY(view_id) REFERENCES binary_views(id)
+        );
+        """
+    )
+
+    # 字符串（仅 IDA 输出有）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id     INTEGER NOT NULL,
+            value       TEXT NOT NULL,
+            address_va  INTEGER NOT NULL,
+            length      INTEGER,
+            FOREIGN KEY(view_id) REFERENCES binary_views(id)
+        );
+        """
+    )
+
+    # 函数表（统一视图）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS functions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id         INTEGER NOT NULL,
+            entry_va        INTEGER NOT NULL,  -- 函数入口地址
+            name            TEXT NOT NULL,     -- 此工具视角下的函数名
+            demangled_name  TEXT,             -- 预留：去修饰后的名字
+            size_bytes      INTEGER,          -- 可选：函数大小（字节）
+            source_symbol_id INTEGER,         -- 关联到 symbols.id
+            raw_file        TEXT,             -- 对应的 .asm 或 .c 文件名
+            FOREIGN KEY(view_id) REFERENCES binary_views(id),
+            FOREIGN KEY(source_symbol_id) REFERENCES symbols(id)
+        );
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_functions_view_entry "
+        "ON functions(view_id, entry_va);"
+    )
+
+    # 指令表
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS instructions (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id             INTEGER NOT NULL,
+            function_id         INTEGER NOT NULL,
+            index_in_function   INTEGER NOT NULL, -- 函数内顺序号
+            address_va          INTEGER NOT NULL,
+            bytes               TEXT,             -- 十六进制机器码字符串
+            mnemonic            TEXT,
+            op_str              TEXT,
+            raw_line            TEXT,
+            FOREIGN KEY(view_id) REFERENCES binary_views(id),
+            FOREIGN KEY(function_id) REFERENCES functions(id)
+        );
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_instructions_view_addr "
+        "ON instructions(view_id, address_va);"
+    )
+
+    # 引用关系（xrefs）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS xrefs (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id             INTEGER NOT NULL,
+            src_va              INTEGER NOT NULL, -- 引用来源地址
+            dst_va              INTEGER,          -- 被引用目标地址（从文件名解析）
+            dst_name            TEXT,             -- 目标名称（从文件名或符号推断）
+            ref_type_raw        TEXT,             -- 引用类型原文（字符串或数字）
+            containing_function TEXT,             -- 所在函数名（原文）
+            is_primary          INTEGER,          -- Ghidra 的 Primary Ref；IDA 置 NULL/0
+            raw_file            TEXT,             -- 该 xrefs CSV 文件名
+            FOREIGN KEY(view_id) REFERENCES binary_views(id)
+        );
+        """
+    )
+
+    # 伪代码函数（函数级语义视图）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pseudo_functions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            view_id         INTEGER NOT NULL,
+            function_id     INTEGER NOT NULL,
+            entry_va        INTEGER NOT NULL,
+            name            TEXT NOT NULL,
+            prototype       TEXT,        -- 函数声明行
+            body            TEXT,        -- 函数体文本（包含大括号）
+            raw_file        TEXT,        -- 对应的 .c 文件名
+            FOREIGN KEY(view_id) REFERENCES binary_views(id),
+            FOREIGN KEY(function_id) REFERENCES functions(id)
+        );
+        """
+    )
+    conn.commit()
+
+
+# =========================
+# 内部工具函数：获取 / 创建工具和二进制记录
+# =========================
+
+
+def _get_or_create_tool(conn: sqlite3.Connection, tool: ToolInfo) -> int:
+    """
+    查找或创建 tools 表中的记录。
+    按 name 唯一，如果存在则更新 version（可选），否则插入。
+    """
+    cur = conn.execute("SELECT id, version FROM tools WHERE name = ?;", (tool.name,))
+    row = cur.fetchone()
+    if row:
+        tool_id = row[0]
+        # 如果用户传入了版本信息且与记录不一致，可以选择更新
+        if tool.version and tool.version != (row[1] or ""):
+            conn.execute(
+                "UPDATE tools SET version = ? WHERE id = ?;",
+                (tool.version, tool_id),
+            )
+            conn.commit()
+        return tool_id
+
+    cur = conn.execute(
+        "INSERT INTO tools(name, version, extra) VALUES (?, ?, NULL);",
+        (tool.name, tool.version),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def _detect_binary_logical_name(view_dir: Path) -> str:
+    """
+    根据视图目录名推测逻辑上的二进制名称。
+
+    例如：
+    - Malware_sample_exe_ghidemo -> Malware_sample_exe
+    - Malware_sample_exe_idademo -> Malware_sample_exe
+
+    这是一个简化的“逻辑键”，用来把 Ghidra / IDA 的两个视图挂在同一个 binaries 记录上。
+    """
+    name = view_dir.name
+    # 去掉后缀
+    for suffix in ("_ghidemo", "_idademo"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def _try_find_real_binary_path(view_dir: Path) -> Optional[Path]:
+    """
+    尝试在视图目录及其上级目录中寻找真正的 .exe / .dll 等文件。
+
+    这里采用尽量保守的策略：
+    - 优先在视图目录中寻找单一的 .exe；
+    - 如找不到，再在父目录中寻找；
+    - 多个候选时返回 None（避免“瞎匹配”）。
+    """
+    candidates: List[Path] = []
+    for pattern in ("*.exe", "*.dll"):
+        candidates.extend(view_dir.glob(pattern))
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # 视图目录找不到明确目标，再去父目录尝试
+    parent = view_dir.parent
+    parent_candidates: List[Path] = []
+    for pattern in ("*.exe", "*.dll"):
+        parent_candidates.extend(parent.glob(pattern))
+    if len(parent_candidates) == 1:
+        return parent_candidates[0]
+
+    # 找不到或存在多个候选，返回 None，由调用方决定是否使用逻辑名
+    return None
+
+
+def _compute_file_hashes(path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """
+    计算文件的 MD5 / SHA256。
+    如果文件不存在或读取失败，返回 (None, None)。
+    """
+    try:
+        md5 = hashlib.md5()
+        sha = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                md5.update(chunk)
+                sha.update(chunk)
+        return md5.hexdigest(), sha.hexdigest()
+    except OSError:
+        return None, None
+
+
+def _get_or_create_binary(conn: sqlite3.Connection, view_dir: Path) -> int:
+    """
+    查找或创建 binaries 表中的记录。
+
+    逻辑：
+    1. 使用视图目录名推导逻辑 filename（例如 Malware_sample_exe）；
+    2. 尝试在视图目录或父目录找到真实二进制路径，并计算 hash（如果找到）；
+    3. 按 filename 作为唯一键查找记录，没有则插入。
+
+    注意：
+    - 这里的 filename 是“逻辑名”，不强制等于真实文件名，只要 Ghidra / IDA 共用即可。
+    """
+    view_dir = view_dir.resolve()
+    logical_name = _detect_binary_logical_name(view_dir)
+
+    cur = conn.execute(
+        "SELECT id FROM binaries WHERE filename = ?;",
+        (logical_name,),
+    )
+    row = cur.fetchone()
+    if row:
+        return int(row[0])
+
+    real_path = _try_find_real_binary_path(view_dir)
+    hash_md5: Optional[str] = None
+    hash_sha256: Optional[str] = None
+    path_str: Optional[str] = None
+    if real_path is not None:
+        path_str = str(real_path)
+        hash_md5, hash_sha256 = _compute_file_hashes(real_path)
+
+    cur = conn.execute(
+        """
+        INSERT INTO binaries(filename, path, hash_md5, hash_sha256, arch, bits)
+        VALUES (?, ?, ?, ?, NULL, NULL);
+        """,
+        (logical_name, path_str, hash_md5, hash_sha256),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def _create_binary_view(
+    conn: sqlite3.Connection,
+    binary_id: int,
+    tool_id: int,
+    output_dir: Path,
+    image_base: Optional[int],
+    config_path: Optional[str] = None,
+) -> int:
+    """
+    在 binary_views 表中插入一条记录。
+    当前不强制写入 created_at，可在后续需要时扩展。
+    """
+    cur = conn.execute(
+        """
+        INSERT INTO binary_views(binary_id, tool_id, output_dir, image_base, created_at, config_path)
+        VALUES (?, ?, ?, ?, NULL, ?);
+        """,
+        (binary_id, tool_id, str(output_dir.resolve()), image_base, config_path),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+# =========================
+# CSV / 文本解析工具函数
+# =========================
+
+
+def _parse_hex_int(value: str) -> Optional[int]:
+    """
+    把各种十六进制字符串解析为整数。
+
+    支持的形式：
+    - "0x00401C0E"
+    - "00401C0E"
+    - 带其他前后缀时（例如 Ghidra 外部符号的 "0xEXTERNAL:00000001"）返回 None。
+    """
+    value = value.strip()
+    if not value:
+        return None
+
+    # 纯 0x 前缀形式
+    if value.startswith("0x") and ":" not in value:
+        try:
+            return int(value, 16)
+        except ValueError:
+            return None
+
+    # 纯十六进制数字，不带 0x
+    if re.fullmatch(r"[0-9A-Fa-f]+", value):
+        try:
+            return int(value, 16)
+        except ValueError:
+            return None
+
+    # 其他复杂形式（例如 0xEXTERNAL:00000001）不解析
+    return None
+
+
+def _bool_from_str(value: str) -> Optional[int]:
+    """把 CSV 中的 True/False 文本转换为 1/0/None。"""
+    v = value.strip().lower()
+    if v in ("true", "t", "1", "yes"):
+        return 1
+    if v in ("false", "f", "0", "no"):
+        return 0
+    return None
+
+
+def _read_csv(path: Path) -> Iterable[dict]:
+    """
+    读取一个 CSV 文件，返回每行的 dict。
+    使用 UTF-8 编码，如果失败可以在调用方按需调整。
+    """
+    with path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # DictReader 返回的是 OrderedDict，这里统一转成普通 dict
+            yield dict(row)
+
+
+def _parse_segments_ghidra(
+    conn: sqlite3.Connection,
+    view_id: int,
+    csv_path: Path,
+) -> Optional[int]:
+    """
+    解析 Ghidra 的 segments.csv。
+    同时返回推测的 image_base（通常为 Headers 段的起始地址）。
+
+    特殊约定：
+    - 如果 view_id < 0，则仅做“干跑”（dry run）：计算 image_base，但不写入数据库。
+    """
+    image_base: Optional[int] = None
+    dry_run = view_id < 0
+
+    for row in _read_csv(csv_path):
+        name = row.get("Name", "")
+        start_va = _parse_hex_int(row.get("Start Address", "") or "")
+        end_va = _parse_hex_int(row.get("End Address", "") or "")
+        length = int(row.get("Length", "0") or 0)
+        if start_va is None or end_va is None:
+            continue
+
+        perm_r = _bool_from_str(row.get("Read", "") or "")
+        perm_w = _bool_from_str(row.get("Write", "") or "")
+        perm_x = _bool_from_str(row.get("Execute", "") or "")
+        raw_perm = f"R={row.get('Read')},W={row.get('Write')},X={row.get('Execute')}"
+
+        if not dry_run:
+            conn.execute(
+                """
+                INSERT INTO segments(view_id, name, start_va, end_va, length, perm_r, perm_w, perm_x, raw_perm)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (view_id, name, start_va, end_va, length, perm_r, perm_w, perm_x, raw_perm),
+            )
+
+        # Ghidra 中 Headers 段通常从 ImageBase 开始
+        if name == "Headers":
+            image_base = start_va
+
+    if not dry_run:
+        conn.commit()
+    return image_base
+
+
+def _parse_segments_ida(
+    conn: sqlite3.Connection,
+    view_id: int,
+    csv_path: Path,
+) -> Optional[int]:
+    """
+    解析 IDA 的 segments.csv。
+    返回推测的 image_base（简单策略：所有 Start Address 的最小值）。
+
+    特殊约定：
+    - 如果 view_id < 0，则仅做“干跑”（dry run）：计算 image_base，但不写入数据库。
+    """
+    image_base: Optional[int] = None
+    dry_run = view_id < 0
+
+    for row in _read_csv(csv_path):
+        name = row.get("Name", "")
+        start_va = _parse_hex_int(row.get("Start Address", "") or "")
+        end_va = _parse_hex_int(row.get("End Address", "") or "")
+        length = int(row.get("Length", "0") or 0)
+        if start_va is None or end_va is None:
+            continue
+
+        # IDA 的 Perm 是一个位掩码：0x1 = X, 0x2 = W, 0x4 = R
+        perm_val = row.get("Perm", "") or ""
+        perm_int = _parse_hex_int(perm_val)
+        perm_r = perm_w = perm_x = None
+        if perm_int is not None:
+            perm_r = 1 if (perm_int & 0x4) else 0
+            perm_w = 1 if (perm_int & 0x2) else 0
+            perm_x = 1 if (perm_int & 0x1) else 0
+        raw_perm = perm_val
+
+        if not dry_run:
+            conn.execute(
+                """
+                INSERT INTO segments(view_id, name, start_va, end_va, length, perm_r, perm_w, perm_x, raw_perm)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (view_id, name, start_va, end_va, length, perm_r, perm_w, perm_x, raw_perm),
+            )
+
+        if image_base is None or start_va < image_base:
+            image_base = start_va
+
+    if not dry_run:
+        conn.commit()
+    return image_base
+
+
+def _parse_sections(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
+    """解析 Ghidra / IDA 统一格式的 sections.csv。"""
+    for row in _read_csv(csv_path):
+        name = row.get("Name", "")
+        start_va = _parse_hex_int(row.get("Start Address", "") or "")
+        end_va = _parse_hex_int(row.get("End Address", "") or "")
+        length = int(row.get("Length", "0") or 0)
+        if start_va is None or end_va is None:
+            continue
+
+        conn.execute(
+            """
+            INSERT INTO sections(view_id, name, start_va, end_va, length)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (view_id, name, start_va, end_va, length),
+        )
+    conn.commit()
+
+
+def _normalize_symbol_kind(raw_type: str, is_external: Optional[int]) -> str:
+    """
+    把工具原始 symbol 类型归一化为较粗粒度的 kind。
+    - 对 Ghidra: Function / Label / Data / ...
+    - 对 IDA: FUNC / LABEL / ...
+    """
+    t = (raw_type or "").strip().upper()
+    if t in ("FUNCTION", "FUNC"):
+        if is_external:
+            return "import"
+        return "function"
+    if t in ("LABEL",):
+        return "label"
+    if t in ("DATA", "OBJ", "OBJECT"):
+        return "data"
+    # 其他情况暂时归为 other
+    return "other"
+
+
+def _parse_symbols(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
+    """解析 Ghidra / IDA 的 symbols.csv。"""
+    for row in _read_csv(csv_path):
+        name = row.get("Name", "") or ""
+        raw_address = row.get("Address", "") or ""
+        raw_type = row.get("Type", "") or ""
+        source = row.get("Source", "") or ""
+        is_global = _bool_from_str(row.get("Is Global", "") or "")
+        is_primary = _bool_from_str(row.get("Is Primary", "") or "")
+        is_external = _bool_from_str(row.get("Is External", "") or "")
+        namespace = row.get("Namespace", "") or ""
+
+        address_va = _parse_hex_int(raw_address)
+        kind = _normalize_symbol_kind(raw_type, is_external)
+
+        conn.execute(
+            """
+            INSERT INTO symbols(
+                view_id, name, address_va, raw_address,
+                kind, raw_type, source,
+                is_global, is_primary, is_external, namespace
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                view_id,
+                name,
+                address_va,
+                raw_address,
+                kind,
+                raw_type,
+                source,
+                is_global,
+                is_primary,
+                is_external,
+                namespace,
+            ),
+        )
+    conn.commit()
+
+
+def _parse_strings_ida(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
+    """解析 IDA 的 strings.csv。"""
+    for row in _read_csv(csv_path):
+        value = row.get("String", "") or ""
+        addr_va = _parse_hex_int(row.get("Address", "") or "")
+        length = int(row.get("Length", "0") or 0)
+        if addr_va is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO strings(view_id, value, address_va, length)
+            VALUES (?, ?, ?, ?);
+            """,
+            (view_id, value, addr_va, length),
+        )
+    conn.commit()
+
+
+def _extract_dst_from_xrefs_filename(filename: str, is_ghidra: bool) -> Tuple[Optional[int], Optional[str]]:
+    """
+    从 xrefs CSV 文件名中提取“被引用目标”的地址和名称。
+
+    约定：
+    - Ghidra: Malware_sample_exe_00402240_text_refs.csv
+      -> dst_va = 0x00402240, dst_name = "text"（中间那段）
+    - IDA:    Malware_sample_exe_0x401C0E_main_refs.csv
+      -> dst_va = 0x401C0E, dst_name = "main"
+    """
+    stem = Path(filename).stem
+
+    if is_ghidra:
+        # 形如 Malware_sample_exe_00402240_text_refs
+        parts = stem.split("_")
+        if len(parts) < 4:
+            return None, None
+        addr_part = parts[-3]  # 倒数第三个是地址
+        name_part = parts[-2]  # 倒数第二个是名称
+        dst_va = _parse_hex_int(addr_part if addr_part.startswith("0x") else f"0x{addr_part}")
+        return dst_va, name_part
+
+    # IDA: Malware_sample_exe_0x401C0E_main_refs
+    parts = stem.split("_")
+    if len(parts) < 4:
+        return None, None
+    addr_part = parts[-3]  # "0x401C0E"
+    name_part = parts[-2]  # "main"
+    dst_va = _parse_hex_int(addr_part)
+    return dst_va, name_part
+
+
+def _parse_xrefs(
+    conn: sqlite3.Connection,
+    view_id: int,
+    xrefs_dir: Path,
+    is_ghidra: bool,
+) -> None:
+    """
+    解析 Ghidra / IDA 的 xrefs 目录下所有 CSV 文件。
+
+    - Ghidra CSV 列: Reference From Address,Reference Type,Containing Function,Primary Ref
+    - IDA   CSV 列: Reference From Address,Reference Type,Containing Function
+    """
+    if not xrefs_dir.is_dir():
+        return
+
+    for csv_path in sorted(xrefs_dir.glob("*.csv")):
+        dst_va, dst_name = _extract_dst_from_xrefs_filename(csv_path.name, is_ghidra=is_ghidra)
+        for row in _read_csv(csv_path):
+            src_va = _parse_hex_int(row.get("Reference From Address", "") or "")
+            if src_va is None:
+                continue
+            ref_type_raw = row.get("Reference Type", "") or ""
+            containing_function = row.get("Containing Function", "") or ""
+            is_primary = None
+            if is_ghidra:
+                is_primary = _bool_from_str(row.get("Primary Ref", "") or "")
+
+            conn.execute(
+                """
+                INSERT INTO xrefs(
+                    view_id, src_va, dst_va, dst_name,
+                    ref_type_raw, containing_function, is_primary, raw_file
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    view_id,
+                    src_va,
+                    dst_va,
+                    dst_name,
+                    ref_type_raw,
+                    containing_function,
+                    is_primary,
+                    csv_path.name,
+                ),
+            )
+    conn.commit()
+
+
+def _parse_asm_functions_and_instructions(
+    conn: sqlite3.Connection,
+    view_id: int,
+    disasm_dir: Path,
+) -> None:
+    """
+    解析 *_disassembly 目录下的每个 .asm 文件，填充：
+    - functions：函数入口地址 + 名称
+    - instructions：函数内指令序列
+
+    兼容 Ghidra / IDA 的输出格式。
+    """
+    if not disasm_dir.is_dir():
+        return
+
+    # 只处理以 0x 开头的函数级文件，忽略其他杂项
+    asm_files = sorted(f for f in disasm_dir.glob("*.asm") if f.stem.startswith("0x"))
+
+    for asm_path in asm_files:
+        with asm_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # 解析头部注释，获取函数名和入口地址
+        func_name = None
+        entry_va = None
+        for line in lines[:5]:  # 前几行足够
+            s = line.strip()
+            if s.startswith("; Function:"):
+                # 统一截取冒号后部分
+                func_name = s.split(":", 1)[1].strip()
+            if "Address:" in s or "Start EA:" in s:
+                m = re.search(r"0x[0-9A-Fa-f]+", s)
+                if m:
+                    entry_va = int(m.group(0), 16)
+        # 如果头部未解析出函数信息，尝试从文件名中解析地址
+        if entry_va is None:
+            m = re.match(r"0x([0-9A-Fa-f]+)_", asm_path.stem)
+            if m:
+                entry_va = int(m.group(1), 16)
+        if entry_va is None:
+            continue
+        if func_name is None:
+            # 从文件名中截取函数名部分
+            m = re.match(r"0x[0-9A-Fa-f]+_(.+)", asm_path.stem)
+            if m:
+                func_name = m.group(1)
+            else:
+                func_name = asm_path.stem
+
+        # 查找或插入 functions 记录
+        cur = conn.execute(
+            "SELECT id FROM functions WHERE view_id = ? AND entry_va = ?;",
+            (view_id, entry_va),
+        )
+        row = cur.fetchone()
+        if row:
+            function_id = int(row[0])
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO functions(view_id, entry_va, name, demangled_name, size_bytes, source_symbol_id, raw_file)
+                VALUES (?, ?, ?, NULL, NULL, NULL, ?);
+                """,
+                (view_id, entry_va, func_name, asm_path.name),
+            )
+            function_id = int(cur.lastrowid)
+
+        # 解析指令行
+        index_in_function = 0
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith(";"):
+                continue
+
+            # 兼容 Ghidra / IDA：
+            # Ghidra: "0x00401C0E   PUSH       RBP              ; 55"
+            # IDA:    "00401C0E  push       rbp                           ; 55"
+            # 处理步骤：
+            # 1. 拿到行首地址
+            m = re.match(r"^(0x[0-9A-Fa-f]+|[0-9A-Fa-f]+)\s+(.*)$", stripped)
+            if not m:
+                continue
+            addr_str, rest = m.groups()
+            addr_va = _parse_hex_int(addr_str)
+            if addr_va is None:
+                continue
+
+            # 2. 拆分出 mnemonic + 操作数 + 注释
+            # 去掉前导空格，再按 ';' 分割成 代码部分 / 注释部分
+            code_part, *comment_parts = rest.split(";", 1)
+            comment = comment_parts[0] if comment_parts else ""
+            code_part = code_part.strip()
+            if not code_part:
+                continue
+
+            # 第一个 token 是 mnemonic，后面是操作数
+            code_tokens = code_part.split()
+            mnemonic = code_tokens[0]
+            op_str = code_part[len(mnemonic) :].strip() or None
+
+            # 3. 从注释部分提取字节序列（如果存在）
+            bytes_str: Optional[str] = None
+            if comment:
+                # comment 中通常是类似 "55" / "48 89 E5" 这样的机器码
+                m_bytes = re.search(r"([0-9A-Fa-f]{2}(?:\s+[0-9A-Fa-f]{2})*)", comment)
+                if m_bytes:
+                    bytes_str = m_bytes.group(1).strip()
+
+            conn.execute(
+                """
+                INSERT INTO instructions(
+                    view_id, function_id, index_in_function,
+                    address_va, bytes, mnemonic, op_str, raw_line
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    view_id,
+                    function_id,
+                    index_in_function,
+                    addr_va,
+                    bytes_str,
+                    mnemonic,
+                    op_str,
+                    line.rstrip("\n"),
+                ),
+            )
+            index_in_function += 1
+
+    conn.commit()
+
+
+def _parse_pseudocode_functions(
+    conn: sqlite3.Connection,
+    view_id: int,
+    pseudo_dir: Path,
+) -> None:
+    """
+    解析 *_pseudocode / *_pesudocode 目录下每个函数级 .c 文件，
+    填充 pseudo_functions 表。
+
+    规则：
+    - 仅处理形如 "0x00401C0E_main.c" / "0x401C0E_main.c" 的文件；
+    - 根据文件头注释提取函数名和入口地址：
+      - // Function: main
+      - // Address: 0x00401C0E      （Ghidra）
+      - // Start EA: 0x401C0E      （IDA）
+    - prototype：文件中第一行非注释、非空行；
+    - body：prototype 之后的所有内容（包含大括号）。
+    """
+    if not pseudo_dir.is_dir():
+        return
+
+    c_files = sorted(
+        f
+        for f in pseudo_dir.glob("*.c")
+        if re.match(r"0x[0-9A-Fa-f]+_.*\.c$", f.name)
+    )
+
+    for c_path in c_files:
+        with c_path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        func_name = None
+        entry_va = None
+        # 解析前几行注释
+        for line in lines[:6]:
+            s = line.strip()
+            if s.startswith("// Function:"):
+                func_name = s.split(":", 1)[1].strip()
+            if "Address:" in s or "Start EA:" in s:
+                m = re.search(r"0x[0-9A-Fa-f]+", s)
+                if m:
+                    entry_va = int(m.group(0), 16)
+        if entry_va is None:
+            m = re.match(r"0x([0-9A-Fa-f]+)_", c_path.stem)
+            if m:
+                entry_va = int(m.group(1), 16)
+        if entry_va is None:
+            continue
+        if func_name is None:
+            m = re.match(r"0x[0-9A-Fa-f]+_(.+)\.c", c_path.name)
+            if m:
+                func_name = m.group(1)
+            else:
+                func_name = c_path.stem
+
+        # 查找或创建对应的 functions 记录
+        cur = conn.execute(
+            "SELECT id FROM functions WHERE view_id = ? AND entry_va = ?;",
+            (view_id, entry_va),
+        )
+        row = cur.fetchone()
+        if row:
+            function_id = int(row[0])
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO functions(view_id, entry_va, name, demangled_name, size_bytes, source_symbol_id, raw_file)
+                VALUES (?, ?, ?, NULL, NULL, NULL, ?);
+                """,
+                (view_id, entry_va, func_name, c_path.name),
+            )
+            function_id = int(cur.lastrowid)
+
+        # 寻找 prototype 行：跳过前面的注释和空行
+        prototype = None
+        proto_idx = None
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("//") or not stripped:
+                continue
+            # 第一个非注释、非空行视为 prototype
+            prototype = stripped
+            proto_idx = idx
+            break
+
+        body = ""
+        if proto_idx is not None and proto_idx + 1 < len(lines):
+            body = "".join(lines[proto_idx + 1 :]).strip()
+
+        conn.execute(
+            """
+            INSERT INTO pseudo_functions(
+                view_id, function_id, entry_va, name, prototype, body, raw_file
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (
+                view_id,
+                function_id,
+                entry_va,
+                func_name,
+                prototype,
+                body,
+                c_path.name,
+            ),
+        )
+
+    conn.commit()
+
+
+# =========================
+# 面向调用者的高层接口：加载 Ghidra / IDA 视图
+# =========================
+
+
+def load_ghidra_view(
+    conn: sqlite3.Connection,
+    output_dir: Path,
+    config_path: Optional[str] = None,
+    tool_version: str = "",
+) -> int:
+    """
+    从一个 Ghidra 输出目录加载所有阶段 1 需要的数据。
+
+    目录结构示例：
+    tmp/Malware_sample_exe_ghidemo/
+      ├── Malware_sample.exe
+      ├── ghidra_adapter.py
+      ├── Malware_sample_exe_binaryinfo/      （目录名前缀不强依赖，只要 *_binaryinfo 即可）
+      │     ├── Malware_sample_exe_segments.csv
+      │     ├── Malware_sample_exe_sections.csv
+      │     ├── Malware_sample_exe_symbols.csv
+      │     └── Malware_sample_exe_xrefs/*.csv
+      ├── Malware_sample_exe_disassembly/*.asm
+      └── Malware_sample_exe_pseudocode/*.c
+    """
+    output_dir = Path(output_dir).resolve()
+    tool_id = _get_or_create_tool(conn, ToolInfo(name="ghidra", version=tool_version))
+    binary_id = _get_or_create_binary(conn, output_dir)
+
+    # ===== 解析 segments / sections / symbols / xrefs ===== #
+    binaryinfo_dir = next(output_dir.glob("*_binaryinfo"), None)
+    if binaryinfo_dir is None:
+        raise FileNotFoundError(f"未找到 Ghidra binaryinfo 目录: {output_dir}")
+
+    segments_csv = next(binaryinfo_dir.glob("*_segments.csv"), None)
+    sections_csv = next(binaryinfo_dir.glob("*_sections.csv"), None)
+    symbols_csv = next(binaryinfo_dir.glob("*_symbols.csv"), None)
+    xrefs_dir = next(binaryinfo_dir.glob("*_xrefs"), None)
+
+    # 先用临时 view_id=-1 解析一次 segments，以获取 image_base，
+    # 再创建 binary_view 记录，之后删除临时记录并重新插入一次。
+    image_base: Optional[int] = None
+    if segments_csv:
+        image_base = _parse_segments_ghidra(conn, view_id=-1, csv_path=segments_csv)
+
+    view_id = _create_binary_view(conn, binary_id, tool_id, output_dir, image_base, config_path)
+
+    # 我们刚才在 _parse_segments_ghidra 中用的是 view_id=-1，必须修正：
+    if segments_csv:
+        # 删除临时插入的段记录，重新解析一次，以正确的 view_id 写入
+        conn.execute("DELETE FROM segments WHERE view_id = -1;")
+        image_base = _parse_segments_ghidra(conn, view_id=view_id, csv_path=segments_csv)
+        conn.execute(
+            "UPDATE binary_views SET image_base = ? WHERE id = ?;",
+            (image_base, view_id),
+        )
+        conn.commit()
+
+    if sections_csv:
+        _parse_sections(conn, view_id=view_id, csv_path=sections_csv)
+    if symbols_csv:
+        _parse_symbols(conn, view_id=view_id, csv_path=symbols_csv)
+    if xrefs_dir and xrefs_dir.is_dir():
+        _parse_xrefs(conn, view_id=view_id, xrefs_dir=xrefs_dir, is_ghidra=True)
+
+    # ===== 解析函数反汇编 / 指令 =====
+    disasm_dir = next(output_dir.glob("*_disassembly"), None)
+    if disasm_dir and disasm_dir.is_dir():
+        _parse_asm_functions_and_instructions(conn, view_id=view_id, disasm_dir=disasm_dir)
+
+    # ===== 解析伪代码函数 =====
+    pseudo_dir = next(output_dir.glob("*_pseudocode"), None)
+    if pseudo_dir and pseudo_dir.is_dir():
+        _parse_pseudocode_functions(conn, view_id=view_id, pseudo_dir=pseudo_dir)
+
+    return view_id
+
+
+def load_ida_view(
+    conn: sqlite3.Connection,
+    output_dir: Path,
+    config_path: Optional[str] = None,
+    tool_version: str = "",
+) -> int:
+    """
+    从一个 IDA 输出目录加载所有阶段 1 需要的数据。
+
+    目录结构示例：
+    tmp/Malware_sample_exe_idademo/
+      ├── Malware_sample_exe_binaryinfo/
+      │     ├── Malware_sample_exe_segments.csv
+      │     ├── Malware_sample_exe_sections.csv
+      │     ├── Malware_sample_exe_symbols.csv
+      │     ├── Malware_sample_exe_strings.csv
+      │     └── Malware_sample_exe_xrefs/*.csv
+      ├── Malware_sample_exe_disassembly/*.asm
+      └── Malware_sample_exe_pesudocode/*.c
+    """
+    output_dir = Path(output_dir).resolve()
+    tool_id = _get_or_create_tool(conn, ToolInfo(name="ida", version=tool_version))
+    binary_id = _get_or_create_binary(conn, output_dir)
+
+    # ===== 解析 segments / sections / symbols / xrefs / strings ===== #
+    binaryinfo_dir = next(output_dir.glob("*_binaryinfo"), None)
+    if binaryinfo_dir is None:
+        raise FileNotFoundError(f"未找到 IDA binaryinfo 目录: {output_dir}")
+
+    segments_csv = next(binaryinfo_dir.glob("*_segments.csv"), None)
+    sections_csv = next(binaryinfo_dir.glob("*_sections.csv"), None)
+    symbols_csv = next(binaryinfo_dir.glob("*_symbols.csv"), None)
+    strings_csv = next(binaryinfo_dir.glob("*_strings.csv"), None)
+    xrefs_dir = next(binaryinfo_dir.glob("*_xrefs"), None)
+
+    image_base: Optional[int] = None
+    if segments_csv:
+        image_base = _parse_segments_ida(conn, view_id=-1, csv_path=segments_csv)
+
+    view_id = _create_binary_view(conn, binary_id, tool_id, output_dir, image_base, config_path)
+
+    # 修正 segments 的 view_id，同 Ghidra 逻辑
+    if segments_csv:
+        conn.execute("DELETE FROM segments WHERE view_id = -1;")
+        image_base = _parse_segments_ida(conn, view_id=view_id, csv_path=segments_csv)
+        conn.execute(
+            "UPDATE binary_views SET image_base = ? WHERE id = ?;",
+            (image_base, view_id),
+        )
+        conn.commit()
+
+    if sections_csv:
+        _parse_sections(conn, view_id=view_id, csv_path=sections_csv)
+    if symbols_csv:
+        _parse_symbols(conn, view_id=view_id, csv_path=symbols_csv)
+    if strings_csv:
+        _parse_strings_ida(conn, view_id=view_id, csv_path=strings_csv)
+    if xrefs_dir and xrefs_dir.is_dir():
+        _parse_xrefs(conn, view_id=view_id, xrefs_dir=xrefs_dir, is_ghidra=False)
+
+    # ===== 解析函数反汇编 / 指令 =====
+    disasm_dir = next(output_dir.glob("*_disassembly"), None)
+    if disasm_dir and disasm_dir.is_dir():
+        _parse_asm_functions_and_instructions(conn, view_id=view_id, disasm_dir=disasm_dir)
+
+    # ===== 解析伪代码函数（注意目录名拼写: pesudocode）=====
+    pseudo_dir = next(output_dir.glob("*_pesudocode"), None)
+    if pseudo_dir and pseudo_dir.is_dir():
+        _parse_pseudocode_functions(conn, view_id=view_id, pseudo_dir=pseudo_dir)
+
+    return view_id
+
+
+# =========================
+# 命令行入口：快速测试加载
+# =========================
+
+
+def main(argv: Optional[Iterable[str]] = None) -> None:
+    """
+    简单的命令行入口，方便在本地快速测试：
+
+    示例：
+      python alignment_loader.py --db tmp/alignment.db ^
+          --ghidra-dir tmp/Malware_sample_exe_ghidemo ^
+          --ida-dir    tmp/Malware_sample_exe_idademo
+    """
+    parser = argparse.ArgumentParser(
+        description="从 Ghidra / IDA 输出目录构建统一 SQLite 对齐数据库（阶段 1）"
+    )
+    parser.add_argument(
+        "--db",
+        required=True,
+        help="输出 SQLite 数据库路径，例如 tmp/alignment.db",
+    )
+    parser.add_argument(
+        "--ghidra-dir",
+        help="Ghidra 输出目录，例如 tmp/Malware_sample_exe_ghidemo",
+    )
+    parser.add_argument(
+        "--ida-dir",
+        help="IDA 输出目录，例如 tmp/Malware_sample_exe_idademo",
+    )
+    parser.add_argument(
+        "--ghidra-version",
+        default="",
+        help="可选：Ghidra 版本号，记录在 tools 表中",
+    )
+    parser.add_argument(
+        "--ida-version",
+        default="",
+        help="可选：IDA 版本号，记录在 tools 表中",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    db_path = Path(args.db).resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        init_db(conn)
+        if args.ghidra_dir:
+            load_ghidra_view(
+                conn,
+                output_dir=Path(args.ghidra_dir),
+                config_path=None,
+                tool_version=args.ghidra_version,
+            )
+        if args.ida_dir:
+            load_ida_view(
+                conn,
+                output_dir=Path(args.ida_dir),
+                config_path=None,
+                tool_version=args.ida_version,
+            )
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
