@@ -10,7 +10,7 @@ semantic_align.py
 3. 以 --ida-sync 全量运行 knowledge_propagation.py，与 IDA 端保持联动。
 
 默认等价于依次执行：
-  python tools/Semantics_Alignment/alignment_loader.py --delete-db --db tmp/demo.db ^
+  python tools/Semantics_Alignment/alignment_loader.py --delete-db --db tmp/Malware_sample.exe.db ^
          --ghidra-dir tmp/Malware_sample_exe_ghidemo ^
          --ida-dir    tmp/Malware_sample_exe_idademo ^
          --dump-db --dump-db-output tmp/db_sample_dump.txt ^
@@ -20,7 +20,7 @@ semantic_align.py
        -S"tools/Semantics_Alignment/idat_server.py" "tmp/Malware_sample.exe"
 
   python tools/Semantics_Alignment/knowledge_propagation.py ^
-         --db tmp/demo.db ^
+         --db tmp/Malware_sample.exe.db ^
          --ida-sync --max-functions 0 --max-lvar-funcs 0
 """
 
@@ -51,10 +51,11 @@ def derive_tmp_layout(sample_path: Path) -> dict:
     tmp_root.mkdir(parents=True, exist_ok=True)
 
     sanitized = re.sub(r"[^A-Za-z]", "_", sample_path.name)
+    sample_name = sample_path.name
 
     defaults = {
         "tmp_root": tmp_root,
-        "db_path": tmp_root / "demo.db",
+        "db_path": tmp_root / f"{sample_name}.db",
         "dump_txt": tmp_root / "db_sample_dump.txt",
         "dump_xlsx": tmp_root / "db_sample_dump.xlsx",
         "ida_log": tmp_root / "idat_log.txt",
@@ -90,8 +91,6 @@ def run_alignment_loader(
         "--dump-db-workbook",
         str(dump_xlsx),
     ]
-    if delete_db:
-        cmd.insert(2, "--delete-db")
 
     print("[SemanticAlign] 运行 alignment_loader.py 构建对齐数据库...")
     print("  命令:", " ".join(cmd))
@@ -172,7 +171,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--db",
         default=None,
-        help="SQLite 对齐数据库路径（默认: 基于 --sample 所在目录自动生成 tmp/demo.db）",
+        help="SQLite 对齐数据库路径（默认: 在样本目录下生成 {sample_name}.db，例如 tmp/Malware_sample.exe.db）",
     )
     parser.add_argument(
         "--ghidra-dir",
@@ -322,4 +321,3 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
-

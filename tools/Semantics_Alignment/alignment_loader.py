@@ -30,9 +30,10 @@ import hashlib
 import re
 import sqlite3
 import textwrap
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, List, Set
+from typing import Iterable, Optional, Tuple, List, Set, Dict
 
 from openpyxl import Workbook
 
@@ -255,6 +256,70 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def check_db_compatibility(db_path: Path) -> Tuple[bool, str]:
+    """检查现有 SQLite 数据库是否包含阶段 1 所需的核心表。"""
+
+    required_tables = {
+        "tools",
+        "binaries",
+        "binary_views",
+        "segments",
+        "sections",
+        "symbols",
+        "strings",
+        "functions",
+        "instructions",
+        "xrefs",
+        "pseudo_functions",
+    }
+
+    if not db_path.exists():
+        return True, "数据库不存在"
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception as exc:
+        return False, f"无法以只读方式打开: {exc}"
+
+    try:
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        existing = {row[0] for row in cur.fetchall()}
+    except Exception as exc:
+        conn.close()
+        return False, f"读取表结构失败: {exc}"
+
+    conn.close()
+
+    missing = required_tables - existing
+    if missing:
+        return False, "缺少必要表: " + ", ".join(sorted(missing))
+
+    return True, "表结构兼容"
+
+
+def prompt_overwrite_existing(db_path: Path, compatible: bool, detail: str) -> bool:
+    """与用户交互，确认是否覆盖已有数据库。仅 Yes/Y/y/空输入 视为同意。"""
+
+    status = "兼容" if compatible else "不兼容/可能损坏"
+    print(f"检测到已存在数据库: {db_path}")
+    print(f"兼容性检查: {status}（{detail}）")
+
+    prompt = (
+        "是否覆盖现有数据库? 输入 Y/Yes 继续覆盖；"
+        "输入 N/n/No/直接回车 保留并退出（默认保留）: "
+    )
+
+    while True:
+        choice = input(prompt).strip()
+        if choice == "":
+            return False
+        if choice.lower() in {"y", "yes"}:
+            return True
+        if choice.lower() in {"n", "no"}:
+            return False
+        print("请输入 Yes/Y/y/直接回车 覆盖，或 N/n/No 取消。")
+
+
 # =========================
 # 内部工具函数：获取 / 创建工具和二进制记录
 # =========================
@@ -475,6 +540,7 @@ def _parse_segments_ghidra(
     conn: sqlite3.Connection,
     view_id: int,
     csv_path: Path,
+    address_offset: int = 0,
 ) -> Optional[int]:
     """
     解析 Ghidra 的 segments.csv。
@@ -493,6 +559,10 @@ def _parse_segments_ghidra(
         length = int(row.get("Length", "0") or 0)
         if start_va is None or end_va is None:
             continue
+
+        if address_offset:
+            start_va -= address_offset
+            end_va -= address_offset
 
         perm_r = _bool_from_str(row.get("Read", "") or "")
         perm_w = _bool_from_str(row.get("Write", "") or "")
@@ -567,7 +637,12 @@ def _parse_segments_ida(
     return image_base
 
 
-def _parse_sections(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
+def _parse_sections(
+    conn: sqlite3.Connection,
+    view_id: int,
+    csv_path: Path,
+    address_offset: int = 0,
+) -> None:
     """解析 Ghidra / IDA 统一格式的 sections.csv。"""
     for row in _read_csv(csv_path):
         name = row.get("Name", "")
@@ -576,6 +651,9 @@ def _parse_sections(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> N
         length = int(row.get("Length", "0") or 0)
         if start_va is None or end_va is None:
             continue
+        if address_offset:
+            start_va -= address_offset
+            end_va -= address_offset
 
         conn.execute(
             """
@@ -606,7 +684,12 @@ def _normalize_symbol_kind(raw_type: str, is_external: Optional[int]) -> str:
     return "other"
 
 
-def _parse_symbols(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
+def _parse_symbols(
+    conn: sqlite3.Connection,
+    view_id: int,
+    csv_path: Path,
+    address_offset: int = 0,
+) -> None:
     """解析 Ghidra / IDA 的 symbols.csv。"""
     for row in _read_csv(csv_path):
         name = row.get("Name", "") or ""
@@ -619,6 +702,8 @@ def _parse_symbols(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> No
         namespace = row.get("Namespace", "") or ""
 
         address_va = _parse_hex_int(raw_address)
+        if address_va is not None and address_offset:
+            address_va -= address_offset
         kind = _normalize_symbol_kind(raw_type, is_external)
 
         conn.execute(
@@ -645,6 +730,76 @@ def _parse_symbols(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> No
             ),
         )
     conn.commit()
+
+
+def _collect_function_symbols_from_csv(csv_path: Path) -> Dict[str, int]:
+    """
+    从 symbols.csv 中提取函数符号映射：name(lower) -> address_va。
+    若同名函数出现多次，保留第一个解析成功的地址。
+    """
+    result: Dict[str, int] = {}
+    for row in _read_csv(csv_path):
+        name = (row.get("Name") or "").strip()
+        if not name:
+            continue
+        raw_address = row.get("Address", "") or ""
+        raw_type = row.get("Type", "") or ""
+        is_external = _bool_from_str(row.get("Is External", "") or "")
+        kind = _normalize_symbol_kind(raw_type, is_external)
+        if kind != "function":
+            continue
+        address_va = _parse_hex_int(raw_address)
+        if address_va is None:
+            continue
+        key = name.lower()
+        # 若存在多个同名函数，简单保留第一个地址
+        if key not in result:
+            result[key] = address_va
+    return result
+
+
+def calculate_address_offset(
+    ghidra_symbols_csv: Path,
+    ida_symbols_csv: Path,
+    min_matches: int = 3,
+) -> Optional[int]:
+    """
+    基于 Ghidra / IDA 的 symbols.csv，通过同名函数的入口 VA 估算两者之间的基址偏移。
+
+    返回值含义：
+    - 返回 d 表示 Ghidra_VA - IDA_VA 的众数为 d，
+      即在将 Ghidra 视图写入数据库前，应统一执行 VA' = VA - d；
+    - 若匹配过少或差值不稳定，则返回 None。
+    """
+    ghidra_map = _collect_function_symbols_from_csv(ghidra_symbols_csv)
+    ida_map = _collect_function_symbols_from_csv(ida_symbols_csv)
+
+    if not ghidra_map or not ida_map:
+        return None
+
+    common_names = set(ghidra_map.keys()) & set(ida_map.keys())
+    if not common_names:
+        return None
+
+    diffs: List[int] = []
+    for name in common_names:
+        g_va = ghidra_map.get(name)
+        i_va = ida_map.get(name)
+        if g_va is None or i_va is None:
+            continue
+        diffs.append(g_va - i_va)
+
+    if not diffs:
+        return None
+
+    counter = Counter(diffs)
+    most_common_diff, count = counter.most_common(1)[0]
+
+    # 要求至少若干个函数支持该偏移；若所有差值一致，则放宽限制
+    if count < max(1, min_matches) and len(counter) > 1:
+        return None
+
+    return most_common_diff
 
 
 def _parse_strings_ida(conn: sqlite3.Connection, view_id: int, csv_path: Path) -> None:
@@ -702,6 +857,7 @@ def _parse_xrefs(
     view_id: int,
     xrefs_dir: Path,
     is_ghidra: bool,
+    address_offset: int = 0,
 ) -> None:
     """
     解析 Ghidra / IDA 的 xrefs 目录下所有 CSV 文件。
@@ -714,10 +870,14 @@ def _parse_xrefs(
 
     for csv_path in sorted(xrefs_dir.glob("*.csv")):
         dst_va, dst_name = _extract_dst_from_xrefs_filename(csv_path.name, is_ghidra=is_ghidra)
+        if address_offset and dst_va is not None:
+            dst_va -= address_offset
         for row in _read_csv(csv_path):
             src_va = _parse_hex_int(row.get("Reference From Address", "") or "")
             if src_va is None:
                 continue
+            if address_offset:
+                src_va -= address_offset
             ref_type_raw = row.get("Reference Type", "") or ""
             containing_function = row.get("Containing Function", "") or ""
             is_primary = None
@@ -750,6 +910,7 @@ def _parse_asm_functions_and_instructions(
     conn: sqlite3.Connection,
     view_id: int,
     disasm_dir: Path,
+    address_offset: int = 0,
 ) -> None:
     """
     解析 *_disassembly 目录下的每个 .asm 文件，填充：
@@ -787,6 +948,8 @@ def _parse_asm_functions_and_instructions(
                 entry_va = int(m.group(1), 16)
         if entry_va is None:
             continue
+        if address_offset:
+            entry_va -= address_offset
         if func_name is None:
             # 从文件名中截取函数名部分
             m = re.match(r"0x[0-9A-Fa-f]+_(.+)", asm_path.stem)
@@ -832,6 +995,8 @@ def _parse_asm_functions_and_instructions(
             addr_va = _parse_hex_int(addr_str)
             if addr_va is None:
                 continue
+            if address_offset:
+                addr_va -= address_offset
 
             # 2. 拆分出 mnemonic + 操作数 + 注释
             # 去掉前导空格，再按 ';' 分割成 代码部分 / 注释部分
@@ -882,6 +1047,7 @@ def _parse_pseudocode_functions(
     conn: sqlite3.Connection,
     view_id: int,
     pseudo_dir: Path,
+    address_offset: int = 0,
 ) -> None:
     """
     解析 *_pseudocode / *_pesudocode 目录下每个函数级 .c 文件，
@@ -926,6 +1092,8 @@ def _parse_pseudocode_functions(
                 entry_va = int(m.group(1), 16)
         if entry_va is None:
             continue
+        if address_offset:
+            entry_va -= address_offset
         if func_name is None:
             m = re.match(r"0x[0-9A-Fa-f]+_(.+)\.c", c_path.name)
             if m:
@@ -998,6 +1166,7 @@ def load_ghidra_view(
     output_dir: Path,
     config_path: Optional[str] = None,
     tool_version: str = "",
+    address_offset: int = 0,
 ) -> int:
     """
     从一个 Ghidra 输出目录加载所有阶段 1 需要的数据。
@@ -1032,7 +1201,12 @@ def load_ghidra_view(
     # 再创建 binary_view 记录，之后删除临时记录并重新插入一次。
     image_base: Optional[int] = None
     if segments_csv:
-        image_base = _parse_segments_ghidra(conn, view_id=-1, csv_path=segments_csv)
+        image_base = _parse_segments_ghidra(
+            conn,
+            view_id=-1,
+            csv_path=segments_csv,
+            address_offset=address_offset,
+        )
 
     view_id = _create_binary_view(conn, binary_id, tool_id, output_dir, image_base, config_path)
 
@@ -1040,7 +1214,12 @@ def load_ghidra_view(
     if segments_csv:
         # 删除临时插入的段记录，重新解析一次，以正确的 view_id 写入
         conn.execute("DELETE FROM segments WHERE view_id = -1;")
-        image_base = _parse_segments_ghidra(conn, view_id=view_id, csv_path=segments_csv)
+        image_base = _parse_segments_ghidra(
+            conn,
+            view_id=view_id,
+            csv_path=segments_csv,
+            address_offset=address_offset,
+        )
         conn.execute(
             "UPDATE binary_views SET image_base = ? WHERE id = ?;",
             (image_base, view_id),
@@ -1048,21 +1227,47 @@ def load_ghidra_view(
         conn.commit()
 
     if sections_csv:
-        _parse_sections(conn, view_id=view_id, csv_path=sections_csv)
+        _parse_sections(
+            conn,
+            view_id=view_id,
+            csv_path=sections_csv,
+            address_offset=address_offset,
+        )
     if symbols_csv:
-        _parse_symbols(conn, view_id=view_id, csv_path=symbols_csv)
+        _parse_symbols(
+            conn,
+            view_id=view_id,
+            csv_path=symbols_csv,
+            address_offset=address_offset,
+        )
     if xrefs_dir and xrefs_dir.is_dir():
-        _parse_xrefs(conn, view_id=view_id, xrefs_dir=xrefs_dir, is_ghidra=True)
+        _parse_xrefs(
+            conn,
+            view_id=view_id,
+            xrefs_dir=xrefs_dir,
+            is_ghidra=True,
+            address_offset=address_offset,
+        )
 
     # ===== 解析函数反汇编 / 指令 =====
     disasm_dir = next(output_dir.glob("*_disassembly"), None)
     if disasm_dir and disasm_dir.is_dir():
-        _parse_asm_functions_and_instructions(conn, view_id=view_id, disasm_dir=disasm_dir)
+        _parse_asm_functions_and_instructions(
+            conn,
+            view_id=view_id,
+            disasm_dir=disasm_dir,
+            address_offset=address_offset,
+        )
 
     # ===== 解析伪代码函数 =====
     pseudo_dir = next(output_dir.glob("*_pseudocode"), None)
     if pseudo_dir and pseudo_dir.is_dir():
-        _parse_pseudocode_functions(conn, view_id=view_id, pseudo_dir=pseudo_dir)
+        _parse_pseudocode_functions(
+            conn,
+            view_id=view_id,
+            pseudo_dir=pseudo_dir,
+            address_offset=address_offset,
+        )
 
     return view_id
 
@@ -1309,8 +1514,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     )
     parser.add_argument(
         "--db",
-        required=True,
-        help="输出 SQLite 数据库路径，例如 tmp/alignment.db",
+        help="输出 SQLite 数据库路径：可为文件或目录；若未指定或为目录，则自动生成 {sample_name}.db。",
     )
     parser.add_argument(
         "--ghidra-dir",
@@ -1353,28 +1557,86 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    db_path = Path(args.db).resolve()
+    # 解析输出目录
+    ghidra_dir: Optional[Path] = Path(args.ghidra_dir).resolve() if args.ghidra_dir else None
+    ida_dir: Optional[Path] = Path(args.ida_dir).resolve() if args.ida_dir else None
+
+    # 推断样本逻辑名，用于默认数据库文件名
+    view_for_name: Optional[Path] = ghidra_dir or ida_dir
+    sample_name = "alignment"
+    if view_for_name is not None:
+        sample_name = _detect_binary_logical_name(view_for_name)
+
+    # 解析 / 推断数据库路径
+    if args.db:
+        db_candidate = Path(args.db).expanduser().resolve()
+        if db_candidate.is_dir():
+            db_path = db_candidate / f"{sample_name}.db"
+        else:
+            db_path = db_candidate
+    else:
+        if view_for_name is None:
+            raise SystemExit(
+                "未提供 --db，且无法从 --ghidra-dir / --ida-dir 推断样本名用于生成默认数据库路径。"
+            )
+        db_path = (view_for_name.parent / f"{sample_name}.db").resolve()
+
     if args.delete_db:
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            candidate = db_path.with_name(db_path.name + suffix)
+            if candidate.exists():
+                candidate.unlink()
+    elif db_path.exists():
+        compatible, detail = check_db_compatibility(db_path)
+        if not prompt_overwrite_existing(db_path, compatible, detail):
+            print("已选择保留现有数据库，操作终止。")
+            return
         for suffix in ("", "-journal", "-wal", "-shm"):
             candidate = db_path.with_name(db_path.name + suffix)
             if candidate.exists():
                 candidate.unlink()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # 若同时提供 Ghidra / IDA 输出目录，则基于 symbols.csv 自动推断 Ghidra/IDA 基址偏移
+    address_offset = 0
+    if ghidra_dir is not None and ida_dir is not None:
+        ghidra_binaryinfo = next(ghidra_dir.glob("*_binaryinfo"), None)
+        ida_binaryinfo = next(ida_dir.glob("*_binaryinfo"), None)
+        if ghidra_binaryinfo is not None and ida_binaryinfo is not None:
+            ghidra_symbols_csv = next(ghidra_binaryinfo.glob("*_symbols.csv"), None)
+            ida_symbols_csv = next(ida_binaryinfo.glob("*_symbols.csv"), None)
+            if ghidra_symbols_csv is not None and ida_symbols_csv is not None:
+                offset = calculate_address_offset(ghidra_symbols_csv, ida_symbols_csv)
+                if offset is not None and offset != 0:
+                    address_offset = offset
+                    print(
+                        f"[AlignmentLoader] 检测到 Ghidra/IDA 基址偏移: "
+                        f"offset=0x{offset:X} ({offset})，将在写入数据库前对 Ghidra VA 执行 va-offset 对齐到 IDA 坐标系。"
+                    )
+                else:
+                    print(
+                        "[AlignmentLoader] 未能可靠推断 Ghidra/IDA 基址偏移，使用默认 offset=0。"
+                    )
+        else:
+            print(
+                "[AlignmentLoader] 未找到完整的 *_binaryinfo 目录，跳过基址偏移自动推断（使用 offset=0）。"
+            )
+
     conn = sqlite3.connect(str(db_path))
     try:
         init_db(conn)
-        if args.ghidra_dir:
+        if ghidra_dir is not None:
             load_ghidra_view(
                 conn,
-                output_dir=Path(args.ghidra_dir),
+                output_dir=ghidra_dir,
                 config_path=None,
                 tool_version=args.ghidra_version,
+                address_offset=address_offset,
             )
-        if args.ida_dir:
+        if ida_dir is not None:
             load_ida_view(
                 conn,
-                output_dir=Path(args.ida_dir),
+                output_dir=ida_dir,
                 config_path=None,
                 tool_version=args.ida_version,
             )

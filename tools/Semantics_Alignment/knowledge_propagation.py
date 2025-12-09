@@ -7,7 +7,7 @@ knowledge_propagation.py
 “LLM + 依赖图知识传播（Knowledge Propagation on Dependency Graph）” 流程。
 
 核心能力：
-1. 从 demo.db 中按 view_id 构建函数级依赖图（调用关系 + 字符串引用）。
+1. 从对齐 SQLite 数据库（例如 sample_name.db）中按 view_id 构建函数级依赖图（调用关系 + 字符串引用）。
 2. 为每个函数计算一个启发式“信息熵 / 分析优先级”评分：
    - 叶子函数（无内部被调用者）优先；
    - 调用外部 API 的函数优先；
@@ -60,6 +60,7 @@ except Exception:  # pragma: no cover - 可选依赖
 
 
 logger = logging.getLogger(__name__)
+ACTIVE_INPUT_DB: str = ""
 
 
 # 超时：连续收到空响应时持续重试的最长等待时间（秒）
@@ -74,7 +75,7 @@ MAX_LVAR_PASSES = 1
 # =========================
 
 
-def setup_logging(log_path: Path) -> None:
+def setup_logging(log_path: Path, input_db: Optional[Path] = None) -> None:
     """
     初始化日志系统：
     - 文件：DEBUG 及以上写入 log_path；
@@ -85,6 +86,18 @@ def setup_logging(log_path: Path) -> None:
     if root.handlers:
         return
 
+    global ACTIVE_INPUT_DB
+    if input_db is not None:
+        try:
+            ACTIVE_INPUT_DB = str(Path(input_db).resolve())
+        except Exception:
+            ACTIVE_INPUT_DB = str(input_db)
+
+    class _DBPathFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            record.db_path = ACTIVE_INPUT_DB or "N/A"
+            return True
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     root.setLevel(logging.DEBUG)
@@ -94,7 +107,7 @@ def setup_logging(log_path: Path) -> None:
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(
         logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+            "%(asctime)s [%(levelname)s] %(name)s - [db=%(db_path)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
@@ -102,10 +115,44 @@ def setup_logging(log_path: Path) -> None:
     # 控制台日志：简要输出
     ch = logging.StreamHandler(stream=sys.stderr)
     ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("%(message)s"))
+    ch.setFormatter(logging.Formatter("[db=%(db_path)s] %(message)s"))
+
+    db_filter = _DBPathFilter()
+    fh.addFilter(db_filter)
+    ch.addFilter(db_filter)
 
     root.addHandler(fh)
     root.addHandler(ch)
+
+
+def install_stdout_tee(target_logger: logging.Logger) -> None:
+    """将 stdout 同步写入日志文件，便于回溯命令行输出。"""
+
+    class _StdoutTee:
+        def __init__(self, original, logger_obj: logging.Logger) -> None:
+            self._original = original
+            self._logger = logger_obj
+            self._buffer = ""
+
+        def write(self, s: str) -> int:
+            self._original.write(s)
+            if not s:
+                return 0
+            self._buffer += s
+            while "\n" in self._buffer:
+                line, self._buffer = self._buffer.split("\n", 1)
+                if line.strip():
+                    self._logger.debug(line)
+            return len(s)
+
+        def flush(self) -> None:
+            self._original.flush()
+
+    # 避免重复安装
+    if isinstance(sys.stdout, _StdoutTee):
+        return
+
+    sys.stdout = _StdoutTee(sys.stdout, target_logger)  # type: ignore[assignment]
 
 
 def wait_for_ida_server(ida_url: str) -> None:
@@ -383,7 +430,7 @@ CALL_REF_TYPES: Set[str] = {
     # Ghidra
     "UNCONDITIONAL_CALL",
     "COMPUTED_CALL",
-    # IDA 数字编码（在 demo.db 中看到的典型值）
+    # IDA 数字编码（在对齐数据库中看到的典型值）
     "17",
     "19",
     "21",
@@ -393,6 +440,9 @@ CALL_REF_TYPES: Set[str] = {
 GENERIC_LVAR_PATTERN = re.compile(
     r"\b(?:a\d+|arg\d+|arg_\d+|v\d+|var_[0-9A-Fa-f]+)\b"
 )
+
+# 用于检测函数名是否仍然是默认的 sub_xxxx 形式
+SUBFUNC_NAME_PATTERN = re.compile(r"\bsub_[0-9A-Fa-f]+\b")
 
 
 def _find_generic_lvar_names(code: str) -> Set[str]:
@@ -709,6 +759,76 @@ def build_unified_graph(conn: sqlite3.Connection, binary_id: int) -> UnifiedGrap
     return UnifiedGraph(binary_id=binary_id, nodes=nodes, tool_map=tool_map, func_tool=func_tool)
 
 
+def _load_ida_subfunc_entries(conn: sqlite3.Connection, binary_id: int) -> Dict[int, str]:
+    """加载该 binary 下 IDA 视图仍为 sub_ 前缀的函数名映射。"""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT f.entry_va, f.name
+        FROM functions AS f
+        JOIN binary_views AS bv ON f.view_id = bv.id
+        JOIN tools AS t ON bv.tool_id = t.id
+        WHERE bv.binary_id = ? AND LOWER(t.name) = 'ida';
+        """,
+        (binary_id,),
+    )
+
+    result: Dict[int, str] = {}
+    for entry_va, name in cur.fetchall():
+        nm = (name or "").strip()
+        if not nm:
+            continue
+        if SUBFUNC_NAME_PATTERN.fullmatch(nm):
+            result[int(entry_va)] = nm
+    return result
+
+
+def _build_name_alignment_prompt(
+    entry_va: int,
+    db_name: str,
+    ida_name: str,
+    db_code: str,
+    ida_code: str,
+) -> str:
+    """构造提示，要求 LLM 在 DB 与 IDA 命名/伪代码差异时选择更可信的名字来源。"""
+    db_preview = (db_code or "").strip()
+    ida_preview = (ida_code or "").strip()
+    if len(db_preview) > 1200:
+        db_preview = db_preview[:1200] + "..."
+    if len(ida_preview) > 1200:
+        ida_preview = ida_preview[:1200] + "..."
+
+    prompt = f"""
+你是一名逆向工程专家，现在需要对同一个函数在对齐数据库与 IDA .i64 中的差异进行裁决，并给出最终的函数名来源。
+
+函数地址: 0x{entry_va:08X}
+
+[数据库视图]
+name: {db_name}
+code:
+{db_preview}
+
+[IDA 视图]
+name: {ida_name}
+code:
+{ida_preview}
+
+任务：
+1) 在两个候选名字中选择更可信的最终名字（通常更有语义的名字更好；如果其中一个是 sub_ 前缀，优先另一个；如两者都为 sub_，可保留更稳定的形式）。
+2) 判断伪代码应以哪个来源为准（db 或 ida），考虑可读性与完整性。
+
+请只返回一个 JSON 对象：
+{{
+  "final_name": "...",
+  "source": "db" 或 "ida"  // 表示伪代码以哪个来源为准
+}}
+不要输出其他文字。
+"""
+    return prompt.strip()
+
+
+
+
 # LLM 配置与设置
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_LLM_TEMPERATURE = 0.1
@@ -1000,7 +1120,7 @@ def compute_unified_scores(
                 else f"sub_{entry_va:08X}"
             )
             logger.debug(
-                "Score for 0x%08X (%s): APIs=%d(+%d), strings=%d(+%d), "
+                "[Phase1-Score] 0x%08X (%s): APIs=%d(+%d), strings=%d(+%d), "
                 "internal=%d(+%d), callers=%d(+%d), instr=%d(+%d), "
                 "analyzed_callees=%d(+%d) => total=%d",
                 entry_va,
@@ -1502,7 +1622,7 @@ def validate_one_function(
 
     if final_name != current_name:
         print(f"[VALIDATION] 应用二次改名：{current_name} -> {final_name}")
-        # 利用现有的 IDA 同步 + demo.db 更新逻辑
+        # 利用现有的 IDA 同步 + 数据库更新逻辑
         # 这里复用第一阶段的签名（若有），否则使用空串
         fid = _get_any_function_id_for_va(graph, entry_va)
         signature = ""
@@ -2294,14 +2414,20 @@ def build_prompt_for_function(
         "再结合反汇编 / 伪代码，推断当前函数的功能、输入输出、重要副作用。"
     )
     lines.append(
+        "请额外判断该函数是否属于标准库/编译器运行时/纯导入包装。如果是，请在返回 JSON 中设置 libfunction=1，"
+        "并可在 summary/notes 中简述原因；否则设为 0 继续给出正常分析。"
+    )
+    lines.append(
         "你最终只需输出一个 JSON 对象，字段为："
         '{'
         '"signature": string, '
         '"summary": string, '
         '"confidence": number, '
+        '"libfunction": 0 或 1, '
         '"tags": [string, ...], '
         '"notes": string'
         '}. '
+        "如果该函数是标准库/运行时/纯导入包装，请将 libfunction 设为 1，否则设为 0。"
         "不要输出多余文字，也不要使用 Markdown 代码块。"
     )
 
@@ -2353,6 +2479,14 @@ def call_llm_analyze_function(
     client = require_openai(api_settings)
 
     last_error: Optional[str] = None
+
+    try:
+        logger.debug(
+            "LLM request payload: %s",
+            json.dumps(request_kwargs, ensure_ascii=False, indent=2),
+        )
+    except Exception:
+        logger.debug("LLM request payload (repr): %r", request_kwargs)
 
     for attempt in range(1, max_attempts + 1):
         text_str = ""
@@ -2512,6 +2646,18 @@ def build_chat_request(prompt: str, llm_settings: LLMSettings) -> Tuple[List[Dic
     return conversation, request_kwargs
 
 
+def _coerce_libfunction_flag(value: Any) -> bool:
+    """将 LLM 返回的 libfunction 字段转换为布尔值。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return int(value) != 0
+    if isinstance(value, str):
+        s = value.strip().lower()
+        return s in {"1", "true", "yes", "y", "lib", "libfunction"}
+    return False
+
+
 def _extract_name_from_signature(signature: str, fallback: str) -> Optional[str]:
     """
     从 LLM 提供的 C 风格 signature 中提取函数名。
@@ -2543,7 +2689,7 @@ def _sync_global_with_ida_and_update_db(
     ida_url: str,
 ) -> None:
     """
-    将全局变量改名/类型信息同步到 idat_server，并更新 demo.db 中 symbols/global_vars。
+    将全局变量改名/类型信息同步到 idat_server，并更新对齐数据库中的 symbols/global_vars。
     """
     if requests is None or not new_name:
         logger.info(
@@ -2613,7 +2759,7 @@ def _sync_global_with_ida_and_update_db(
         applied_type or type_str,
     )
 
-    # 同步 demo.db 中 symbols 表的名字
+    # 同步对齐数据库中 symbols 表的名字
     cur = conn.cursor()
     cur.execute(
         "UPDATE symbols SET name = ? WHERE address_va = ?;",
@@ -2621,7 +2767,7 @@ def _sync_global_with_ida_and_update_db(
     )
     conn.commit()
     logger.debug(
-        "[IDA-Sync] 已在 demo.db 中将 symbols.address_va=0x%08X 更新为 name=%s",
+        "[IDA-Sync] 已在数据库中将 symbols.address_va=0x%08X 更新为 name=%s",
         address_va,
         new_name,
     )
@@ -2678,6 +2824,444 @@ def _prompt_run_validation_with_timeout(timeout_sec: int = 5) -> bool:
     return True
 
 
+def _force_ida_save_database(ida_url: str, timeout: float = 15.0) -> bool:
+    """请求 idat_server 立即保存数据库（不退出）。"""
+    if requests is None:
+        return False
+
+    try:
+        resp = requests.post(
+            ida_url, json={"action": "save_database"}, timeout=timeout
+        )
+    except Exception as exc:
+        logger.warning("[IDA-Sync] save_database 调用失败: %s", exc)
+        return False
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[IDA-Sync] save_database HTTP %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return False
+
+    try:
+        data = resp.json()
+    except Exception:
+        return False
+
+    return data.get("status") == "ok"
+
+
+def _fetch_ida_pseudocode(entry_va: int, ida_url: str, timeout: float = 10.0) -> Optional[str]:
+    """向 idat_server 请求指定函数的最新伪代码。"""
+    if requests is None:
+        return None
+
+    payload = {"action": "get_pseudocode", "ea": entry_va}
+    try:
+        resp = requests.post(ida_url, json=payload, timeout=timeout)
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync] get_pseudocode 调用失败 0x%08X: %s", entry_va, exc
+        )
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[IDA-Sync] get_pseudocode HTTP %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync] 解析 get_pseudocode 响应失败 0x%08X: %s; body=%s",
+            entry_va,
+            exc,
+            resp.text[:200],
+        )
+        return None
+
+    if data.get("status") != "ok":
+        logger.warning(
+            "[IDA-Sync] get_pseudocode 返回错误 0x%08X: %s", entry_va, data
+        )
+        return None
+
+    code = data.get("pseudocode")
+    return code if isinstance(code, str) else None
+
+
+def _save_and_refresh_pseudocode(
+    entry_va: int, ida_url: str, wait_seconds: float = 1.0
+) -> Optional[str]:
+    """强制保存 IDA 数据库后，等待片刻并重新获取伪代码。"""
+    _force_ida_save_database(ida_url)
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+    return _fetch_ida_pseudocode(entry_va, ida_url)
+
+
+def _reconcile_ida_db_mismatch(
+    conn: sqlite3.Connection,
+    binary_id: int,
+    ida_url: str,
+    llm_settings: LLMSettings,
+    ida_sync: bool,
+    max_items: int = 50,
+) -> None:
+    """
+    在进入第一阶段前，对比数据库（IDA 视图）与实际 .i64 的名称/伪代码差异，
+    通过 LLM 决策采用哪一侧的名称/伪代码，并同步更新。
+    """
+    if requests is None:
+        return
+
+    # 找出 IDA 视图 id
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT bv.id
+        FROM binary_views AS bv
+        JOIN tools AS t ON bv.tool_id = t.id
+        WHERE bv.binary_id = ? AND LOWER(t.name) = 'ida'
+        ORDER BY bv.id LIMIT 1;
+        """,
+        (binary_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return
+    ida_view_id = int(row[0])
+
+    cur.execute(
+        """
+        SELECT f.id, f.entry_va, COALESCE(f.name, '') AS name, COALESCE(pf.body, '') AS body
+        FROM functions AS f
+        LEFT JOIN pseudo_functions AS pf ON pf.function_id = f.id
+        WHERE f.view_id = ?;
+        """,
+        (ida_view_id,),
+    )
+    rows = cur.fetchall()
+
+    mismatches: List[Tuple[int, int, str, str, dict]] = []
+    removed_function_ids: set[int] = set()
+
+    for function_id, entry_va, db_name, db_body in rows:
+        info = _fetch_ida_function_info(entry_va, ida_url)
+        if not info:
+            _drop_function_record(conn, function_id, entry_va)
+            removed_function_ids.add(function_id)
+            continue
+        ida_name = info.get("name", "") or ""
+        ida_code = info.get("pseudocode", "") or ""
+
+        name_diff = (db_name or "") != (ida_name or "")
+        code_diff = (db_body or "").strip() != (ida_code or "").strip()
+
+        # 仅在 IDA 名字仍为 sub_ 前缀时触发对齐（核心需求）
+        ida_is_sub = bool(SUBFUNC_NAME_PATTERN.fullmatch(ida_name or ""))
+
+        if not ida_is_sub:
+            continue
+        if not name_diff and not code_diff:
+            continue
+
+        mismatches.append((function_id, entry_va, db_name, db_body, info))
+        if len(mismatches) >= max_items:
+            break
+
+    if not mismatches:
+        return
+
+    print(f"[Align] 检测到 {len(mismatches)} 个 IDA/DB 不一致的函数，提交 LLM 评估。")
+
+    pbar = tqdm(mismatches, desc="Aligning DB vs IDA", unit="fn")
+    # 记录已经被占用的最终名字，避免重名（包含初始 DB 名称）
+    used_names: dict[str, tuple[int, int]] = {}
+    for function_id, entry_va, db_name, _db_body in rows:
+        if function_id in removed_function_ids:
+            continue
+        if db_name:
+            used_names[str(db_name)] = (int(function_id), int(entry_va))
+
+    for function_id, entry_va, db_name, db_body, info in pbar:
+        pbar.set_postfix(address=f"0x{entry_va:08X}")
+        ida_name = info.get("name", "") or ""
+        ida_code = info.get("pseudocode", "") or ""
+
+        prompt = _build_name_alignment_prompt(
+            entry_va=entry_va,
+            db_name=db_name,
+            ida_name=ida_name,
+            db_code=db_body,
+            ida_code=ida_code,
+        )
+        conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+        try:
+            result = call_llm_analyze_function(
+                conversation=conversation,
+                request_kwargs=request_kwargs,
+                api_settings=llm_settings.api_settings,
+                return_raw_on_error=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Align] LLM 决策失败 0x%08X: %s", entry_va, exc
+            )
+            continue
+
+        if isinstance(result, dict) and "_raw_text" in result:
+            continue
+        if not isinstance(result, dict):
+            continue
+
+        final_name = str(result.get("final_name", db_name) or db_name)
+        source = str(result.get("source", "db") or "db").lower()
+        if source not in ("db", "ida"):
+            source = "db"
+
+        chosen_code = db_body if source == "db" else ida_code
+
+        # 如果与已有名称冲突，尝试让 LLM 再判一次；失败则追加 _0/_1 后缀
+        if final_name in used_names and used_names[final_name][0] != function_id:
+            existing_fn_id, existing_ea = used_names[final_name]
+            try:
+                current_snippets = _collect_function_snippets(conn, function_id)
+                existing_snippets = _collect_function_snippets(conn, existing_fn_id)
+                resolved = _resolve_name_collision_with_llm(
+                    base_name=final_name,
+                    current_ea=entry_va,
+                    existing_ea=existing_ea,
+                    current_snippets=current_snippets,
+                    existing_snippets=existing_snippets,
+                    llm_settings=llm_settings,
+                )
+            except Exception:
+                resolved = None
+
+            if not resolved:
+                suffix = 0
+                candidate = f"{final_name}_{suffix}"
+                while candidate in used_names:
+                    suffix += 1
+                    candidate = f"{final_name}_{suffix}"
+                resolved = candidate
+
+            final_name = resolved
+            print(
+                f"[Align] 0x{entry_va:08X}: 重名处理 -> {final_name}"
+            )
+
+        used_names[final_name] = (function_id, entry_va)
+
+        print(
+            f"[Align] 0x{entry_va:08X}: LLM 选定 final_name={final_name}, source={source}"
+        )
+        logger.info(
+            "[Align] 0x%08X decision: final_name=%s, source=%s",
+            entry_va,
+            final_name,
+            source,
+        )
+
+        # 更新数据库伪代码
+        cur.execute(
+            "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+            (chosen_code, function_id),
+        )
+
+        # 更新名字（仅当前 function 记录）
+        cur.execute(
+            "UPDATE functions SET name = ? WHERE id = ?;",
+            (final_name, function_id),
+        )
+
+        conn.commit()
+
+        # 尝试同步到 IDA（保持 .i64 一致）
+        if ida_sync and requests is not None:
+            try:
+                payload = {
+                    "action": "rename_and_sync",
+                    "ea": entry_va,
+                    "name": final_name,
+                    "comment": "[Align-Reconcile]",  # 简短标记
+                }
+                resp = requests.post(ida_url, json=payload, timeout=10.0)
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                        updated_code = data.get("updated_pseudocode") or ""
+                        if updated_code:
+                            cur.execute(
+                                "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+                                (updated_code, function_id),
+                            )
+                            conn.commit()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.warning(
+                    "[Align] 同步到 IDA 失败 entry_va=0x%08X: %s", entry_va, exc
+                )
+
+
+def _fetch_ida_function_info(entry_va: int, ida_url: str, timeout: float = 10.0) -> Optional[dict]:
+    """获取 IDA 中的函数名称与伪代码。"""
+    if requests is None:
+        return None
+
+    payload = {"action": "get_function_info", "ea": entry_va}
+    try:
+        resp = requests.post(ida_url, json=payload, timeout=timeout)
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync] get_function_info 调用失败 0x%08X: %s", entry_va, exc
+        )
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[IDA-Sync] get_function_info HTTP %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync] 解析 get_function_info 响应失败 0x%08X: %s; body=%s",
+            entry_va,
+            exc,
+            resp.text[:200],
+        )
+        return None
+
+    if data.get("status") != "ok":
+        logger.warning(
+            "[IDA-Sync] get_function_info 返回错误 0x%08X: %s", entry_va, data
+        )
+        return None
+
+    return data
+
+
+def _drop_function_record(conn: sqlite3.Connection, function_id: int, entry_va: int) -> None:
+    """删除无法反编译/无效的函数记录及相关指令、伪代码。"""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM instructions WHERE function_id = ?;", (function_id,))
+    cur.execute("DELETE FROM pseudo_functions WHERE function_id = ?;", (function_id,))
+    cur.execute("DELETE FROM functions WHERE id = ?;", (function_id,))
+    conn.commit()
+    print(f"[Align] 移除无法反编译的函数 0x{entry_va:08X} (function_id={function_id})")
+
+
+def _collect_function_snippets(
+    conn: sqlite3.Connection, function_id: int, max_asm_lines: int = 120
+) -> dict:
+    """提取指定函数的伪代码和汇编片段，用于重名冲突时的 LLM 判断。"""
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT entry_va, COALESCE(body, '') FROM pseudo_functions WHERE function_id = ?;",
+        (function_id,),
+    )
+    row = cur.fetchone()
+    entry_va = int(row[0]) if row else 0
+    pseudocode = row[1] if row else ""
+
+    cur.execute(
+        """
+        SELECT raw_line
+        FROM instructions
+        WHERE function_id = ?
+        ORDER BY index_in_function
+        LIMIT ?;
+        """,
+        (function_id, max_asm_lines),
+    )
+    asm_lines = [r[0] for r in cur.fetchall() if r and r[0]]
+    asm_text = "\n".join(asm_lines)
+
+    return {
+        "entry_va": entry_va,
+        "pseudocode": pseudocode,
+        "asm": asm_text,
+    }
+
+
+def _resolve_name_collision_with_llm(
+    base_name: str,
+    current_ea: int,
+    existing_ea: int,
+    current_snippets: dict,
+    existing_snippets: dict,
+    llm_settings,
+) -> Optional[str]:
+    """
+    在命名冲突时，附带双方的伪代码/汇编交给 LLM 决定：
+    - 如果能判断出更合适的名字，返回该名字；
+    - 如果建议使用基础名加后缀，返回 None（外层会追加 _0/_1）。
+    期望 LLM 返回 JSON：{"resolved_name": "...", "use_suffix": true/false, "reason": "..."}
+    """
+    prompt = f"""
+你是逆向辅助命名助手。现在有两个函数命名冲突，基础名为 {base_name}。
+请比较两个函数的伪代码和汇编，给出一个更合适的最终名称，或明确要求使用基础名加数字后缀。
+输出必须是 JSON，格式：{{"resolved_name": "<字符串或留空>", "use_suffix": <true/false>, "reason": "<简短理由>"}}
+如果无法区分，设置 use_suffix 为 true。
+
+函数A (current): entry_va=0x{current_ea:08X}
+伪代码:
+{current_snippets.get('pseudocode','')}
+
+汇编:
+{current_snippets.get('asm','')}
+
+函数B (existing): entry_va=0x{existing_ea:08X}
+伪代码:
+{existing_snippets.get('pseudocode','')}
+
+汇编:
+{existing_snippets.get('asm','')}
+"""
+
+    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+    try:
+        result = call_llm_analyze_function(
+            conversation=conversation,
+            request_kwargs=request_kwargs,
+            api_settings=llm_settings.api_settings,
+            return_raw_on_error=True,
+        )
+    except Exception:
+        return None
+
+    if isinstance(result, dict) and "_raw_text" in result:
+        return None
+    if not isinstance(result, dict):
+        return None
+
+    resolved = result.get("resolved_name")
+    if resolved:
+        return str(resolved)
+
+    use_suffix = result.get("use_suffix")
+    if isinstance(use_suffix, bool) and use_suffix:
+        return None
+
+    return None
+
+
 def _sync_with_ida_and_update_db(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
@@ -2686,10 +3270,11 @@ def _sync_with_ida_and_update_db(
     signature: str,
     summary: str,
     ida_url: str,
+    enforce_non_sub: bool = True,
 ) -> None:
     """
     调用在 idat 中运行的 HTTP 服务（idat_server.py），对物理函数进行重命名，
-    并使用返回的最新伪代码刷新 demo.db 中对应 IDA 视图的 pseudo_functions / functions。
+    并使用返回的最新伪代码刷新当前数据库中对应 IDA 视图的 pseudo_functions / functions。
     """
     if requests is None:
         logger.info(
@@ -2709,9 +3294,9 @@ def _sync_with_ida_and_update_db(
             ida_function_id = fid
             break
     if ida_function_id is None:
-        # 没有 IDA 视图，仅更新数据库名字即可
+        # 没有 IDA 视图，仅更新对齐数据库中的名字即可
         logger.info(
-            "[IDA-Sync] 未找到 IDA 视图对应的 function_id，仅更新 demo.db。 entry_va=0x%08X",
+            "[IDA-Sync] 未找到 IDA 视图对应的 function_id，仅更新当前数据库。 entry_va=0x%08X",
             entry_va,
         )
         return
@@ -2749,72 +3334,109 @@ def _sync_with_ida_and_update_db(
     )
     logger.debug("[IDA-Sync] rename_and_sync payload: %s", payload)
 
-    try:
-        resp = requests.post(ida_url, json=payload, timeout=10.0)
-    except Exception as exc:
-        logger.error("[IDA-Sync] 连接 IDA 失败: %s", exc)
-        return
+    max_retry = 3
+    applied_name = final_name
+    latest_code: str = ""
 
-    if resp.status_code != 200:
-        logger.error(
-            "[IDA-Sync] HTTP %s: %s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        return
+    def _post_rename_once() -> Tuple[Optional[dict], Optional[str]]:
+        try:
+            resp = requests.post(ida_url, json=payload, timeout=10.0)
+        except Exception as exc:
+            logger.error("[IDA-Sync] 连接 IDA 失败: %s", exc)
+            return None, None
 
-    try:
-        data = resp.json()
-    except Exception as exc:
-        logger.error(
-            "[IDA-Sync] 解析 IDA 响应失败: %s; body=%s",
-            exc,
-            resp.text[:200],
-        )
-        return
+        if resp.status_code != 200:
+            logger.error(
+                "[IDA-Sync] HTTP %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return None, None
 
-    if data.get("status") != "ok":
-        logger.error("[IDA-Sync] IDA 返回错误: %s", data)
-        return
+        try:
+            data = resp.json()
+        except Exception as exc:  # pragma: no cover - 解析失败仅日志
+            logger.error(
+                "[IDA-Sync] 解析 IDA 响应失败: %s; body=%s",
+                exc,
+                resp.text[:200],
+            )
+            return None, None
 
-    # 以 IDA 返回的新名字为准，确保 demo.db 与实际 .i64 状态一致
-    ida_new_name = data.get("new_name")
-    if ida_new_name and ida_new_name != final_name:
-        logger.warning(
-            "[IDA-Sync] IDA 实际应用的函数名与建议名不一致：requested=%s, applied=%s",
-            final_name,
-            ida_new_name,
-        )
-        final_name = ida_new_name
+        if data.get("status") != "ok":
+            logger.error("[IDA-Sync] IDA 返回错误: %s", data)
+            return None, None
 
-    updated_code = data.get("updated_pseudocode") or ""
+        return data, data.get("updated_pseudocode") or ""
+
+    for attempt in range(1, max_retry + 1):
+        data, updated_code = _post_rename_once()
+        if data is None:
+            return
+
+        ida_new_name = data.get("new_name")
+        if ida_new_name and ida_new_name != applied_name:
+            logger.warning(
+                "[IDA-Sync] IDA 实际应用的函数名与建议名不一致：requested=%s, applied=%s",
+                applied_name,
+                ida_new_name,
+            )
+            applied_name = ida_new_name
+
+        if updated_code:
+            latest_code = updated_code
+
+        refreshed = _save_and_refresh_pseudocode(entry_va, ida_url)
+        if refreshed:
+            latest_code = refreshed
+
+        if enforce_non_sub:
+            if latest_code and not SUBFUNC_NAME_PATTERN.search(latest_code):
+                break
+
+            if attempt < max_retry:
+                logger.warning(
+                    "[IDA-Sync] 0x%08X 伪代码仍包含 sub_ 前缀，尝试重新同步 (%d/%d)",
+                    entry_va,
+                    attempt,
+                    max_retry,
+                )
+            else:
+                logger.warning(
+                    "[IDA-Sync] 0x%08X 多次同步后仍检测到 sub_ 前缀，可能需要人工确认。",
+                    entry_va,
+                )
+        else:
+            # 不强制检查 sub_，第一次成功即退出循环
+            break
+
     logger.info(
-        "[IDA-Sync] 成功同步到 IDA，返回伪代码长度: %d 字符。",
-        len(updated_code),
+        "[IDA-Sync] 成功同步到 IDA，最新伪代码长度: %d 字符。",
+        len(latest_code),
     )
 
     cur = conn.cursor()
 
-    # 更新 IDA 视图对应的 pseudo_functions 记录
-    if updated_code:
+    if latest_code:
         cur.execute(
             """
             UPDATE pseudo_functions
             SET body = ?, prototype = ?, name = ?
             WHERE function_id = ?;
             """,
-            (updated_code, signature, final_name, ida_function_id),
+            (latest_code, signature, applied_name, ida_function_id),
         )
 
     # 所有视图的 functions 记录统一使用新名字，便于后续分析
     for fid in node.function_ids:
-        cur.execute("UPDATE functions SET name = ? WHERE id = ?;", (final_name, fid))
+        cur.execute("UPDATE functions SET name = ? WHERE id = ?;", (applied_name, fid))
 
     conn.commit()
+    node.names.add(applied_name)
     logger.debug(
-        "[IDA-Sync] demo.db 已更新为最新名字与伪代码。entry_va=0x%08X, name=%s",
+        "[IDA-Sync] 数据库已更新为最新名字与伪代码。entry_va=0x%08X, name=%s",
         entry_va,
-        final_name,
+        applied_name,
     )
 
 
@@ -2917,11 +3539,16 @@ def build_unified_prompt(
         "抓住它们的一致部分，并利用上下文信息（字符串 / API / 已知子函数）推断真实语义。"
     )
     lines.append(
+        "请额外判断该函数是否属于标准库/编译器运行时/纯导入包装：如果是，请在返回 JSON 中设置 libfunction=1，"
+        "并在 summary/notes 中说明依据；若不是则设为 0 继续正常描述。"
+    )
+    lines.append(
         "你最终必须只输出一个 JSON 对象，字段为："
         '{'
         '"signature": string, '
         '"summary": string, '
         '"confidence": number, '
+        '"libfunction": 0 或 1, '
         '"tags": [string, ...], '
         '"notes": string'
         '}. '
@@ -3081,6 +3708,49 @@ def _sync_lvars_with_ida(
         return updated_code
 
     return None
+
+
+def _verify_lvar_persistence(
+    conn: sqlite3.Connection,
+    function_id: int,
+    entry_va: int,
+    ida_url: str,
+    rename_map: Dict[str, str],
+    initial_code: Optional[str],
+    max_retries: int = 3,
+    wait_seconds: float = 1.0,
+) -> Tuple[Optional[str], Set[str]]:
+    """
+    在同步局部变量重命名后，强制保存 IDA 数据库并重新获取伪代码，
+    以确认 a1/v1 等默认名确实被写入 .i64。
+    返回最新伪代码和剩余的默认变量名集合。
+    """
+    latest_code = initial_code
+    remaining = _find_generic_lvar_names(latest_code or "")
+
+    if requests is None:
+        return latest_code, remaining
+
+    cur = conn.cursor()
+
+    for attempt in range(1, max_retries + 1):
+        refreshed = _save_and_refresh_pseudocode(entry_va, ida_url, wait_seconds)
+        if refreshed:
+            latest_code = refreshed
+            cur.execute(
+                "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+                (refreshed, function_id),
+            )
+            conn.commit()
+
+        remaining = _find_generic_lvar_names(latest_code or "")
+        if not remaining:
+            break
+
+        if attempt < max_retries and rename_map:
+            _sync_lvars_with_ida(entry_va, rename_map, ida_url)
+
+    return latest_code, remaining
 
 
 def analyze_one_function_vars(
@@ -3280,6 +3950,18 @@ def analyze_one_function_vars(
             final_code = original_code
 
     remaining_generics = _find_generic_lvar_names(final_code or "")
+
+    if changed and ida_sync and clean_map:
+        verified_code, remaining_generics = _verify_lvar_persistence(
+            conn=conn,
+            function_id=best_fid,
+            entry_va=node.entry_va,
+            ida_url=ida_url,
+            rename_map=clean_map,
+            initial_code=final_code,
+        )
+        if verified_code:
+            final_code = verified_code
     # 当前策略：只要本轮已成功完成一次 LVAR 尝试（无论是否仍有默认名残留），
     # 就将该函数标记为“已检查”，避免在后续运行中反复进入第四阶段。
     mark_optimized = True
@@ -3467,12 +4149,22 @@ def analyze_one_function(
     except (TypeError, ValueError):
         confidence_score = 0
 
+    libfunction = _coerce_libfunction_flag(result.get("libfunction"))
+    if libfunction:
+        confidence_score = 0
+        print("[LLM] 模型判断为库函数/运行时，跳过进一步视图查找与重试。")
+        logger.info(
+            "[Phase1-Single] entry_va=0x%08X 被标记为库函数，设置为 LOCKED 并停止后续尝试。",
+            node.entry_va,
+        )
+
     tags = result.get("tags") or []
     notes = result.get("notes") or ""
 
     print("\n[LLM RESULT]")
     print("signature:", signature)
     print("summary  :", summary)
+    print("libfunction:", 1 if libfunction else 0)
     print("confidence_score:", confidence_score)
     if tags:
         print("tags     :", tags)
@@ -3480,16 +4172,17 @@ def analyze_one_function(
         print("notes    :", notes)
 
     cur = conn.cursor()
+    analysis_state = "LOCKED" if libfunction else "ANALYZED"
     cur.execute(
         """
         UPDATE analysis_status
-        SET analysis_state = 'ANALYZED',
+        SET analysis_state = ?,
             confidence_score = ?,
             summary_signature = ?,
             semantic_summary = ?
         WHERE function_id = ?;
         """,
-        (confidence_score, signature, summary, function_id),
+        (analysis_state, confidence_score, signature, summary, function_id),
     )
     conn.commit()
 
@@ -3562,12 +4255,22 @@ def analyze_one_unified_function(
     except (TypeError, ValueError):
         confidence_score = 0
 
+    libfunction = _coerce_libfunction_flag(result.get("libfunction"))
+    if libfunction:
+        confidence_score = 0
+        print("[LLM] 模型判断为库函数/运行时，跳过后续视图查找与同步。")
+        logger.info(
+            "[Phase1] entry_va=0x%08X 被标记为库函数，设置为 LOCKED 并停止后续尝试。",
+            node.entry_va,
+        )
+
     tags = result.get("tags") or []
     notes = result.get("notes") or ""
 
     print("\n[LLM RESULT]")
     print("signature:", signature)
     print("summary  :", summary)
+    print("libfunction:", 1 if libfunction else 0)
     print("confidence_score:", confidence_score)
     if tags:
         print("tags     :", tags)
@@ -3575,28 +4278,30 @@ def analyze_one_unified_function(
         print("notes    :", notes)
 
     logger.info(
-        "[Phase1] RESULT entry_va=0x%08X, signature=%r, confidence_score=%d",
+        "[Phase1] RESULT entry_va=0x%08X, signature=%r, confidence_score=%d, libfunction=%s",
         node.entry_va,
         signature,
         confidence_score,
+        libfunction,
     )
 
     cur = conn.cursor()
+    analysis_state = "LOCKED" if libfunction else "ANALYZED"
     for fid in node.function_ids:
         cur.execute(
             """
             UPDATE analysis_status
-            SET analysis_state = 'ANALYZED',
+            SET analysis_state = ?,
                 confidence_score = ?,
                 summary_signature = ?,
                 semantic_summary = ?
             WHERE function_id = ?;
             """,
-            (confidence_score, signature, summary, fid),
+            (analysis_state, confidence_score, signature, summary, fid),
         )
     conn.commit()
 
-    # 可选：将结果同步到正在运行的 IDA(idat_server)，并用返回的最新伪代码刷新 demo.db
+    # 可选：将结果同步到正在运行的 IDA(idat_server)，并用返回的最新伪代码刷新数据库
     if ida_sync and signature and requests is not None:
         try:
             _sync_with_ida_and_update_db(
@@ -3607,6 +4312,7 @@ def analyze_one_unified_function(
                 signature=signature,
                 summary=summary or "",
                 ida_url=ida_url or "http://127.0.0.1:12345",
+                enforce_non_sub=False,
             )
         except Exception as exc:  # 同步失败不应影响主流程
             print(f"[IDA-Sync] 同步到 IDA 失败: {exc}")
@@ -3691,7 +4397,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--db",
         required=True,
-        help="输入的 SQLite 数据库路径，例如 tmp/demo.db",
+        help="输入的 SQLite 数据库路径，例如 tmp/Malware_sample.exe.db",
     )
     parser.add_argument(
         "--view-id",
@@ -3767,7 +4473,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--ida-sync",
         action="store_true",
-        help="在每个物理函数分析完成后，尝试通过 HTTP 同步到正在运行的 idat_server，并用返回的伪代码刷新 demo.db。",
+        help="在每个物理函数分析完成后，尝试通过 HTTP 同步到正在运行的 idat_server，并用返回的伪代码刷新数据库。",
     )
     parser.add_argument(
         "--ida-url",
@@ -3797,7 +4503,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     # 初始化日志系统（按数据库路径派生日志文件名，便于多数据集区分）
     log_path = db_path.with_suffix(db_path.suffix + ".knowledge.log")
-    setup_logging(log_path)
+    setup_logging(log_path, input_db=db_path)
+    install_stdout_tee(logger)
     logger.info("知识传播管线启动，数据库: %s", db_path)
 
     conn = sqlite3.connect(str(db_path))
@@ -3827,7 +4534,31 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         ensure_analysis_schema(conn)
         ensure_analysis_rows_for_binary(conn, binary_id)
 
-        # 构建跨视图统一依赖图
+        # 在构建统一图之前可选做一次 IDA/DB 差异对齐（若并非全部函数均为 PENDING）
+        if args.ida_sync:
+            analysis_info_probe = load_analysis_info(conn)
+            total = 0
+            pending = 0
+            for info in analysis_info_probe.values():
+                total += 1
+                state = (info or {}).get("analysis_state")
+                if state is None or state == "PENDING":
+                    pending += 1
+
+            all_pending = total > 0 and pending == total
+
+            if all_pending or total == 0:
+                print("[Align] 所有函数均为 PENDING，跳过 IDA/DB 不一致对齐，先走基础重命名流程。")
+            else:
+                _reconcile_ida_db_mismatch(
+                    conn=conn,
+                    binary_id=binary_id,
+                    ida_url=args.ida_url,
+                    llm_settings=llm_settings,
+                    ida_sync=args.ida_sync,
+                )
+
+        # 构建跨视图统一依赖图（在可能的删除/同步之后）
         unified_graph = build_unified_graph(conn, binary_id)
         print(f"统一图中共有 {len(unified_graph.nodes)} 个物理函数节点。")
 
@@ -3851,8 +4582,42 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
         total_pending = len(pending_nodes_initial)
         if total_pending == 0:
-            print("当前 binary 下已无 PENDING 物理函数，跳过第一阶段。")
+            print("当前 binary 下已无 PENDING 物理函数，跳过第一阶段基础队列。")
             processed = 0
+            # 额外检查 IDA 视图是否仍存在 sub_ 前缀的函数名，若有则直接走第一阶段 LLM 分析/重命名流程
+            ida_subs = _load_ida_subfunc_entries(conn, binary_id)
+            if ida_subs:
+                print(
+                    f"[Phase 1] 发现 {len(ida_subs)} 个 IDA 函数仍为 sub_ 前缀，触发第一阶段 LLM 重跑。"
+                )
+                analysis_info = load_analysis_info(conn)
+                scores = compute_unified_scores(unified_graph, analysis_info)
+                update_unified_scores_in_db(conn, unified_graph, scores)
+
+                for entry_va, ida_name in ida_subs.items():
+                    node = unified_graph.nodes.get(entry_va)
+                    if not node:
+                        continue
+                    try:
+                        analyze_one_unified_function(
+                            conn=conn,
+                            graph=unified_graph,
+                            entry_va=entry_va,
+                            analysis_info=analysis_info,
+                            llm_settings=llm_settings,
+                            dry_run=args.dry_run,
+                            ida_sync=args.ida_sync,
+                            ida_url=args.ida_url,
+                        )
+                        processed += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "[Phase1] sub_ LLM 重跑失败 entry_va=0x%08X: %s",
+                            entry_va,
+                            exc,
+                        )
+            else:
+                print("[Phase 1] 未发现 sub_ 前缀残留，直接跳过第一阶段。")
         else:
             target_count = args.max_functions
             if target_count <= 0 or target_count > total_pending:

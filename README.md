@@ -274,7 +274,7 @@ python tools/Semantics_Alignment/semantic_align.py --sample tmp/Malware_sample.e
 - `--no-ida`：只执行离线 `knowledge_propagation.py`，不启动 IDA 且不做 IDA 同步。
 - `--idat-exe` / `--ida-script` / `--ida-url`：分别指定 `idat` 可执行文件、`idat_server.py` 路径与 HTTP 服务地址。
 
-脚本会在样本目录下生成 `demo.db`、`db_sample_dump.txt/.xlsx` 和 `idat_log.txt` 等产物，方便后续审阅。
+脚本会在样本目录下生成 `{sample_name}.db`（例如 `Malware_sample.exe.db`）、`db_sample_dump.txt/.xlsx` 和 `idat_log.txt` 等产物，方便后续审阅。
 
 ### 配置与 LLM 环境
 
@@ -322,7 +322,45 @@ python tools/Semantics_Alignment/semantic_align.py --sample tmp/Malware_sample.e
    ```python
    # 伪代码示例
    aligned_data = join_on_rva(ida_data, ghidra_data)
+  ```
+
+## LLM 驱动的可编译流水线
+
+为了把 IDA/Ghidra 的伪代码推进到可编译的状态，从“上下文”、“编译循环”、“验证”三条主线出发，可以逐步构建出一个可落地的“LLM + 编译器”闭环。
+
+### 阶段 1：构建可编译上下文（The Context Problem）
+
+- **类型全集**：先从 IDA 的 Local Types 导出所有 `struct`/`enum`/`typedef`，输出到 `types.h`（或 `common.h`），并补齐 `_DWORD`、`_BYTE` 等 IDA 特有的别名宏，LLM 修复函数时必须 `#include` 这个头。
+- **原型桩**：生成一个 `prototypes.h`，包含所有识别到的函数签名（`extern return_t func(args);`），让编译器能够解析跨函数调用。
+- **栈帧信息**：如果有 Stack view，可把栈大小（`stacksize`）和每个局部变量的偏移（`-0x10 = var_A`）交给 LLM，让它还原出 `char buf[0x40]`、`struct X *ptr`，避免把数组拆成一堆 `v1/v2`。
+- **Prompt 构造**：给 LLM 的输入要包含环境——“types.h 内容”、“prototypes.h 内容”、“当前函数的伪代码/汇编/栈帧”，再加上目标：让函数“保持语义，生成 GCC 可编译的 C 代码”。若无法确定的部分，可要求在 `__asm__` 中保留原始汇编。
+
+### 阶段 2：LLM 驱动的编译循环（The Compilation Loop）
+
+- **增量编译**：不一次性编译所有输出；以函数为单位生成 `.c`、`gcc -c func.c -o func.o`，只在依赖都解决后再 `ld`/链接。这样能快速定位编译错误。
+- **错误反馈**：把当前函数代码、GCC stderr（含行号）和对应汇编段（如 `MOV [RAX+4], 0`）都发给 LLM，使其还原出原本的字段写法（例如 `node->field = 0;`），并避免随意简化控制流。
+- **幻觉控制**：要求 LLM 尽量使用标准 C 语法，不能省略循环/分支；对于不可恢复的片段，用 `__asm__` 包裹原始指令作为保底。持续循环“编译器 -> 错误 -> LLM”直到不再报错。
+
+### 阶段 3：对齐与验证（The Verification Strategy）
+
+- **编译选项对齐**：从 `Meta` 模块识别原始二进制的 `-O` 等级和编译器家族（MSVC vs GCC/Clang），尽量复用原编译器链，确保 `NewBin`/`BaseBin` 的产物在 Bindiff/Diaphora 中有可比性。
+- **验证层级**：按语法（编译器不报错）→ 结构（控制流图 CFG 相似）→ 二进制（Bindiff 指令相似度）逐层验证。若 CFG 区别较大或基本块分支数减少，说明语义被 LLM 篡改。
+- **SemCheck/Score 接口**：把这些验证结果写入 `Semantics_Alignment` 的评分机制，指示哪些函数可进入下一轮训练。
+
+### 可落地的下一步
+
+1. **数据清洗脚本**：在 `tools` 或 `tmp` 目录下写一个脚本，从 IDA 输出目录抽取 `all_types.h`、`prototypes.h`、`target_func.c`（伪代码 + 汇编 + stack info），做成一个打包的上下文包。
+2. **编译哈束（Compilation Harness）**：先手工跑一个示例函数，配置 Docker/虚拟机内的 GCC/Clang，运行 `gcc -c`，记录 stderr 供 LLM 使用；确认 `.o` 用来测试链接链。
+3. **LLM 交互测试**：把 Hex-Rays 伪代码 (含大量 `(int *)v3`、`*(int *)(v1 + 4)` 等) 与 `types.h`/`prototypes.h`、报错和汇编片段一起喂给 LLM，Prompt 示例：
+
    ```
+   Refactor this decompiled C code to be valid, compilable C code. Include types from types.h and prototypes.h. Keep the control flow unchanged; when unsure, fallback to __asm__ blocks.
+   ```
+
+4. **Stack Frame 反馈**：把 IDA Stack view 的栈大小和偏移也放进 Prompt，让 LLM 识别 `char buf[0x40]`、`int idx` 而不是 `int v1, v2, ...`。
+5. **采集三层金字塔素材**：在 `alignment_loader` 里继续把汇编/伪代码/类型/stack info 聚合，并在后续 `knowledge_propagation` 中把这些结构也传给 LLM，以便生成更加严谨的代码。
+
+完成上述几个点后，就可以把这个编译哈束逐步自动化，把 `SemCheck` 得分最低的函数交给 LLM 处理再编译，以形成“LLM + 编译器 + 验证”的闭环。
 
 ## 配置详解
 
@@ -445,3 +483,103 @@ scripts:
 - Diaphora 二进制比对工具
 - BinExport 导出工具
 - CodableLLM 框架设计理念
+
+```mermaid
+flowchart TD
+    A0[main 函数入口] --> A1[解析命令行参数]
+    A1 --> A2[加载配置文件和 .env]
+    A2 --> A3[构建 LLMSettings]
+    A3 --> A4[打开 SQLite 数据库]
+    A4 --> A5[选择 view_id 和 binary_id]
+    A5 --> A6[初始化 analysis_status 等表]
+    A6 --> A7[可选: IDA 与 DB 差异对齐]
+    A7 --> P1[进入 Phase 1 函数级知识传播]
+
+    %% ========== Phase 1 ==========
+    subgraph Phase1_函数级知识传播
+        P1 --> P2[build_unified_graph 构建跨视图统一依赖图]
+        P2 --> P3[load_analysis_info 载入分析状态]
+        P3 --> P4[compute_unified_scores 计算物理函数评分]
+        P4 --> P5[update_unified_scores_in_db 写回分数]
+        P5 --> P6{是否存在 PENDING 物理函数?}
+        P6 -->|否| P7[检查 IDA 中 sub_xxx 函数并按需强制分析]
+        P6 -->|是| P8[选出评分最高的 UnifiedFunctionNode]
+        P8 --> P9[analyze_one_unified_function 调用 LLM 得到 signature 和 summary]
+        P9 --> P10[更新所有视图的 analysis_status 状态]
+        P10 --> P11{是否启用 ida-sync?}
+        P11 -->|是| P12[_sync_with_ida_and_update_db 同步到 IDA 并刷新伪代码]
+        P11 -->|否| P13[跳过 IDA 同步]
+        P12 --> P14[继续下一轮评分和选择]
+        P13 --> P14
+        P14 --> P3
+    end
+
+    P1 --> V0[Phase 1 结束并关闭连接]
+
+    %% ========== Phase 2 ==========
+    V0 --> V1{是否跳过 Phase 2 调用链校验?}
+    V1 -->|是| G0[跳过 Phase 2]
+    V1 -->|否| V2[新连接: run_validation_phase]
+
+    subgraph Phase2_调用链校验
+        V2 --> V3[选择入口函数 main/start/高置信度函数]
+        V3 --> V4[构建 ValidationTask 优先级队列]
+        V4 --> V5[弹出任务并构造 build_validation_prompt]
+        V5 --> V6[validate_one_function 调用 LLM 评估重命名或确认]
+        V6 --> V7[更新函数名并将节点标记为 LOCKED]
+        V7 --> V8{置信度足够且存在子函数?}
+        V8 -->|是| V9[将子函数加入队列继续校验]
+        V8 -->|否| V10[仅标记当前函数]
+        V9 --> V4
+        V10 --> V4
+    end
+
+    V2 --> G1[Phase 2 结束并关闭连接]
+
+    %% ========== Phase 3 ==========
+    G1 --> G2{是否跳过 Phase 3 全局变量?}
+    G2 -->|是| L0[跳过 Phase 3]
+    G2 -->|否| G3[新连接: run_global_var_phase]
+
+    subgraph Phase3_全局变量分析
+        G3 --> G4[build_global_var_graph 构建全局变量引用图]
+        G4 --> G5[load_analysis_info 获取函数置信度]
+        G5 --> G6[compute_global_var_scores 按访问模式评分]
+        G6 --> G7[选择高优先级且未分析的全局变量]
+        G7 --> G8[对每个变量构造 build_global_var_prompt]
+        G8 --> G9[analyze_one_global_var 调用 LLM 推断名称与类型]
+        G9 --> G10[写入 global_vars 和更新 symbols.name]
+        G10 --> G11{是否启用 ida-sync?}
+        G11 -->|是| G12[_sync_global_with_ida_and_update_db 同步到 IDA]
+        G11 -->|否| G13[仅本地更新]
+    end
+
+    G3 --> L1[Phase 3 结束并关闭连接]
+
+    %% ========== Phase 4 ==========
+    L1 --> L2{是否跳过 Phase 4 局部变量?}
+    L2 -->|是| E0[跳过 Phase 4]
+    L2 -->|否| L3[新连接: run_local_var_phase]
+
+    subgraph Phase4_局部变量重命名
+        L3 --> L4[load_analysis_info 读取 lvar_optimized 标记]
+        L4 --> L5[选择高置信度且未优化的函数]
+        L5 --> L6[对每个函数调用 analyze_one_function_vars]
+        L6 --> L7[选代表 function_id 并读取伪代码]
+        L7 --> L8[build_local_var_prompt 识别 a1/v1/var_10 等默认名]
+        L8 --> L9[调用 LLM 得到局部变量重命名映射]
+        L9 --> L10[apply_local_var_renames 更新伪代码文本]
+        L10 --> L11{是否启用 ida-sync?}
+        L11 -->|是| L12[_sync_lvars_with_ida 并 _verify_lvar_persistence]
+        L11 -->|否| L13[仅本地更新]
+        L12 --> L14[设置 analysis_status.lvar_optimized = 1]
+        L13 --> L14
+    end
+
+    L3 --> E1[Phase 4 结束并关闭连接]
+
+    %% ========== 收尾 ==========
+    E1 --> Z0{是否启用 ida-sync?}
+    Z0 -->|是| Z1[调用 save_and_exit 请求 IDA 保存并退出]
+    Z0 -->|否| Z2[脚本结束]
+```

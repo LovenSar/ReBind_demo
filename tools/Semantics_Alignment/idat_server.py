@@ -128,6 +128,18 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 result = self._execute_in_main_thread(self._handle_rename_lvar, payload)
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
+            elif action == "save_database":
+                result = self._execute_in_main_thread(self._handle_save_database, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
+            elif action == "get_pseudocode":
+                result = self._execute_in_main_thread(self._handle_get_pseudocode, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
+            elif action == "get_function_info":
+                result = self._execute_in_main_thread(self._handle_get_function_info, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
             elif action == "ping":
                 resp = {"status": "ok", "msg": "pong"}
                 status_code = 200
@@ -456,6 +468,119 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             import traceback
 
             traceback.print_exc()
+            return {"status": "error", "msg": str(exc)}
+
+    def _handle_save_database(self, payload: dict) -> dict:
+        """单独触发一次数据库保存，避免退出。"""
+        try:
+            ida_loader.save_database(None, 0)
+            print("[IDAT-Server] Database saved (manual request).")
+            return {"status": "ok", "msg": "saved"}
+        except Exception as exc:
+            print(f"[IDAT-Server] save_database failed: {exc}")
+            return {"status": "error", "msg": str(exc)}
+
+    def _handle_get_pseudocode(self, payload: dict) -> dict:
+        """返回指定函数的最新伪代码，用于重命名后的确认。"""
+        ea = payload.get("ea")
+        if ea is None:
+            return {"status": "error", "msg": "missing 'ea'"}
+
+        if isinstance(ea, str):
+            s = ea.strip()
+            try:
+                if s.lower().startswith("0x"):
+                    ea = int(s, 16)
+                else:
+                    ea = int(s)
+            except ValueError:
+                return {"status": "error", "msg": f"invalid ea: {ea!r}"}
+        ea = int(ea)
+
+        if not init_hexrays():
+            return {"status": "error", "msg": "Hex-Rays decompiler not available"}
+
+        try:
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"status": "error", "msg": f"no function at 0x{ea:X}"}
+
+            try:
+                ida_hexrays.clear_cached_cfuncs()
+            except Exception:
+                pass
+
+            cfunc = ida_hexrays.decompile(func.start_ea)
+            if not cfunc:
+                return {"status": "error", "msg": f"decompile failed at 0x{func.start_ea:X}"}
+
+            lines = []
+            for pline in cfunc.get_pseudocode():
+                try:
+                    text = ida_lines.tag_remove(pline.line)
+                except Exception:
+                    text = str(pline.line)
+                lines.append(text)
+
+            code = "\n".join(lines)
+            return {"status": "ok", "ea": func.start_ea, "pseudocode": code}
+        except Exception as exc:
+            print(f"[IDAT-Server] get_pseudocode failed: {exc}")
+            return {"status": "error", "msg": str(exc)}
+
+    def _handle_get_function_info(self, payload: dict) -> dict:
+        """返回指定函数的当前名称与伪代码。"""
+        ea = payload.get("ea")
+        if ea is None:
+            return {"status": "error", "msg": "missing 'ea'"}
+
+        if isinstance(ea, str):
+            s = ea.strip()
+            try:
+                if s.lower().startswith("0x"):
+                    ea = int(s, 16)
+                else:
+                    ea = int(s)
+            except ValueError:
+                return {"status": "error", "msg": f"invalid ea: {ea!r}"}
+        ea = int(ea)
+
+        name = idc.get_func_name(ea) or ""
+
+        if not init_hexrays():
+            return {"status": "error", "msg": "Hex-Rays decompiler not available"}
+
+        try:
+            func = ida_funcs.get_func(ea)
+            if not func:
+                return {"status": "error", "msg": f"no function at 0x{ea:X}"}
+
+            try:
+                ida_hexrays.clear_cached_cfuncs()
+            except Exception:
+                pass
+
+            cfunc = ida_hexrays.decompile(func.start_ea)
+            if not cfunc:
+                return {"status": "error", "msg": f"decompile failed at 0x{func.start_ea:X}"}
+
+            lines = []
+            for pline in cfunc.get_pseudocode():
+                try:
+                    text = ida_lines.tag_remove(pline.line)
+                except Exception:
+                    text = str(pline.line)
+                lines.append(text)
+
+            code = "\n".join(lines)
+            return {
+                "status": "ok",
+                "ea": func.start_ea,
+                "name": name,
+                "pseudocode": code,
+            }
+        except Exception as exc:
+            print(f"[IDAT-Server] get_function_info failed: {exc}")
             return {"status": "error", "msg": str(exc)}
 
     def _handle_save_and_exit_request(self, payload: dict):
