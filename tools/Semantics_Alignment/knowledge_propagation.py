@@ -38,17 +38,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
 import threading
 import time
+import builtins
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import heapq
 import re
+import unicodedata
 
 import yaml
 from tqdm import tqdm
@@ -68,6 +72,31 @@ EMPTY_RESPONSE_RETRY_TIMEOUT = 90.0
 
 # 单个函数在第四阶段局部变量重命名中，最多尝试的分析轮数
 MAX_LVAR_PASSES = 1
+
+
+def _install_print_with_location() -> None:
+    """Prefix every print with absolute file path and line number."""
+    if getattr(builtins, "_original_print", None):
+        return
+
+    builtins._original_print = builtins.print  # type: ignore[attr-defined]
+
+    def _print_with_location(*args, **kwargs):
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller = frame.f_back
+            path = Path(caller.f_code.co_filename).resolve()
+            lineno = caller.f_lineno
+            prefix = f"{path}:{lineno} "
+        else:
+            prefix = ""
+        message = " ".join(str(a) for a in args)
+        builtins._original_print(f"{prefix}{message}", **kwargs)
+
+    builtins.print = _print_with_location  # type: ignore[assignment]
+
+
+_install_print_with_location()
 
 
 # =========================
@@ -107,7 +136,7 @@ def setup_logging(log_path: Path, input_db: Optional[Path] = None) -> None:
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(
         logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s - [db=%(db_path)s] %(message)s",
+            "%(asctime)s [%(levelname)s] %(name)s %(pathname)s:%(lineno)d - [db=%(db_path)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
@@ -115,7 +144,9 @@ def setup_logging(log_path: Path, input_db: Optional[Path] = None) -> None:
     # 控制台日志：简要输出
     ch = logging.StreamHandler(stream=sys.stderr)
     ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("[db=%(db_path)s] %(message)s"))
+    ch.setFormatter(
+        logging.Formatter("%(name)s %(pathname)s:%(lineno)d [db=%(db_path)s] %(message)s")
+    )
 
     db_filter = _DBPathFilter()
     fh.addFilter(db_filter)
@@ -444,6 +475,9 @@ GENERIC_LVAR_PATTERN = re.compile(
 # 用于检测函数名是否仍然是默认的 sub_xxxx 形式
 SUBFUNC_NAME_PATTERN = re.compile(r"\bsub_[0-9A-Fa-f]+\b")
 
+# 用于检测明显“默认地址命名”的函数名，例如 sub_401000 / fun_0010E210 / loc_80483F0 等
+DEFAULT_FUNC_NAME_PATTERN = re.compile(r"^(?:sub_|fun_|loc_)[0-9A-Fa-f]+$")
+
 
 def _find_generic_lvar_names(code: str) -> Set[str]:
     """在伪代码文本中查找疑似默认局部变量名集合。"""
@@ -759,9 +793,28 @@ def build_unified_graph(conn: sqlite3.Connection, binary_id: int) -> UnifiedGrap
     return UnifiedGraph(binary_id=binary_id, nodes=nodes, tool_map=tool_map, func_tool=func_tool)
 
 
-def _load_ida_subfunc_entries(conn: sqlite3.Connection, binary_id: int) -> Dict[int, str]:
-    """加载该 binary 下 IDA 视图仍为 sub_ 前缀的函数名映射。"""
+def _load_ida_subfunc_entries(
+    conn: sqlite3.Connection, binary_id: int, ida_url: Optional[str] = None
+) -> Dict[int, str]:
+    """
+    加载该 binary 下仍为 sub_ 前缀的函数名映射。
+    优先使用数据库中的 IDA 视图记录，同时在可用时合并来自实时 IDB 的 sub_ 函数列表。
+    """
     cur = conn.cursor()
+
+    # 1) 记录本地 DB 中该 binary 的所有函数入口地址，用于检测“IDB 有但 DB 无”的情况
+    cur.execute(
+        """
+        SELECT DISTINCT f.entry_va
+        FROM functions AS f
+        JOIN binary_views AS bv ON f.view_id = bv.id
+        WHERE bv.binary_id = ?;
+        """,
+        (binary_id,),
+    )
+    db_known_vas: Set[int] = {int(row[0]) for row in cur.fetchall()}
+
+    # 2) 从 DB 中读取 IDA 视图里仍为 sub_ 前缀的函数
     cur.execute(
         """
         SELECT f.entry_va, f.name
@@ -780,6 +833,38 @@ def _load_ida_subfunc_entries(conn: sqlite3.Connection, binary_id: int) -> Dict[
             continue
         if SUBFUNC_NAME_PATTERN.fullmatch(nm):
             result[int(entry_va)] = nm
+
+    # 3) 如提供 ida_url，则尝试从实时 IDB 中获取 sub_ 函数并与 DB 数据合并
+    if ida_url:
+        live_subs = _fetch_live_ida_subfuncs(ida_url)
+        if live_subs:
+            # 检测 IDA 中存在但 DB 缺失的 sub_ 函数
+            missing: List[Tuple[int, str]] = []
+            for ea, nm in live_subs.items():
+                if ea not in db_known_vas:
+                    missing.append((ea, nm))
+            if missing:
+                print("\n" + "!" * 60)
+                print(
+                    f"[IDA-Sync] 发现 {len(missing)} 个函数在 IDB 中仍为 sub_ 前缀，"
+                    "但本地 SQLite DB 中没有对应记录。"
+                )
+                sample = ", ".join(
+                    f"0x{ea:08X}({name})" for ea, name in missing[:5]
+                )
+                print(f"示例: {sample}")
+                print("可能原因：")
+                print("  1) 这些函数是在 alignment_loader 运行之后由 IDA 自动分析新增的；")
+                print("  2) alignment_loader 导出时被过滤或发生错误。")
+                print("处理建议：")
+                print("  - 当前脚本无法为这些“DB 不存在”的函数构建依赖图，将跳过它们；")
+                print("  - 若需分析，请在 IDA 中保存数据库后重新运行 alignment_loader.py 更新 .db 文件。")
+                print("!" * 60 + "\n")
+
+            # 合并实时 IDA sub_ 列表到结果中（以 IDB 名称为准）
+            for ea, nm in live_subs.items():
+                result[int(ea)] = nm
+
     return result
 
 
@@ -1301,7 +1386,11 @@ def build_global_var_graph(
     graph: UnifiedGraph,
 ) -> Dict[int, GlobalVarNode]:
     """
-    构建全局变量 -> 读写函数 的引用图，只考虑与指定 binary_id 关联的视图。
+    构建全局变量 -> 读写函数 的引用图。
+    改进版策略：
+    1. 只要有指令引用该地址 (dst_va)，且该地址不是函数入口，就视为候选。
+    2. 特别包含 off_*, dword_*, unk_*, byte_* 等默认命名。
+    3. 排除段名 (.text, .data) 和纯代码标签。
     """
     cur = conn.cursor()
 
@@ -1315,14 +1404,27 @@ def build_global_var_graph(
     view_ids = [row[0] for row in view_rows]
     placeholders = ",".join("?" for _ in view_ids)
 
-    # 1) 按 address_va 聚合所有视图中的全局 data 符号
-    #    同时增加多层过滤，避免把代码入口 / 段首 / 导入函数当成“全局变量”：
-    #      - 若地址在统一函数图的 entry_va 集合中，视为代码入口，跳过；
-    #      - 若符号名是典型段名（.text/.data/.ctors 等），跳过；
-    #      - 若 kind 显式标记为函数 / 导入 / thunk，跳过。
-    globals_by_addr: Dict[int, GlobalVarNode] = {}
+    # 1) 获取所有被引用的目标地址 (dst_va)
+    #    排除掉显然是函数调用的引用类型 (CALL)
+    #    仅保留 DATA 读写相关的引用
+    cur.execute(
+        f"""
+        SELECT DISTINCT dst_va, dst_name
+        FROM xrefs
+        WHERE view_id IN ({placeholders}) 
+          AND dst_va IS NOT NULL
+          AND ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
+        """,
+        view_ids,
+    )
+
+    candidate_globals: Dict[int, Set[str]] = {}
+
+    # 获取已知的所有函数入口，用于过滤
     code_entry_addrs: Set[int] = set(graph.nodes.keys())
-    segment_name_blacklist: Set[str] = {
+
+    # 典型的段名/无关符号黑名单
+    blacklist_names: Set[str] = {
         ".text",
         ".data",
         ".rdata",
@@ -1333,74 +1435,103 @@ def build_global_var_graph(
         ".crt",
         ".ctors",
         ".dtors",
+        "header",
+        "debug",
     }
-    cur.execute(
-        f"""
-        SELECT view_id, address_va, name, kind, COALESCE(is_global, 0)
-        FROM symbols
-        WHERE view_id IN ({placeholders}) AND address_va IS NOT NULL;
-        """,
-        view_ids,
+
+    # 典型的默认命名模式 (Regex)
+    # 匹配: off_XXXX, dword_XXXX, byte_XXXX, unk_XXXX, qword_XXXX, word_XXXX, xmmword_XXXX
+    default_name_pattern = re.compile(
+        r"^(off|dword|byte|qword|unk|word|xmmword|float|double)_[0-9A-Fa-f]+$",
+        re.IGNORECASE,
     )
-    for view_id, addr_va, name, kind, is_global in cur.fetchall():
-        if addr_va is None:
-            continue
-        addr = int(addr_va)
-        # A. 若该地址本身就是某个统一函数的入口地址，则视为代码入口，跳过
+
+    for dst_va, dst_name in cur.fetchall():
+        addr = int(dst_va)
+
+        # A. 绝对排除：如果这个地址是函数入口，跳过
         if addr in code_entry_addrs:
             continue
 
-        # B. 过滤典型段名符号（段首标签，而非真实变量）
-        name_str = (name or "").strip()
-        if name_str and name_str.strip().lower() in segment_name_blacklist:
+        name_str = (dst_name or "").strip()
+        lower_name = name_str.lower()
+
+        # B. 绝对排除：黑名单段名
+        if lower_name in blacklist_names:
             continue
 
-        k = (kind or "").strip().lower()
-        # C. 排除显式函数 / 导入 / thunk 类符号
-        if any(key in k for key in ("func", "code", "import", "thunk")):
-            continue
+        # C. 纳入标准：
+        #    1. 名字匹配默认变量名模式 (off_*, dword_*) -> 必须包含
+        #    2. 或者名字为空 (依靠地址) -> 必须包含
+        #    3. 或者原本 symbols 表里标记为 global/data (后续补充检查)
 
-        # D. 仅关注全局 data 对象
-        if int(is_global or 0) != 1 and k not in ("data", "object", "obj"):
+        is_default_pattern = bool(default_name_pattern.match(name_str))
+
+        # 如果不是默认模式，且名字看起来很有意义（比如 "g_Config"），我们也要纳入分析吗？
+        # 是的，因为可能名字不够好，需要 LLM 优化。
+
+        if addr not in candidate_globals:
+            candidate_globals[addr] = set()
+
+        if name_str:
+            candidate_globals[addr].add(name_str)
+
+    # 2) 补充 symbols 表中的信息 (针对那些可能没有 xrefs 但明确是 global data 的情况，虽然 LLM 分析主要依赖 xrefs)
+    #    同时利用 symbols 表里的全名来丰富 candidate_globals
+    cur.execute(
+        f"""
+        SELECT address_va, name
+        FROM symbols
+        WHERE view_id IN ({placeholders}) 
+          AND address_va IS NOT NULL
+          AND (kind IN ('data', 'object', 'obj') OR is_global = 1);
+        """,
+        view_ids,
+    )
+    for addr_va, name in cur.fetchall():
+        addr = int(addr_va)
+        if addr in code_entry_addrs:
             continue
-        node = globals_by_addr.get(addr)
-        if node is None:
-            node = GlobalVarNode(address_va=addr)
-            globals_by_addr[addr] = node
+        if addr not in candidate_globals:
+            # 如果 xrefs 没扫到，但 symbols 说是 data，也加进来
+            candidate_globals[addr] = set()
         if name:
-            node.names.add(str(name))
+            candidate_globals[addr].add(str(name))
 
-    if not globals_by_addr:
+    if not candidate_globals:
         return {}
 
-    # 2) 函数映射：view_id,address_va -> function_id；function_id -> entry_va
+    # 3) 构建 GlobalVarNode
+    globals_by_addr: Dict[int, GlobalVarNode] = {}
+    for addr, names in candidate_globals.items():
+        node = GlobalVarNode(address_va=addr)
+        node.names = names
+        globals_by_addr[addr] = node
+
+    # 4) 填充 readers / writers (这步逻辑不变，用于计算上下文)
+    #    先构建快速查找表
     addr_to_func: Dict[Tuple[int, int], int] = {}
     cur.execute(
         f"""
         SELECT view_id, function_id, address_va
         FROM instructions
-        WHERE view_id IN ({placeholders});
+        WHERE view_id IN ({placeholders}) AND address_va IS NOT NULL;
         """,
         view_ids,
     )
     for view_id, fid, addr_va in cur.fetchall():
-        if addr_va is None:
-            continue
         addr_to_func[(int(view_id), int(addr_va))] = int(fid)
 
     func_to_entry: Dict[int, int] = {}
     cur.execute(
-        f"""
-        SELECT id, entry_va
-        FROM functions
-        WHERE view_id IN ({placeholders});
-        """,
+        f"SELECT id, entry_va FROM functions WHERE view_id IN ({placeholders});",
         view_ids,
     )
     for fid, entry_va in cur.fetchall():
-        func_to_entry[int(fid)] = int(entry_va)
+        if entry_va is not None:
+            func_to_entry[int(fid)] = int(entry_va)
 
-    # 3) 遍历 xrefs，找出指向全局变量地址的读写引用
+    # 再次遍历 xrefs 填充读写关系
     cur.execute(
         f"""
         SELECT view_id, src_va, dst_va, ref_type_raw
@@ -1410,8 +1541,6 @@ def build_global_var_graph(
         view_ids,
     )
     for view_id, src_va, dst_va, ref_type_raw in cur.fetchall():
-        if dst_va is None:
-            continue
         addr = int(dst_va)
         node = globals_by_addr.get(addr)
         if node is None:
@@ -1421,11 +1550,13 @@ def build_global_var_graph(
         if func_id is None:
             continue
         entry_va = func_to_entry.get(func_id)
-        if entry_va is None or entry_va not in graph.nodes:
+        if entry_va is None:
             continue
 
+        # 记录读写者
         access_kind = (ref_type_raw or "").strip().upper()
-        if access_kind in ("WRITE", "READ_WRITE"):
+        # 简单的 heuristic: 包含 WRITE 视为写，否则视为读
+        if "WRITE" in access_kind:
             node.writers.add(entry_va)
         else:
             node.readers.add(entry_va)
@@ -1670,7 +1801,6 @@ def run_validation_phase(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
     llm_settings: LLMSettings,
-    max_functions: Optional[int],
     ida_sync: bool,
     ida_url: str,
     dry_run: bool = False,
@@ -1733,9 +1863,6 @@ def run_validation_phase(
     processed = 0
     failed_primary: List[int] = []
     while queue:
-        if max_functions is not None and max_functions > 0 and processed >= max_functions:
-            break
-
         task = heapq.heappop(queue)
         entry_va = task.entry_va
 
@@ -2301,6 +2428,18 @@ def require_openai(api_settings: Dict[str, Any]) -> Any:
     return openai
 
 
+def _is_quota_exhausted_error(exc: Exception) -> bool:
+    text = str(exc) if exc else ""
+    lowered = text.lower()
+    keywords = (
+        "token quota is not enough",
+        "pre_consume_token_quota_failed",
+        "insufficient_quota",
+        "insufficient quota",
+    )
+    return any(k in lowered for k in keywords)
+
+
 def build_prompt_for_function(
     conn: sqlite3.Connection,
     graph: FunctionGraph,
@@ -2466,15 +2605,14 @@ def call_llm_analyze_function(
     api_settings: Dict[str, Any],
     max_attempts: int = 3,
     return_raw_on_error: bool = False,
-) -> dict:
+    expect_array: bool = False,
+    expected_size: Optional[int] = None,
+) -> Any:
     """
-    调用 OpenAI ChatCompletion，让模型对单个函数进行分析。
-    期望返回一个 JSON 对象，字段：
-      - signature: C 风格函数声明 / 原型
-      - summary: 一句话或一小段语义描述
-      - confidence: 0.0 ~ 1.0 的置信度
-      - tags: 若干关键词
-      - notes: 可选补充说明
+    调用 OpenAI ChatCompletion 做函数分析。
+
+    默认期望返回单个 JSON 对象；若 expect_array=True，则要求返回 JSON 数组，
+    并在 expected_size 给定时校验数组长度。
     """
     client = require_openai(api_settings)
 
@@ -2534,6 +2672,15 @@ def call_llm_analyze_function(
                     last_error = "当前 openai 客户端不支持 ChatCompletion 接口"
                     break
             except Exception as exc:  # 网络 / API 失败
+                if _is_quota_exhausted_error(exc):
+                    exit_msg = (
+                        "检测到 LLM API 余额不足，流程将安全退出；当前任务支持断点续工，"
+                        "请充值后重新运行。"
+                    )
+                    print(exit_msg)
+                    logger.error("%s", exit_msg)
+                    sys.exit(1)
+
                 last_error = f"LLM 调用失败({attempt}/{max_attempts}): {exc}"
                 logger.warning("%s", last_error)
                 break
@@ -2574,18 +2721,33 @@ def call_llm_analyze_function(
             text_str,
         )
 
-        start = text_str.find("{")
-        end = text_str.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            text_str_json = text_str[start : end + 1]
+        # 解析顺序：
+        #   - 批量模式直接尝试完整字符串（保留方括号），避免裁剪成对象导致失败；
+        #   - 单对象模式保持原有大括号裁剪作为容错。
+        candidates: List[str] = []
+        if expect_array:
+            candidates.append(text_str.strip())
         else:
-            text_str_json = text_str
+            start = text_str.find("{")
+            end = text_str.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidates.append(text_str[start : end + 1])
+            else:
+                candidates.append(text_str)
 
-        try:
-            data = json.loads(text_str_json)
-        except json.JSONDecodeError:
+        data = None
+        parse_ok = False
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+                parse_ok = True
+                break
+            except json.JSONDecodeError:
+                data = None
+
+        if not parse_ok:
             last_error = (
-                f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{text_str_json!r}"
+                f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{candidates[0]!r}"
             )
             # 根据需要，将原始文本返回给调用方用于调试
             if return_raw_on_error and attempt == max_attempts:
@@ -2602,6 +2764,24 @@ def call_llm_analyze_function(
             )
             continue
 
+        if expect_array:
+            if not isinstance(data, list):
+                last_error = (
+                    f"LLM 返回的 JSON 不是数组({attempt}/{max_attempts})：{data!r}"
+                )
+                logger.warning("%s", last_error)
+                continue
+
+            if expected_size is not None and len(data) != expected_size:
+                last_error = (
+                    f"LLM 返回数组长度不符({attempt}/{max_attempts})："
+                    f"expected={expected_size}, got={len(data)}"
+                )
+                logger.warning("%s", last_error)
+                continue
+
+            return data
+
         if not isinstance(data, dict):
             last_error = (
                 f"LLM 返回的 JSON 不是对象({attempt}/{max_attempts})：{data!r}"
@@ -2616,7 +2796,7 @@ def call_llm_analyze_function(
         logger.error(
             "在 %d 次尝试后仍未获得合法 JSON：%s", max_attempts, last_error
         )
-    return {}
+    return [] if expect_array else {}
 
 
 def build_chat_request(prompt: str, llm_settings: LLMSettings) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
@@ -2644,6 +2824,37 @@ def build_chat_request(prompt: str, llm_settings: LLMSettings) -> Tuple[List[Dic
     )
 
     return conversation, request_kwargs
+
+
+def estimate_token_usage(text: str) -> int:
+    """按经验比例估算 token 数，便于在批处理前做容量预检。
+
+    规则：
+      - 1 token ~= 0.75 个英文单词
+      - 1 token ~= 0.5 个中文字符
+      - 1 token ~= 3 个标点符号
+      - 其他字符按 0.3 token/字符 近似，避免明显低估。
+    """
+
+    words = re.findall(r"[A-Za-z]+", text)
+    word_tokens = len(words) / 0.75 if words else 0.0
+
+    chinese_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    chinese_tokens = len(chinese_chars) / 0.5 if chinese_chars else 0.0
+
+    punctuation_count = sum(
+        1 for ch in text if unicodedata.category(ch).startswith("P")
+    )
+    punctuation_tokens = punctuation_count / 3.0 if punctuation_count else 0.0
+
+    english_letter_count = sum(len(w) for w in words)
+    residual_count = max(
+        0, len(text) - english_letter_count - len(chinese_chars) - punctuation_count
+    )
+    residual_tokens = residual_count * 0.3
+
+    estimated = word_tokens + chinese_tokens + punctuation_tokens + residual_tokens
+    return int(math.ceil(estimated))
 
 
 def _coerce_libfunction_flag(value: Any) -> bool:
@@ -2679,6 +2890,43 @@ def _extract_name_from_signature(signature: str, fallback: str) -> Optional[str]
         return name
     except Exception:
         return fallback or None
+
+
+def _make_name_unique(conn: sqlite3.Connection, base_name: str, current_fid: int) -> str:
+    """
+    检查数据库中是否已存在 base_name。
+    如果存在且不是当前函数，则自动追加 _1, _2 等后缀。
+
+    若 base_name 为空或仍然是明显的默认地址命名（sub_XXXX / fun_XXXX / loc_XXXX），
+    则原样返回，由上层逻辑决定是否改名或放弃同步。
+    """
+    base_name = (base_name or "").strip()
+    if not base_name:
+        return base_name
+
+    # 典型 decompiler 默认名：不在这里做自动去重，由上层决定是否沿用或放弃
+    if DEFAULT_FUNC_NAME_PATTERN.fullmatch(base_name):
+        return base_name
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id FROM functions WHERE name = ? AND id != ?;",
+        (base_name, current_fid),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return base_name
+
+    counter = 1
+    while True:
+        candidate = f"{base_name}_{counter}"
+        cur.execute(
+            "SELECT id FROM functions WHERE name = ? AND id != ?;",
+            (candidate, current_fid),
+        )
+        if not cur.fetchone():
+            return candidate
+        counter += 1
 
 
 def _sync_global_with_ida_and_update_db(
@@ -2775,48 +3023,55 @@ def _sync_global_with_ida_and_update_db(
 
 def _prompt_run_validation_with_timeout(timeout_sec: int = 5) -> bool:
     """
-    带倒计时的简易交互：
-    - 在单独线程中等待用户输入；
-    - 主线程每秒打印一次提示，最多等待 timeout_sec 秒；
-    - 若在超时前用户输入 N/NO/n/no，则返回 False；
-    - 若无输入或输入其他内容，则返回 True（默认继续第二阶段）。
+    带倒计时的简易交互 (非阻塞版)：
+    - Windows: 使用 msvcrt.kbhit/getwch 检测按键，避免线程 + input 占用 stdin 锁；
+    - *nix: 使用 select.select 监听 stdin；
+    - 非交互环境直接默认继续。
     """
     if not sys.stdin or not sys.stdin.isatty():
-        # 非交互环境：默认执行第二阶段
         print("[Validation] 非交互环境，默认执行第二阶段调用链校验。")
         return True
 
-    user_input: List[Optional[str]] = [None]
+    print(
+        f"[Validation] 即将进入第二阶段校验。输入 N/n 跳过，其他键或等待 {timeout_sec} 秒后继续..."
+    )
 
-    def _input_worker() -> None:
-        try:
-            s = input(
-                "是否执行第二阶段“调用链逻辑流校验”？\n"
-                "输入 N / NO / n / no 以跳过，直接回车或其他内容继续（默认继续）："
+    start_time = time.time()
+    user_input: Optional[str] = None
+
+    if sys.platform == "win32":
+        import msvcrt
+
+        while True:
+            remaining = timeout_sec - (time.time() - start_time)
+            if remaining <= 0:
+                print("\n[Validation] 自动继续。")
+                break
+
+            sys.stdout.write(
+                f"\r[Validation] 倒计时: {remaining:.1f} 秒 (按 N 跳过)   "
             )
-            user_input[0] = s.strip()
-        except EOFError:
-            user_input[0] = None
+            sys.stdout.flush()
 
-    t = threading.Thread(target=_input_worker, daemon=True)
-    t.start()
+            if msvcrt.kbhit():
+                char = msvcrt.getwch()
+                print(f"\n[Validation] 检测到输入: {char}")
+                user_input = char
+                break
 
-    for remaining in range(timeout_sec, 0, -1):
-        if user_input[0] is not None:
-            break
-        print(
-            f"[Validation] {remaining} 秒后自动进入第二阶段（按提示可取消）...",
-            flush=True,
-        )
-        time.sleep(1)
+            time.sleep(0.1)
 
-    # 如果在超时前还没有输入，尝试再读取一次（避免刚好在最后一秒输入）
-    if user_input[0] is None and t.is_alive():
-        # 再给出极短时间让输入线程收尾
-        time.sleep(0.2)
+    else:
+        import select
 
-    answer = (user_input[0] or "").strip().lower()
-    if answer in ("n", "no"):
+        print(f"[Validation] 请在 {timeout_sec} 秒内输入...")
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout_sec)
+        if rlist:
+            user_input = sys.stdin.readline().strip()
+        else:
+            print("\n[Validation] 自动继续。")
+
+    if user_input and str(user_input).strip().lower() in ("n", "no"):
         print("[Validation] 用户选择跳过第二阶段调用链校验。")
         return False
 
@@ -2896,6 +3151,70 @@ def _fetch_ida_pseudocode(entry_va: int, ida_url: str, timeout: float = 10.0) ->
     return code if isinstance(code, str) else None
 
 
+def _fetch_live_ida_subfuncs(ida_url: str, timeout: float = 30.0) -> Dict[int, str]:
+    """
+    从正在运行的 idat_server 获取当前 IDB 中所有仍为 sub_ 前缀的函数。
+    返回字典 { entry_va(int): name(str) }。
+    """
+    if requests is None:
+        return {}
+
+    payload = {"action": "get_sub_functions"}
+    try:
+        resp = requests.post(ida_url, json=payload, timeout=timeout)
+    except Exception as exc:
+        logger.warning("[IDA-Sync] get_sub_functions 调用失败: %s", exc)
+        return {}
+
+    if resp.status_code != 200:
+        logger.warning(
+            "[IDA-Sync] get_sub_functions HTTP %s: %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        return {}
+
+    try:
+        data = resp.json()
+    except Exception as exc:
+        logger.warning(
+            "[IDA-Sync] 解析 get_sub_functions 响应失败: %s; body=%s",
+            exc,
+            resp.text[:200],
+        )
+        return {}
+
+    if data.get("status") != "ok":
+        logger.warning("[IDA-Sync] get_sub_functions 返回错误: %s", data)
+        return {}
+
+    raw = data.get("sub_functions") or {}
+    if not isinstance(raw, dict):
+        return {}
+
+    result: Dict[int, str] = {}
+    for k, v in raw.items():
+        name = (v or "").strip()
+        if not name:
+            continue
+        try:
+            if isinstance(k, int):
+                ea = int(k)
+            elif isinstance(k, str):
+                s = k.strip()
+                if s.lower().startswith("0x"):
+                    ea = int(s, 16)
+                else:
+                    ea = int(s)
+            else:
+                continue
+        except Exception:
+            continue
+        result[ea] = name
+
+    return result
+
+
 def _save_and_refresh_pseudocode(
     entry_va: int, ida_url: str, wait_seconds: float = 1.0
 ) -> Optional[str]:
@@ -2921,8 +3240,30 @@ def _reconcile_ida_db_mismatch(
     if requests is None:
         return
 
-    # 找出 IDA 视图 id
+    # 仅当数据库中该 binary 的所有函数都处于 PENDING 状态时才执行对齐
     cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total_count,
+               SUM(CASE WHEN a.analysis_state IS NULL OR a.analysis_state = 'PENDING' THEN 1 ELSE 0 END) AS pending_count
+        FROM functions AS f
+        JOIN binary_views AS bv ON f.view_id = bv.id
+        LEFT JOIN analysis_status AS a ON a.function_id = f.id
+        WHERE bv.binary_id = ?;
+        """,
+        (binary_id,),
+    )
+    total_count, pending_count = cur.fetchone() or (0, 0)
+    all_pending = total_count > 0 and pending_count == total_count
+    if not all_pending:
+        logger.info(
+            "[Align] 跳过 IDA/DB 不一致对齐：存在非 PENDING 函数 (pending=%s, total=%s)",
+            pending_count,
+            total_count,
+        )
+        return
+
+    # 找出 IDA 视图 id
     cur.execute(
         """
         SELECT bv.id
@@ -2979,138 +3320,67 @@ def _reconcile_ida_db_mismatch(
     if not mismatches:
         return
 
-    print(f"[Align] 检测到 {len(mismatches)} 个 IDA/DB 不一致的函数，提交 LLM 评估。")
+    print(
+        f"[Align] 检测到 {len(mismatches)} 个 IDA/DB 不一致的函数，"
+        "将其重置为 PENDING，交由 Phase 1 知识传播重新分析。"
+    )
 
+    ids_to_reset: Set[int] = set()
     pbar = tqdm(mismatches, desc="Aligning DB vs IDA", unit="fn")
-    # 记录已经被占用的最终名字，避免重名（包含初始 DB 名称）
-    used_names: dict[str, tuple[int, int]] = {}
-    for function_id, entry_va, db_name, _db_body in rows:
-        if function_id in removed_function_ids:
-            continue
-        if db_name:
-            used_names[str(db_name)] = (int(function_id), int(entry_va))
 
     for function_id, entry_va, db_name, db_body, info in pbar:
         pbar.set_postfix(address=f"0x{entry_va:08X}")
+
         ida_name = info.get("name", "") or ""
         ida_code = info.get("pseudocode", "") or ""
 
-        prompt = _build_name_alignment_prompt(
-            entry_va=entry_va,
-            db_name=db_name,
-            ida_name=ida_name,
-            db_code=db_body,
-            ida_code=ida_code,
+        # 刷新 IDA 视图对应的伪代码，避免后续使用过时内容
+        if ida_code:
+            cur.execute(
+                "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+                (ida_code, function_id),
+            )
+
+        # 将同一 entry_va 下的所有视图标记为 PENDING，便于 Phase 1 统一重跑
+        cur.execute(
+            """
+            SELECT f.id
+            FROM functions AS f
+            JOIN binary_views AS bv ON f.view_id = bv.id
+            WHERE bv.binary_id = ? AND f.entry_va = ?;
+            """,
+            (binary_id, entry_va),
         )
-        conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+        related_ids = [row[0] for row in cur.fetchall()]
+        for fid in related_ids:
+            ids_to_reset.add(int(fid))
 
-        try:
-            result = call_llm_analyze_function(
-                conversation=conversation,
-                request_kwargs=request_kwargs,
-                api_settings=llm_settings.api_settings,
-                return_raw_on_error=True,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[Align] LLM 决策失败 0x%08X: %s", entry_va, exc
-            )
-            continue
-
-        if isinstance(result, dict) and "_raw_text" in result:
-            continue
-        if not isinstance(result, dict):
-            continue
-
-        final_name = str(result.get("final_name", db_name) or db_name)
-        source = str(result.get("source", "db") or "db").lower()
-        if source not in ("db", "ida"):
-            source = "db"
-
-        chosen_code = db_body if source == "db" else ida_code
-
-        # 如果与已有名称冲突，尝试让 LLM 再判一次；失败则追加 _0/_1 后缀
-        if final_name in used_names and used_names[final_name][0] != function_id:
-            existing_fn_id, existing_ea = used_names[final_name]
-            try:
-                current_snippets = _collect_function_snippets(conn, function_id)
-                existing_snippets = _collect_function_snippets(conn, existing_fn_id)
-                resolved = _resolve_name_collision_with_llm(
-                    base_name=final_name,
-                    current_ea=entry_va,
-                    existing_ea=existing_ea,
-                    current_snippets=current_snippets,
-                    existing_snippets=existing_snippets,
-                    llm_settings=llm_settings,
-                )
-            except Exception:
-                resolved = None
-
-            if not resolved:
-                suffix = 0
-                candidate = f"{final_name}_{suffix}"
-                while candidate in used_names:
-                    suffix += 1
-                    candidate = f"{final_name}_{suffix}"
-                resolved = candidate
-
-            final_name = resolved
-            print(
-                f"[Align] 0x{entry_va:08X}: 重名处理 -> {final_name}"
-            )
-
-        used_names[final_name] = (function_id, entry_va)
-
-        print(
-            f"[Align] 0x{entry_va:08X}: LLM 选定 final_name={final_name}, source={source}"
-        )
         logger.info(
-            "[Align] 0x%08X decision: final_name=%s, source=%s",
+            "[Align] 0x%08X: 发现 DB/IDA 差异，名称(db=%s, ida=%s)，已加入 PENDING 队列。",
             entry_va,
-            final_name,
-            source,
+            db_name,
+            ida_name,
         )
 
-        # 更新数据库伪代码
-        cur.execute(
-            "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
-            (chosen_code, function_id),
-        )
-
-        # 更新名字（仅当前 function 记录）
-        cur.execute(
-            "UPDATE functions SET name = ? WHERE id = ?;",
-            (final_name, function_id),
-        )
-
+    if ids_to_reset:
+        for fid in sorted(ids_to_reset):
+            cur.execute(
+                """
+                UPDATE analysis_status
+                SET analysis_state = 'PENDING',
+                    confidence_score = 0,
+                    summary_signature = NULL,
+                    semantic_summary = NULL
+                WHERE function_id = ?;
+                """,
+                (fid,),
+            )
         conn.commit()
 
-        # 尝试同步到 IDA（保持 .i64 一致）
-        if ida_sync and requests is not None:
-            try:
-                payload = {
-                    "action": "rename_and_sync",
-                    "ea": entry_va,
-                    "name": final_name,
-                    "comment": "[Align-Reconcile]",  # 简短标记
-                }
-                resp = requests.post(ida_url, json=payload, timeout=10.0)
-                if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                        updated_code = data.get("updated_pseudocode") or ""
-                        if updated_code:
-                            cur.execute(
-                                "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
-                                (updated_code, function_id),
-                            )
-                            conn.commit()
-                    except Exception:
-                        pass
-            except Exception as exc:
-                logger.warning(
-                    "[Align] 同步到 IDA 失败 entry_va=0x%08X: %s", entry_va, exc
-                )
+    print(
+        f"[Align] 已处理 {len(mismatches)} 个不一致函数，"
+        f"重置 {len(ids_to_reset)} 条 analysis_status 记录为 PENDING。"
+    )
 
 
 def _fetch_ida_function_info(entry_va: int, ida_url: str, timeout: float = 10.0) -> Optional[dict]:
@@ -3316,6 +3586,35 @@ def _sync_with_ida_and_update_db(
         )
         return
 
+    # 如果从 signature 中解析出来的名字仍然是明显的默认地址命名（sub_XXXX / fun_XXXX / loc_XXXX），
+    # 则回退到当前数据库/IDA 中已有的名字，避免把 LLM 生成的默认形式强行写回。
+    if DEFAULT_FUNC_NAME_PATTERN.fullmatch(final_name) and fallback_name:
+        logger.info(
+            "[IDA-Sync] 解析出的函数名 %s 看起来是默认地址命名，回退为现有名字 %s。 entry_va=0x%08X",
+            final_name,
+            fallback_name,
+            entry_va,
+        )
+        final_name = fallback_name
+
+    # 在真正同步到 IDA 之前，先在数据库范围内做一次去重，必要时自动追加 _1 / _2 等后缀
+    ref_fid: Optional[int] = None
+    if node.function_ids:
+        ref_fid = next(iter(node.function_ids))
+    elif ida_function_id is not None:
+        ref_fid = ida_function_id
+
+    if ref_fid is not None:
+        unique_name = _make_name_unique(conn, final_name, ref_fid)
+        if unique_name != final_name:
+            logger.info(
+                "[IDA-Sync] entry_va=0x%08X 函数名发生去重调整: %s -> %s",
+                entry_va,
+                final_name,
+                unique_name,
+            )
+        final_name = unique_name
+
     full_comment = (
         f"[Unified-LLM]\nName: {final_name}\nSignature: {signature}\nSummary: {summary}"
     )
@@ -3440,7 +3739,7 @@ def _sync_with_ida_and_update_db(
     )
 
 
-def build_unified_prompt(
+def _build_unified_prompt_body(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
     node: UnifiedFunctionNode,
@@ -3448,13 +3747,9 @@ def build_unified_prompt(
     max_disasm_lines: int = 200,
     max_pseudo_chars_per_tool: int = 4000,
     max_strings: int = 20,
-) -> str:
-    """
-    为跨视图统一节点构造 Prompt：
-      - 聚合 Ghidra / IDA 的伪代码，多视图并列展示；
-      - 使用统一的字符串 / 外部 API / 内部调用信息；
-      - 使用“已知子函数”的签名和摘要作为知识传播的输入。
-    """
+) -> Tuple[str, List[str]]:
+    """收集单个物理函数的上下文，用于单/多目标 Prompt 复用。"""
+
     cur = conn.cursor()
 
     # 1) 已分析的子函数语义（按 entry_va 聚合）
@@ -3473,7 +3768,11 @@ def build_unified_prompt(
         if not chosen_info:
             continue
 
-        callee_name = next(iter(sorted(callee.names)), f"sub_{callee_va:08X}") if callee.names else f"sub_{callee_va:08X}"
+        callee_name = (
+            next(iter(sorted(callee.names)), f"sub_{callee_va:08X}")
+            if callee.names
+            else f"sub_{callee_va:08X}"
+        )
         sig = chosen_info.get("summary_signature") or ""
         summary = chosen_info.get("semantic_summary") or ""
         callee_summaries.append(
@@ -3492,6 +3791,47 @@ def build_unified_prompt(
         if len(clean) > 120:
             clean = clean[:117] + "..."
         string_texts.append(clean)
+
+    # 额外的命名提示：当 IDA 仍为 sub_ 前缀且数据库中存在其他命名时，
+    # 将这些候选名作为辅助参考加入 Prompt。
+    name_hints: List[str] = []
+    ida_has_sub = False
+    if node.function_ids:
+        placeholders = ",".join("?" for _ in node.function_ids)
+        cur.execute(
+            f"""
+            SELECT f.name, COALESCE(t.name, '') AS tool_name
+            FROM functions AS f
+            JOIN binary_views AS bv ON f.view_id = bv.id
+            JOIN tools AS t ON bv.tool_id = t.id
+            WHERE f.id IN ({placeholders});
+            """,
+            tuple(node.function_ids),
+        )
+        for nm, tool_name in cur.fetchall():
+            clean_name = (nm or "").strip()
+            tool_lower = (tool_name or "").lower()
+            if not clean_name:
+                continue
+            if tool_lower == "ida" and SUBFUNC_NAME_PATTERN.fullmatch(clean_name):
+                ida_has_sub = True
+                continue
+            if not SUBFUNC_NAME_PATTERN.fullmatch(clean_name):
+                name_hints.append(clean_name)
+
+    if ida_has_sub and name_hints:
+        unique_hints = []
+        seen_hint: Set[str] = set()
+        for hint in name_hints:
+            if hint in seen_hint:
+                continue
+            seen_hint.add(hint)
+            unique_hints.append(hint)
+            if len(unique_hints) >= 5:
+                break
+        string_texts.append(
+            "[DB hint] " + ", ".join(unique_hints)
+        )
 
     # 4) 代表视图的反汇编文本
     disasm_text = ""
@@ -3528,7 +3868,63 @@ def build_unified_prompt(
     # 6) 统一函数名
     display_name = "/".join(sorted(node.names)) if node.names else f"sub_{node.entry_va:08X}"
 
-    # 7) 组合 Prompt
+    # 7) 组合主体内容（不含指令头）
+    lines: List[str] = []
+    lines.append(
+        f"当前物理函数：{display_name} @ 0x{node.entry_va:08X} "
+        f"(instr_count={node.instr_count}, "
+        f"internal_callees={len(node.internal_callee_vas)}, "
+        f"external_apis={len(ext_names)}, "
+        f"strings={len(string_texts)}, "
+        f"views={len(node.function_ids)})"
+    )
+
+    if callee_summaries:
+        lines.append("\n[已知子函数语义（跨视图统一）]\n" + "\n".join(callee_summaries))
+
+    if ext_names:
+        lines.append(
+            "\n[调用的外部 API / 导入函数（聚合自多个工具）]\n" + ", ".join(ext_names)
+        )
+
+    if string_texts:
+        lines.append(
+            "\n[函数中引用的关键字符串示例（聚合自多个工具）]\n"
+            + "\n".join(f"- {s}" for s in string_texts)
+        )
+
+    lines.append("\n[代表视图的函数反汇编（部分）]\n" + disasm_text)
+    lines.append("\n[多视图伪代码（可能互相矛盾，请综合判断）]\n" + decompilation_text)
+
+    return display_name, lines
+
+
+def build_unified_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    node: UnifiedFunctionNode,
+    analysis_info: Dict[int, dict],
+    max_disasm_lines: int = 200,
+    max_pseudo_chars_per_tool: int = 4000,
+    max_strings: int = 20,
+) -> str:
+    """
+    为跨视图统一节点构造 Prompt：
+      - 聚合 Ghidra / IDA 的伪代码，多视图并列展示；
+      - 使用统一的字符串 / 外部 API / 内部调用信息；
+      - 使用“已知子函数”的签名和摘要作为知识传播的输入。
+    """
+
+    display_name, body_lines = _build_unified_prompt_body(
+        conn=conn,
+        graph=graph,
+        node=node,
+        analysis_info=analysis_info,
+        max_disasm_lines=max_disasm_lines,
+        max_pseudo_chars_per_tool=max_pseudo_chars_per_tool,
+        max_strings=max_strings,
+    )
+
     lines: List[str] = []
     lines.append(
         "你是一个精通逆向工程和 C/C++ 的安全分析专家。"
@@ -3541,6 +3937,14 @@ def build_unified_prompt(
     lines.append(
         "请额外判断该函数是否属于标准库/编译器运行时/纯导入包装：如果是，请在返回 JSON 中设置 libfunction=1，"
         "并在 summary/notes 中说明依据；若不是则设为 0 继续正常描述。"
+    )
+    lines.append(
+        "【命名规则 - 重要】"
+        "1. 绝对禁止返回 'sub_XXXX'、'fun_XXXX'、'loc_XXXX' 等无意义的默认地址命名；"
+        "也不要使用 'func_xxx'、'fn_xxx'、'sub_xxx' 这类过于泛化、没有语义的信息。"
+        "2. 必须根据伪代码逻辑推断有语义的函数名，例如 'parse_http_header'、'encrypt_aes_block'。"
+        "3. 如果无法完全确定，请使用带有描述性的保守命名，如 'suspected_logging_helper'、'unknown_logic_buffer_process'。"
+        "4. 函数名必须使用 snake_case（下划线命名法），并尽量体现具体职责。"
     )
     lines.append(
         "你最终必须只输出一个 JSON 对象，字段为："
@@ -3556,29 +3960,71 @@ def build_unified_prompt(
     )
 
     lines.append("")
+    lines.extend(body_lines)
+
+    return "\n".join(lines)
+
+
+def build_unified_batch_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    nodes: List[UnifiedFunctionNode],
+    analysis_info: Dict[int, dict],
+    max_disasm_lines: int = 200,
+    max_pseudo_chars_per_tool: int = 4000,
+    max_strings: int = 20,
+) -> str:
+    """为批量物理函数构造合并 Prompt，要求返回 JSON 数组。"""
+
+    lines: List[str] = []
     lines.append(
-        f"当前物理函数：{display_name} @ 0x{node.entry_va:08X} "
-        f"(instr_count={node.instr_count}, "
-        f"internal_callees={len(node.internal_callee_vas)}, "
-        f"external_apis={len(ext_names)}, "
-        f"strings={len(string_texts)}, "
-        f"views={len(node.function_ids)})"
+        "你是一个精通逆向工程和 C/C++ 的安全分析专家，现在需要一次性分析多个物理函数。"
+    )
+    lines.append(
+        "不同反编译器可能存在各自的幻觉或错误，你需要对比多视图输出，抓住一致的部分，结合上下文信息推断真实语义。"
+    )
+    lines.append(
+        "请返回一个 JSON 数组，长度必须等于下方提供的函数数量，顺序完全一致。"
+        "数组中每个元素的字段："
+        '{'
+        '"entry_va": "0x????????", '
+        '"signature": string, '
+        '"summary": string, '
+        '"confidence": number, '
+        '"libfunction": 0 或 1, '
+        '"tags": [string, ...], '
+        '"notes": string'
+        '}. '
+        "不要输出除 JSON 数组之外的任何文字或 Markdown。"
+    )
+    lines.append(
+        "若判断为标准库/编译器运行时/纯导入包装，请设置 libfunction=1 并在 summary/notes 中说明依据；否则设为 0。"
+    )
+    lines.append(
+        "【命名规则 - 重要】"
+        "1. 绝对禁止返回 'sub_XXXX'、'fun_XXXX'、'loc_XXXX' 等无意义的默认地址命名；"
+        "也不要使用 'func_xxx'、'fn_xxx'、'sub_xxx' 这类过于泛化、没有语义的信息。"
+        "2. 必须根据伪代码逻辑推断有语义的函数名，例如 'parse_http_header'、'encrypt_aes_block'。"
+        "3. 如果无法完全确定，请使用带有描述性的保守命名，如 'suspected_logging_helper'、'unknown_logic_buffer_process'。"
+        "4. 函数名必须使用 snake_case（下划线命名法），并尽量体现具体职责。"
     )
 
-    if callee_summaries:
-        lines.append("\n[已知子函数语义（跨视图统一）]\n" + "\n".join(callee_summaries))
-
-    if ext_names:
-        lines.append("\n[调用的外部 API / 导入函数（聚合自多个工具）]\n" + ", ".join(ext_names))
-
-    if string_texts:
-        lines.append(
-            "\n[函数中引用的关键字符串示例（聚合自多个工具）]\n"
-            + "\n".join(f"- {s}" for s in string_texts)
+    for idx, node in enumerate(nodes, 1):
+        display_name, body_lines = _build_unified_prompt_body(
+            conn=conn,
+            graph=graph,
+            node=node,
+            analysis_info=analysis_info,
+            max_disasm_lines=max_disasm_lines,
+            max_pseudo_chars_per_tool=max_pseudo_chars_per_tool,
+            max_strings=max_strings,
         )
 
-    lines.append("\n[代表视图的函数反汇编（部分）]\n" + disasm_text)
-    lines.append("\n[多视图伪代码（可能互相矛盾，请综合判断）]\n" + decompilation_text)
+        lines.append(
+            f"\n[函数 {idx}/{len(nodes)}] {display_name} @ 0x{node.entry_va:08X} "
+            f"(function_ids={sorted(node.function_ids)})"
+        )
+        lines.extend(body_lines)
 
     return "\n".join(lines)
 
@@ -4021,7 +4467,6 @@ def run_local_var_phase(
     ida_sync: bool,
     ida_url: str,
     dry_run: bool = False,
-    max_funcs: int = 0,
 ) -> None:
     """
     第四阶段入口：遍历高置信度函数，优化局部变量名。
@@ -4055,9 +4500,6 @@ def run_local_var_phase(
 
     # 按分数从高到低排序
     candidates.sort(key=lambda x: x[1], reverse=True)
-
-    if max_funcs > 0:
-        candidates = candidates[:max_funcs]
 
     print(f"[Phase 4] Local Variable Renaming: 目标函数数量 {len(candidates)}")
 
@@ -4143,6 +4585,21 @@ def analyze_one_function(
 
     signature = str(result.get("signature", "")).strip() or None
     summary = str(result.get("summary", "")).strip() or None
+
+    # 尝试对单视图结果的函数名也做一次去重处理，避免与其他函数同名
+    if signature:
+        raw_name = _extract_name_from_signature(signature, fallback="") or ""
+        if raw_name and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name):
+            unique_name = _make_name_unique(conn, raw_name, function_id)
+            if unique_name != raw_name:
+                logger.info(
+                    "[Phase1-Single] entry_va=0x%08X 函数名发生去重调整: %s -> %s",
+                    node.entry_va,
+                    raw_name,
+                    unique_name,
+                )
+            signature = signature.replace(raw_name, unique_name)
+
     confidence = result.get("confidence")
     try:
         confidence_score = int(float(confidence) * 100) if confidence is not None else 0
@@ -4187,65 +4644,15 @@ def analyze_one_function(
     conn.commit()
 
 
-def analyze_one_unified_function(
+def _apply_unified_llm_result(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
-    entry_va: int,
-    analysis_info: Dict[int, dict],
-    llm_settings: LLMSettings,
-    dry_run: bool = False,
+    node: UnifiedFunctionNode,
+    result: Dict[str, Any],
     ida_sync: bool = False,
     ida_url: Optional[str] = None,
 ) -> None:
-    """
-    对一个“物理函数”（按 entry_va 聚合的 UnifiedFunctionNode）执行一次 LLM 分析，
-    并将结果写回所有关联的 functions.id 上的 analysis_status 记录。
-    """
-    # 在启用 IDA 同步的情况下，先确认 idat_server 在线
-    if ida_sync and ida_url:
-        wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
-
-    node = graph.nodes[entry_va]
-    prompt = build_unified_prompt(conn, graph, node, analysis_info)
-    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
-
-    print("=" * 80)
-    print(
-        f"[TARGET] entry_va=0x{node.entry_va:08X}, "
-        f"names={','.join(sorted(node.names)) if node.names else '(unnamed)'}, "
-        f"function_ids={sorted(node.function_ids)}"
-    )
-    logger.info(
-        "[Phase1] TARGET entry_va=0x%08X, names=%s, function_ids=%s",
-        node.entry_va,
-        ",".join(sorted(node.names)) if node.names else "(unnamed)",
-        sorted(node.function_ids),
-    )
-
-    if dry_run:
-        print("\n[DRY-RUN] 本轮不会调用 LLM。以下是请求参数：\n")
-        print(json.dumps(request_kwargs, ensure_ascii=False, indent=2))
-        print("\n[DRY-RUN] 构造的 Prompt:\n")
-        print(prompt)
-        print("\n[DRY-RUN] 如需实际调用 LLM，请去掉 --dry-run 参数。")
-        return
-
-    result = call_llm_analyze_function(
-        conversation=conversation,
-        request_kwargs=request_kwargs,
-        api_settings=llm_settings.api_settings,
-    )
-
-    if not result:
-        msg = "[LLM] 本物理函数 LLM 返回内容非法或多次尝试失败，保持 PENDING 状态以便后续重试。"
-        print(msg)
-        logger.warning(
-            "[Phase1] %s entry_va=0x%08X, function_ids=%s",
-            msg,
-            node.entry_va,
-            sorted(node.function_ids),
-        )
-        return
+    """将 LLM 返回结果写回数据库，并可选同步到 IDA。"""
 
     signature = str(result.get("signature", "")).strip() or None
     summary = str(result.get("summary", "")).strip() or None
@@ -4254,6 +4661,30 @@ def analyze_one_unified_function(
         confidence_score = int(float(confidence) * 100) if confidence is not None else 0
     except (TypeError, ValueError):
         confidence_score = 0
+
+    # 1) 从 signature 中提取 LLM 建议的名字，并在写入数据库前做一次去重处理
+    if signature and node.function_ids:
+        raw_name = _extract_name_from_signature(signature, fallback="") or ""
+        if raw_name:
+            if DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name):
+                # 仍然是明显的默认地址命名（sub_XXXX / fun_XXXX / loc_XXXX），保留原始名字，由上层决定是否改名
+                logger.info(
+                    "[Phase1] entry_va=0x%08X LLM 返回默认风格函数名 %s，保留现有命名。",
+                    node.entry_va,
+                    raw_name,
+                )
+            else:
+                ref_fid = next(iter(node.function_ids))
+                unique_name = _make_name_unique(conn, raw_name, ref_fid)
+                if unique_name != raw_name:
+                    logger.info(
+                        "[Phase1] entry_va=0x%08X 函数名发生去重调整: %s -> %s",
+                        node.entry_va,
+                        raw_name,
+                        unique_name,
+                    )
+                # 用去重后的名字替换 signature 中出现的原始名字
+                signature = signature.replace(raw_name, unique_name)
 
     libfunction = _coerce_libfunction_flag(result.get("libfunction"))
     if libfunction:
@@ -4308,7 +4739,7 @@ def analyze_one_unified_function(
                 conn=conn,
                 graph=graph,
                 node=node,
-                entry_va=entry_va,
+                entry_va=node.entry_va,
                 signature=signature,
                 summary=summary or "",
                 ida_url=ida_url or "http://127.0.0.1:12345",
@@ -4316,6 +4747,162 @@ def analyze_one_unified_function(
             )
         except Exception as exc:  # 同步失败不应影响主流程
             print(f"[IDA-Sync] 同步到 IDA 失败: {exc}")
+
+
+def analyze_one_unified_function(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_va: int,
+    analysis_info: Dict[int, dict],
+    llm_settings: LLMSettings,
+    dry_run: bool = False,
+    ida_sync: bool = False,
+    ida_url: Optional[str] = None,
+) -> None:
+    """
+    对一个“物理函数”（按 entry_va 聚合的 UnifiedFunctionNode）执行一次 LLM 分析，
+    并将结果写回所有关联的 functions.id 上的 analysis_status 记录。
+    """
+
+    # 在启用 IDA 同步的情况下，先确认 idat_server 在线
+    if ida_sync and ida_url:
+        wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
+
+    node = graph.nodes[entry_va]
+    prompt = build_unified_prompt(conn, graph, node, analysis_info)
+    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+    print("=" * 80)
+    print(
+        f"[TARGET] entry_va=0x{node.entry_va:08X}, "
+        f"names={','.join(sorted(node.names)) if node.names else '(unnamed)'}, "
+        f"function_ids={sorted(node.function_ids)}"
+    )
+    logger.info(
+        "[Phase1] TARGET entry_va=0x%08X, names=%s, function_ids=%s",
+        node.entry_va,
+        ",".join(sorted(node.names)) if node.names else "(unnamed)",
+        sorted(node.function_ids),
+    )
+
+    if dry_run:
+        print("\n[DRY-RUN] 本轮不会调用 LLM。以下是请求参数：\n")
+        print(json.dumps(request_kwargs, ensure_ascii=False, indent=2))
+        print("\n[DRY-RUN] 构造的 Prompt:\n")
+        print(prompt)
+        print("\n[DRY-RUN] 如需实际调用 LLM，请去掉 --dry-run 参数。")
+        return
+
+    result = call_llm_analyze_function(
+        conversation=conversation,
+        request_kwargs=request_kwargs,
+        api_settings=llm_settings.api_settings,
+    )
+
+    if not result:
+        msg = "[LLM] 本物理函数 LLM 返回内容非法或多次尝试失败，保持 PENDING 状态以便后续重试。"
+        print(msg)
+        logger.warning(
+            "[Phase1] %s entry_va=0x%08X, function_ids=%s",
+            msg,
+            node.entry_va,
+            sorted(node.function_ids),
+        )
+        return
+
+    _apply_unified_llm_result(
+        conn=conn,
+        graph=graph,
+        node=node,
+        result=result,
+        ida_sync=ida_sync,
+        ida_url=ida_url,
+    )
+
+
+def analyze_unified_batch(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    nodes: List[UnifiedFunctionNode],
+    analysis_info: Dict[int, dict],
+    llm_settings: LLMSettings,
+    prompt: Optional[str] = None,
+    estimated_tokens: Optional[int] = None,
+    dry_run: bool = False,
+    ida_sync: bool = False,
+    ida_url: Optional[str] = None,
+) -> None:
+    """批量分析多个物理函数，共用一次 LLM 调用。"""
+
+    if not nodes:
+        return
+
+    if prompt is None:
+        prompt = build_unified_batch_prompt(conn, graph, nodes, analysis_info)
+
+    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+    print("=" * 80)
+    target_list = ", ".join(f"0x{n.entry_va:08X}" for n in nodes)
+    print(f"[TARGET-BATCH] size={len(nodes)} entries=[{target_list}]")
+    if estimated_tokens is not None:
+        print(f"[TARGET-BATCH] 预估 prompt tokens ≈ {estimated_tokens}, max_tokens={llm_settings.max_tokens}")
+
+    logger.info(
+        "[Phase1-Batch] TARGET size=%d, entry_vas=%s",
+        len(nodes),
+        target_list,
+    )
+
+    if ida_sync and ida_url:
+        wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
+
+    if dry_run:
+        print("\n[DRY-RUN] 本轮不会调用 LLM。以下是请求参数：\n")
+        print(json.dumps(request_kwargs, ensure_ascii=False, indent=2))
+        print("\n[DRY-RUN] 构造的 Prompt:\n")
+        print(prompt)
+        print("\n[DRY-RUN] 如需实际调用 LLM，请去掉 --dry-run 参数。")
+        return
+
+    result_list = call_llm_analyze_function(
+        conversation=conversation,
+        request_kwargs=request_kwargs,
+        api_settings=llm_settings.api_settings,
+        expect_array=True,
+        expected_size=len(nodes),
+    )
+
+    if not result_list or not isinstance(result_list, list):
+        msg = "[LLM] 本批次返回内容非法或多次尝试失败，保持 PENDING 状态以便后续重试。"
+        print(msg)
+        logger.warning("[Phase1-Batch] %s targets=%s", msg, target_list)
+        return
+
+    if len(result_list) != len(nodes):
+        logger.warning(
+            "[Phase1-Batch] 返回数组长度与请求不一致：expected=%d, got=%d",
+            len(nodes),
+            len(result_list),
+        )
+
+    for node, result in zip(nodes, result_list):
+        if not isinstance(result, dict):
+            logger.warning(
+                "[Phase1-Batch] 跳过 entry_va=0x%08X，原因：返回值不是对象：%r",
+                node.entry_va,
+                result,
+            )
+            continue
+
+        _apply_unified_llm_result(
+            conn=conn,
+            graph=graph,
+            node=node,
+            result=result,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+        )
 
 
 # =========================
@@ -4419,12 +5006,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="用于分析的 LLM 模型名称，优先级：命令行 > config.yaml > gpt-4.1-mini。",
     )
     parser.add_argument(
-        "--max-functions",
-        type=int,
-        default=3,
-        help="本次运行最多分析多少个函数（按动态优先级迭代选择）。",
-    )
-    parser.add_argument(
         "--max-globals",
         type=int,
         default=0,
@@ -4445,6 +5026,12 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="LLM 回复的最大 token 数，优先级：命令行 > config.yaml > 512。",
     )
     parser.add_argument(
+        "--batch",
+        type=int,
+        default=25,
+        help="Phase 1 批处理大小（默认 50，最小 1），一次性并行分析多个物理函数。",
+    )
+    parser.add_argument(
         "--skip-validation",
         action="store_true",
         help="跳过第二阶段调用链逻辑流校验。",
@@ -4458,12 +5045,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         "--skip-lvar",
         action="store_true",
         help="跳过第四阶段局部变量（v1, a2...）的易读性整理。",
-    )
-    parser.add_argument(
-        "--max-lvar-funcs",
-        type=int,
-        default=20,
-        help="第四阶段最多处理多少个函数（默认20，0表示不限制）。",
     )
     parser.add_argument(
         "--dry-run",
@@ -4534,7 +5115,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         ensure_analysis_schema(conn)
         ensure_analysis_rows_for_binary(conn, binary_id)
 
-        # 在构建统一图之前可选做一次 IDA/DB 差异对齐（若并非全部函数均为 PENDING）
+        # 在构建统一图之前，仅当所有函数均为 PENDING 时才做一次 IDA/DB 差异对齐
         if args.ida_sync:
             analysis_info_probe = load_analysis_info(conn)
             total = 0
@@ -4547,9 +5128,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
             all_pending = total > 0 and pending == total
 
-            if all_pending or total == 0:
-                print("[Align] 所有函数均为 PENDING，跳过 IDA/DB 不一致对齐，先走基础重命名流程。")
-            else:
+            if all_pending:
                 _reconcile_ida_db_mismatch(
                     conn=conn,
                     binary_id=binary_id,
@@ -4557,14 +5136,18 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     llm_settings=llm_settings,
                     ida_sync=args.ida_sync,
                 )
+            else:
+                print(
+                    f"[Align] 存在非 PENDING 函数，跳过 IDA/DB 不一致对齐 (pending={pending}, total={total})."
+                )
 
         # 构建跨视图统一依赖图（在可能的删除/同步之后）
         unified_graph = build_unified_graph(conn, binary_id)
         print(f"统一图中共有 {len(unified_graph.nodes)} 个物理函数节点。")
 
         # ===== 第一阶段：底向上知识传播（带断点续工 + 进度条） =====
-        # 预估本轮最多要处理的物理函数数量：
-        # 仅统计“尚未 ANALYZED/LOCKED 的物理节点”数量，并与 --max-functions 取最小值。
+        # 预估本轮要处理的物理函数数量：
+        # 仅统计“尚未 ANALYZED/LOCKED 的物理节点”数量。
         analysis_info = load_analysis_info(conn)
         scores = compute_unified_scores(unified_graph, analysis_info)
         update_unified_scores_in_db(conn, unified_graph, scores)
@@ -4581,47 +5164,66 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 pending_nodes_initial.append(node)
 
         total_pending = len(pending_nodes_initial)
+        processed = 0
+
         if total_pending == 0:
-            print("当前 binary 下已无 PENDING 物理函数，跳过第一阶段基础队列。")
-            processed = 0
-            # 额外检查 IDA 视图是否仍存在 sub_ 前缀的函数名，若有则直接走第一阶段 LLM 分析/重命名流程
-            ida_subs = _load_ida_subfunc_entries(conn, binary_id)
+            print("当前 binary 下已无 PENDING 物理函数。")
+
+            # 额外检查 IDA 视图是否仍存在 sub_ 前缀的函数名，若有则重置回 PENDING 并走批处理队列
+            ida_subs = _load_ida_subfunc_entries(
+                conn,
+                binary_id,
+                ida_url=args.ida_url if args.ida_sync else None,
+            )
+
             if ida_subs:
                 print(
-                    f"[Phase 1] 发现 {len(ida_subs)} 个 IDA 函数仍为 sub_ 前缀，触发第一阶段 LLM 重跑。"
+                    f"[Phase 1] 发现 {len(ida_subs)} 个 IDA 函数仍为 sub_ 前缀，正在将其重置为 PENDING 以便批量分析..."
                 )
-                analysis_info = load_analysis_info(conn)
-                scores = compute_unified_scores(unified_graph, analysis_info)
-                update_unified_scores_in_db(conn, unified_graph, scores)
+
+                cur = conn.cursor()
+                ids_to_reset: Set[int] = set()
+                missing_nodes: List[Tuple[int, str]] = []
 
                 for entry_va, ida_name in ida_subs.items():
                     node = unified_graph.nodes.get(entry_va)
                     if not node:
+                        missing_nodes.append((entry_va, ida_name))
                         continue
-                    try:
-                        analyze_one_unified_function(
-                            conn=conn,
-                            graph=unified_graph,
-                            entry_va=entry_va,
-                            analysis_info=analysis_info,
-                            llm_settings=llm_settings,
-                            dry_run=args.dry_run,
-                            ida_sync=args.ida_sync,
-                            ida_url=args.ida_url,
-                        )
-                        processed += 1
-                    except Exception as exc:
-                        logger.warning(
-                            "[Phase1] sub_ LLM 重跑失败 entry_va=0x%08X: %s",
-                            entry_va,
-                            exc,
-                        )
+
+                    for fid in node.function_ids:
+                        ids_to_reset.add(fid)
+
+                    if node not in pending_nodes_initial:
+                        pending_nodes_initial.append(node)
+
+                if missing_nodes:
+                    print(
+                        f"[Phase 1] 警告: {len(missing_nodes)} 个 sub_ 函数在统一依赖图中未找到 (可能是新生成的)，已跳过。"
+                    )
+
+                if ids_to_reset:
+                    placeholders = ",".join("?" for _ in ids_to_reset)
+                    cur.execute(
+                        f"""
+                        UPDATE analysis_status
+                        SET analysis_state = 'PENDING',
+                            confidence_score = 0,
+                            summary_signature = NULL,
+                            semantic_summary = NULL
+                        WHERE function_id IN ({placeholders});
+                        """,
+                        tuple(ids_to_reset),
+                    )
+                    conn.commit()
+                    print(f"[Phase 1] 已重置 {len(ids_to_reset)} 条记录为 PENDING。")
+
+                    total_pending = len(pending_nodes_initial)
             else:
                 print("[Phase 1] 未发现 sub_ 前缀残留，直接跳过第一阶段。")
-        else:
-            target_count = args.max_functions
-            if target_count <= 0 or target_count > total_pending:
-                target_count = total_pending
+
+        if total_pending > 0:
+            target_count = total_pending
 
             print(
                 f"[Phase 1] 计划分析 {target_count} 个物理函数 "
@@ -4634,7 +5236,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 unit="func",
             )
 
-            processed = 0
+            batch_target = max(1, args.batch or 1)
+
             while processed < target_count:
                 analysis_info = load_analysis_info(conn)
                 scores = compute_unified_scores(unified_graph, analysis_info)
@@ -4657,43 +5260,120 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     pbar.write("当前 binary 下已无 PENDING 物理函数，分析提前结束。")
                     break
 
-                # 选择评分最高的一个作为本轮目标
+                # 按得分排序，优先处理高分节点
                 pending_nodes.sort(
                     key=lambda n: scores.get(n.entry_va, 0),
                     reverse=True,
                 )
-                target_node = pending_nodes[0]
+
+                batch_size = min(batch_target, len(pending_nodes))
+                selected_nodes = pending_nodes[:batch_size]
+
+                # 预组装批量 Prompt，并按 token 限制动态缩减 batch
+                prompt: Optional[str] = None
+                estimated_tokens: Optional[int] = None
+                while batch_size >= 1:
+                    if batch_size == 1:
+                        prompt = build_unified_prompt(
+                            conn,
+                            unified_graph,
+                            selected_nodes[0],
+                            analysis_info,
+                        )
+                    else:
+                        prompt = build_unified_batch_prompt(
+                            conn,
+                            unified_graph,
+                            selected_nodes,
+                            analysis_info,
+                        )
+
+                    estimated_tokens = estimate_token_usage(prompt)
+                    if estimated_tokens <= llm_settings.max_tokens or batch_size == 1:
+                        break
+
+                    batch_size -= 1
+                    selected_nodes = pending_nodes[:batch_size]
+
+                if batch_size == 0:
+                    pbar.write("[Phase 1] 未能构造有效批次，终止本轮。")
+                    break
+
+                if batch_size < min(batch_target, len(pending_nodes)) and estimated_tokens is not None:
+                    logger.info(
+                        "[Phase1-Batch] 因 token 预估调整批量大小：requested=%d, applied=%d, estimated_tokens=%d, max_tokens=%d",
+                        batch_target,
+                        batch_size,
+                        estimated_tokens,
+                        llm_settings.max_tokens,
+                    )
+
+                top_node = selected_nodes[0]
                 desc = (
-                    f"Phase 1: 0x{target_node.entry_va:08X} "
-                    f"(score={scores.get(target_node.entry_va, 0)})"
+                    f"Phase 1: batch={batch_size} top=0x{top_node.entry_va:08X} "
+                    f"(score={scores.get(top_node.entry_va, 0)})"
                 )
                 pbar.set_description(desc)
 
-                print(
-                    "\n[SELECT] 选择评分最高的待分析物理函数："
-                    f"{'/'.join(sorted(target_node.names)) if target_node.names else '(unnamed)'} "
-                    f"(entry_va=0x{target_node.entry_va:08X}, "
-                    f"score={scores.get(target_node.entry_va, 0)}, "
-                    f"function_ids={sorted(target_node.function_ids)})"
-                )
+                if batch_size > 1:
+                    print("\n[SELECT] 本轮批量分析候选：")
+                    for node in selected_nodes:
+                        print(
+                            f"  - 0x{node.entry_va:08X} score={scores.get(node.entry_va, 0)} "
+                            f"names={','.join(sorted(node.names)) if node.names else '(unnamed)'} "
+                            f"function_ids={sorted(node.function_ids)}"
+                        )
 
-                # 执行 LLM 分析（或 dry-run）
-                analyze_one_unified_function(
-                    conn=conn,
-                    graph=unified_graph,
-                    entry_va=target_node.entry_va,
-                    analysis_info=analysis_info,
-                    llm_settings=llm_settings,
-                    dry_run=args.dry_run,
-                    ida_sync=args.ida_sync,
-                    ida_url=args.ida_url,
-                )
+                    analyze_unified_batch(
+                        conn=conn,
+                        graph=unified_graph,
+                        nodes=selected_nodes,
+                        analysis_info=analysis_info,
+                        llm_settings=llm_settings,
+                        prompt=prompt,
+                        estimated_tokens=estimated_tokens,
+                        dry_run=args.dry_run,
+                        ida_sync=args.ida_sync,
+                        ida_url=args.ida_url,
+                    )
 
-                processed += 1
-                pbar.update(1)
+                    processed += batch_size
+                    pbar.update(batch_size)
+                else:
+                    target_node = selected_nodes[0]
+                    print(
+                        "\n[SELECT] 选择评分最高的待分析物理函数："
+                        f"{'/'.join(sorted(target_node.names)) if target_node.names else '(unnamed)'} "
+                        f"(entry_va=0x{target_node.entry_va:08X}, "
+                        f"score={scores.get(target_node.entry_va, 0)}, "
+                        f"function_ids={sorted(target_node.function_ids)})"
+                    )
+
+                    if estimated_tokens and estimated_tokens > llm_settings.max_tokens:
+                        logger.warning(
+                            "[Phase1] 单函数 Prompt 预估已超过 max_tokens: estimated=%d, max=%d",
+                            estimated_tokens,
+                            llm_settings.max_tokens,
+                        )
+
+                    analyze_one_unified_function(
+                        conn=conn,
+                        graph=unified_graph,
+                        entry_va=target_node.entry_va,
+                        analysis_info=analysis_info,
+                        llm_settings=llm_settings,
+                        dry_run=args.dry_run,
+                        ida_sync=args.ida_sync,
+                        ida_url=args.ida_url,
+                    )
+
+                    processed += 1
+                    pbar.update(1)
 
             pbar.close()
             print(f"\n[Phase 1] 完成，本次运行共处理物理函数数量：{processed}")
+        else:
+            print("[Phase 1] 无需处理的任务，跳过。")
 
     finally:
         conn.close()
@@ -4707,7 +5387,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     conn=conn2,
                     graph=unified_graph,
                     llm_settings=llm_settings,
-                    max_functions=args.max_functions,
                     ida_sync=args.ida_sync,
                     ida_url=args.ida_url,
                     dry_run=args.dry_run,
@@ -4742,7 +5421,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 ida_sync=args.ida_sync,
                 ida_url=args.ida_url,
                 dry_run=args.dry_run,
-                max_funcs=args.max_lvar_funcs,
             )
         finally:
             conn4.close()
@@ -4751,21 +5429,16 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     if args.ida_sync and requests is not None:
         try:
             print(f"[IDA-Sync] 请求 IDA 保存数据库并有序退出: {args.ida_url}")
-            resp = requests.post(
+            requests.post(
                 args.ida_url,
                 json={"action": "save_and_exit"},
-                timeout=20.0,
+                timeout=2.0,
             )
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = {}
-                print(f"[IDA-Sync] save_and_exit 响应: {data or resp.text[:200]}")
-            else:
-                print(f"[IDA-Sync] save_and_exit HTTP {resp.status_code}: {resp.text[:200]}")
+            print("[IDA-Sync] 指令已发送。")
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout):
+            print("[IDA-Sync] IDA 已响应并正在关闭（连接中断是预期的）。")
         except Exception as exc:
-            print(f"[IDA-Sync] save_and_exit 调用失败: {exc}")
+            print(f"[IDA-Sync] save_and_exit 调用异常 (可忽略): {exc}")
 
 
 if __name__ == "__main__":

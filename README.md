@@ -268,7 +268,6 @@ python tools/Semantics_Alignment/semantic_align.py --sample tmp/Malware_sample.e
 可调参数包括：
 
 - `--db` / `--ghidra-dir` / `--ida-dir`：自定义 SQLite 数据库与分析目录。
-- `--max-functions` / `--max-lvar-funcs`：控制本次知识传播与局部变量整理处理多少个函数。
 - `--ida-start-delay`：在启动 `idat` 后等待的秒数（默认 3 秒）。
 - `--no-align`：跳过 `alignment_loader` 阶段以复用已有数据库。
 - `--no-ida`：只执行离线 `knowledge_propagation.py`，不启动 IDA 且不做 IDA 同步。
@@ -288,10 +287,10 @@ python tools/Semantics_Alignment/semantic_align.py --sample tmp/Malware_sample.e
 
 `knowledge_propagation.py` 使用 `alignment_loader` 生成的 SQLite 数据库，在 `analysis_status` 表上维护 `PENDING`/`ANALYZED`/`LOCKED` 状态后构建跨视图统一图（`UnifiedGraph`），并按启发式分数逐个函数调用 LLM 生成签名与语义摘要，结果写回 `analysis_status`：
 
-- **阶段 1**：LLM 知识传播（`--max-functions`、`--dry-run` 控制）；可选开启 `--ida-sync` 把更新同步给 IDA。
+- **阶段 1**：LLM 知识传播（可配合 `--dry-run`）；可选开启 `--ida-sync` 把更新同步给 IDA。
 - **阶段 2**：调用链 Top-down 校验（`--skip-validation` 跳过）。
 - **阶段 3**：全局变量重命名与类型推断（`--skip-global` 跳过）。
-- **阶段 4**：局部变量可读性整理（`--skip-lvar` 或 `--max-lvar-funcs` 控制）。
+- **阶段 4**：局部变量可读性整理（`--skip-lvar` 控制）。
 
 默认会上传 `tools/Semantics_Alignment/config.yaml` 中的 API 设置并在 `<db>.knowledge.log` 中记录进度，便于调试与复现。
 

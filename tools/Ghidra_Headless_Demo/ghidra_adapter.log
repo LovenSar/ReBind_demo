@@ -1763,3 +1763,12 @@
 2025-12-10 11:47:59,116 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
 2025-12-10 11:47:59,117 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
 2025-12-10 11:47:59,120 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-10 11:49:23,878 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-10 11:49:23,878 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-10 11:49:23,887 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-10 11:50:25,800 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-10 11:50:25,801 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-10 11:50:25,801 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-10 11:50:25,802 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-10 11:50:25,802 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-10 11:50:25,805 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo

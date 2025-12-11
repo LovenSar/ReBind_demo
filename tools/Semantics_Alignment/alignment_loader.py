@@ -30,12 +30,39 @@ import hashlib
 import re
 import sqlite3
 import textwrap
+import builtins
+import inspect
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Tuple, List, Set, Dict
 
 from openpyxl import Workbook
+
+
+def _install_print_with_location() -> None:
+    """Prefix every print with absolute file path and line number."""
+    if getattr(builtins, "_original_print", None):
+        return
+
+    builtins._original_print = builtins.print  # type: ignore[attr-defined]
+
+    def _print_with_location(*args, **kwargs):
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller = frame.f_back
+            path = Path(caller.f_code.co_filename).resolve()
+            lineno = caller.f_lineno
+            prefix = f"{path}:{lineno} "
+        else:
+            prefix = ""
+        message = " ".join(str(a) for a in args)
+        builtins._original_print(f"{prefix}{message}", **kwargs)
+
+    builtins.print = _print_with_location  # type: ignore[assignment]
+
+
+_install_print_with_location()
 
 
 @dataclass

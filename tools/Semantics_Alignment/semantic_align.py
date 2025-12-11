@@ -20,8 +20,8 @@ semantic_align.py
        -S"tools/Semantics_Alignment/idat_server.py" "tmp/Malware_sample.exe"
 
   python tools/Semantics_Alignment/knowledge_propagation.py ^
-         --db tmp/Malware_sample.exe.db ^
-         --ida-sync --max-functions 0 --max-lvar-funcs 0
+      --db tmp/Malware_sample.exe.db ^
+      --ida-sync
 """
 
 from __future__ import annotations
@@ -31,6 +31,8 @@ import re
 import subprocess
 import sys
 import time
+import builtins
+import inspect
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -41,6 +43,31 @@ REPO_ROOT = SCRIPT_PATH.parents[2]
 
 DEFAULT_IDA_URL = "http://127.0.0.1:12345"
 DEFAULT_IDAT_EXE = "idat"
+
+
+def _install_print_with_location() -> None:
+    """Prefix every print with absolute file path and line number."""
+    if getattr(builtins, "_original_print", None):
+        return
+
+    builtins._original_print = builtins.print  # type: ignore[attr-defined]
+
+    def _print_with_location(*args, **kwargs):
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller = frame.f_back
+            path = Path(caller.f_code.co_filename).resolve()
+            lineno = caller.f_lineno
+            prefix = f"{path}:{lineno} "
+        else:
+            prefix = ""
+        message = " ".join(str(a) for a in args)
+        builtins._original_print(f"{prefix}{message}", **kwargs)
+
+    builtins.print = _print_with_location  # type: ignore[assignment]
+
+
+_install_print_with_location()
 
 
 def derive_tmp_layout(sample_path: Path) -> dict:
@@ -133,8 +160,6 @@ def launch_idat_server(
 def run_knowledge_propagation(
     db_path: Path,
     ida_url: str,
-    max_functions: int,
-    max_lvar_funcs: int,
     ida_sync: bool = True,
 ) -> int:
     """
@@ -145,10 +170,6 @@ def run_knowledge_propagation(
         str(TOOLS_DIR / "knowledge_propagation.py"),
         "--db",
         str(db_path),
-        "--max-functions",
-        str(max_functions),
-        "--max-lvar-funcs",
-        str(max_lvar_funcs),
     ]
     if ida_sync:
         cmd.append("--ida-sync")
@@ -214,18 +235,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="不启动 IDA / idat_server，仅离线运行 knowledge_propagation（不会做 IDA 同步）。",
     )
     parser.add_argument(
-        "--max-functions",
-        type=int,
-        default=0,
-        help="传递给 knowledge_propagation.py 的 --max-functions 参数（默认 0 表示不限制）。",
-    )
-    parser.add_argument(
-        "--max-lvar-funcs",
-        type=int,
-        default=0,
-        help="传递给 knowledge_propagation.py 的 --max-lvar-funcs 参数（默认 0 表示不限制）。",
-    )
-    parser.add_argument(
         "--ida-start-delay",
         type=float,
         default=3.0,
@@ -275,8 +284,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         run_knowledge_propagation(
             db_path=db_path,
             ida_url=ida_url,
-            max_functions=args.max_functions,
-            max_lvar_funcs=args.max_lvar_funcs,
             ida_sync=False,
         )
         return
@@ -299,8 +306,6 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     kp_ret = run_knowledge_propagation(
         db_path=db_path,
         ida_url=ida_url,
-        max_functions=args.max_functions,
-        max_lvar_funcs=args.max_lvar_funcs,
         ida_sync=True,
     )
 

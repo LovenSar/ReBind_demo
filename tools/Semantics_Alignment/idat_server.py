@@ -20,6 +20,10 @@ import socketserver
 import sys
 import signal
 import os
+import builtins
+import inspect
+from pathlib import Path
+import re
 
 import ida_auto
 import ida_hexrays
@@ -30,10 +34,37 @@ import idc
 import ida_loader  # [关键] 用于显式保存数据库
 import ida_typeinf
 import ida_funcs
+import idautils
 
 PORT = 12345
 
 _RUNNING = True  # 控制主循环是否继续
+_CLEANED_UP = False  # 确保清理逻辑只执行一次
+
+
+def _install_print_with_location() -> None:
+    """Prefix every print with absolute file path and line number."""
+    if getattr(builtins, "_original_print", None):
+        return
+
+    builtins._original_print = builtins.print  # type: ignore[attr-defined]
+
+    def _print_with_location(*args, **kwargs):
+        frame = inspect.currentframe()
+        if frame and frame.f_back:
+            caller = frame.f_back
+            path = Path(caller.f_code.co_filename).resolve()
+            lineno = caller.f_lineno
+            prefix = f"{path}:{lineno} "
+        else:
+            prefix = ""
+        message = " ".join(str(a) for a in args)
+        builtins._original_print(f"{prefix}{message}", **kwargs)
+
+    builtins.print = _print_with_location  # type: ignore[assignment]
+
+
+_install_print_with_location()
 
 
 def init_hexrays() -> bool:
@@ -57,11 +88,12 @@ def perform_cleanup_and_exit(signum=None, frame=None):
     执行保存和退出操作。
     解决直接强制退出导致的 .id0/.id1 文件残留问题。
     """
-    global _RUNNING
-    # 如果已经正在退出中，避免重复执行
-    if not _RUNNING and signum is None:
+    global _RUNNING, _CLEANED_UP
+    # 幂等：清理只执行一次
+    if _CLEANED_UP:
         return
-    
+
+    _CLEANED_UP = True
     _RUNNING = False
     
     print("\n" + "="*50)
@@ -138,6 +170,10 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 status_code = 200
             elif action == "get_function_info":
                 result = self._execute_in_main_thread(self._handle_get_function_info, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
+            elif action == "get_sub_functions":
+                result = self._execute_in_main_thread(self._handle_get_sub_functions, payload)
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
             elif action == "ping":
@@ -330,9 +366,8 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_rename_lvar(self, payload: dict) -> dict:
         """
-        处理局部变量重命名请求：
-        使用直接修改 lvar_t 对象并保存用户命名的方式，
-        避免依赖 ida_hexrays.rename_lvar 等高层 API 在不同版本下的签名差异。
+        处理局部变量重命名请求。
+        改进版：更健壮的变量查找与应用。
         """
         ea = payload.get("ea")
         renames = payload.get("renames") or {}
@@ -340,7 +375,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         if ea is None:
             return {"status": "error", "msg": "missing 'ea'"}
 
-        # 转换 ea（支持十六进制和十进制字符串）
+        # 转换 ea
         if isinstance(ea, str):
             s = ea.strip()
             try:
@@ -353,7 +388,8 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         ea = int(ea)
 
         if not isinstance(renames, dict) or not renames:
-            return {"status": "error", "msg": "missing or invalid 'renames' dict"}
+            # 如果 renames 为空，可能是 LLM 觉得无需修改，直接返回 ok
+            return {"status": "ok", "ea": ea, "applied": {}}
 
         if not init_hexrays():
             return {"status": "error", "msg": "Hex-Rays decompiler not available"}
@@ -365,6 +401,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             if not func:
                 return {"status": "error", "msg": f"no function at 0x{ea:X}"}
 
+            # 刷新缓存
             try:
                 ida_hexrays.clear_cached_cfuncs()
             except Exception:
@@ -372,14 +409,21 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
 
             cfunc = ida_hexrays.decompile(func.start_ea)
             if not cfunc:
-                return {
-                    "status": "error",
-                    "msg": f"decompile failed at 0x{func.start_ea:X}",
-                }
+                return {"status": "error", "msg": f"decompile failed at 0x{func.start_ea:X}"}
 
             # 建立 name -> lvar 映射
             lvars = cfunc.get_lvars()
             lvars_by_name = {lv.name: lv for lv in lvars}
+
+            # 同时也建立 stripped_name -> lvar 映射 (例如 "v1" -> lvar)
+            # 用于处理可能的后缀差异 (LLM 说 v1, IDA 实际上是 v1_1)
+            lvars_fuzzy = {}
+            for lv in lvars:
+                # 简单清洗名字，去掉末尾的 _数字
+                base = re.sub(r"_\d+$", "", lv.name)
+                if base not in lvars_fuzzy:
+                    lvars_fuzzy[base] = lv
+                lvars_fuzzy[lv.name] = lv  # 原始名字优先
 
             applied: dict = {}
             modified = False
@@ -388,18 +432,23 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 if not isinstance(old_name, str) or not isinstance(new_name, str):
                     continue
 
-                # 先按原名查找，若失败且不以 v 开头，尝试 v+old_name
+                # 1. 精确查找
                 lvar = lvars_by_name.get(old_name)
-                if not lvar and not old_name.startswith("v"):
-                    lvar = lvars_by_name.get("v" + old_name)
+
+                # 2. 模糊查找 (尝试去掉 LLM 可能忽略的后缀)
                 if not lvar:
+                    lvar = lvars_fuzzy.get(old_name)
+
+                if not lvar:
+                    print(
+                        f"[IDAT-Server] Lvar '{old_name}' not found in 0x{ea:X}. "
+                        f"Available: {list(lvars_by_name.keys())[:5]}..."
+                    )
                     continue
 
-                # 清洗新名字，保持 C 风格
+                # 清洗新名字
                 raw_new = new_name.strip()
-                safe_new = "".join(
-                    c if (c.isalnum() or c == "_") else "_" for c in raw_new
-                )
+                safe_new = "".join(c if (c.isalnum() or c == "_") else "_" for c in raw_new)
                 if not safe_new:
                     continue
                 if safe_new[0].isdigit():
@@ -409,45 +458,40 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                     continue
 
                 try:
-                    # 直接修改 lvar_t 名字，并标记为用户命名
+                    # 关键修改：直接修改 lvar 对象并保存
+                    print(
+                        f"[IDAT-Server] Applying lvar rename 0x{ea:X}: "
+                        f"{lvar.name} -> {safe_new}"
+                    )
+
+                    # 1. 尝试使用高层 API (如果可用)
+                    if hasattr(ida_hexrays, "rename_lvar"):
+                        ida_hexrays.rename_lvar(func.start_ea, lvar.name, safe_new)
+
+                    # 2. 无论上面是否成功，直接操作 lvar_t 并调用 set_user_name
                     lvar.name = safe_new
-                    if hasattr(lvar, "set_user_name"):
-                        try:
-                            lvar.set_user_name()
-                        except Exception:
-                            pass
+                    lvar.set_user_name()
 
                     applied[old_name] = safe_new
-                    lvars_by_name[safe_new] = lvar
-                    if old_name in lvars_by_name:
-                        del lvars_by_name[old_name]
-
                     modified = True
-                    print(
-                        f"[IDAT-Server] Lvar rename at 0x{func.start_ea:X}: "
-                        f"{old_name} -> {safe_new}"
-                    )
+
                 except Exception as exc:
-                    print(f"[IDAT-Server] Error setting lvar name: {exc}")
+                    print(f"[IDAT-Server] Error setting lvar name {old_name}: {exc}")
 
             if modified:
-                # 尝试保存局部变量用户设置
-                if hasattr(cfunc, "save_user_lvars"):
-                    try:
-                        cfunc.save_user_lvars()
-                    except Exception as exc:
-                        print(f"[IDAT-Server] save_user_lvars failed: {exc}")
-                        return {"status": "error", "msg": f"save failed: {exc}"}
-
-                # 为了获取最新伪代码，可再次反编译
+                # 必须调用 save_user_lvars 才能持久化到数据库
                 try:
+                    cfunc.save_user_lvars()
+                    # 再次刷新以确保生效
+                    ida_hexrays.clear_cached_cfuncs()
                     cfunc = ida_hexrays.decompile(func.start_ea)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"[IDAT-Server] save_user_lvars failed: {exc}")
+                    return {"status": "error", "msg": f"save failed: {exc}"}
 
             res["applied"] = applied
 
-            # 获取最新伪代码
+            # 返回最新的伪代码供 knowledge_propagation.py 更新本地 DB
             updated_code: str | None = None
             if cfunc:
                 try:
@@ -464,6 +508,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
 
             res["updated_pseudocode"] = updated_code
             return res
+
         except Exception as exc:
             import traceback
 
@@ -583,17 +628,44 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             print(f"[IDAT-Server] get_function_info failed: {exc}")
             return {"status": "error", "msg": str(exc)}
 
+    def _handle_get_sub_functions(self, payload: dict) -> dict:
+        """
+        返回当前 IDB 中所有仍为默认 sub_ 前缀的函数列表。
+        结果格式:
+            {
+                "status": "ok",
+                "sub_functions": { ea(int): name(str), ... }
+            }
+        """
+        pattern = re.compile(r"^sub_[0-9A-Fa-f]+$")
+        result: dict[int, str] = {}
+
+        try:
+            for ea in idautils.Functions():
+                try:
+                    name = idc.get_func_name(ea) or ""
+                except Exception:
+                    name = ""
+                name = name.strip()
+                if not name:
+                    continue
+                if pattern.fullmatch(name):
+                    result[int(ea)] = name
+        except Exception as exc:
+            print(f"[IDAT-Server] get_sub_functions failed: {exc}")
+            return {"status": "error", "msg": str(exc)}
+
+        return {"status": "ok", "sub_functions": result}
+
     def _handle_save_and_exit_request(self, payload: dict):
         """
         处理远程的 save_and_exit 请求。
-        只设置标志位，实际的保存和退出交给主循环结束后的 cleanup 逻辑，
-        或者通过 execute_sync 触发。
+        直接触发清理，避免遗漏。
         """
         global _RUNNING
         print("[IDAT-Server] Received remote save_and_exit command.")
         _RUNNING = False
-        # 我们这里不直接调用 qexit，而是让 handle_request 循环结束，
-        # 然后在 main 函数最后统一调用 perform_cleanup_and_exit
+        perform_cleanup_and_exit()
         
 
 def _run_server():
