@@ -2649,6 +2649,16 @@ def build_prompt_for_function(
     return "\n".join(lines)
 
 
+def _repair_json_string(text: str) -> str:
+    """
+    [新增辅助函数] 尝试修复常见的 LLM JSON 格式错误。
+    """
+    text = re.sub(r",\s*\]", "]", text)
+    text = re.sub(r",\s*\}", "}", text)
+    clean_text = text.replace("\n", " ").replace("\r", "")
+    return clean_text
+
+
 def call_llm_analyze_function(
     conversation: List[Dict[str, str]],
     request_kwargs: Dict[str, Any],
@@ -2787,9 +2797,25 @@ def call_llm_analyze_function(
 
         data = None
         parse_ok = False
+
         for candidate in candidates:
             try:
                 data = json.loads(candidate)
+                parse_ok = True
+                break
+            except json.JSONDecodeError:
+                pass
+
+            try:
+                data = json.loads(candidate, strict=False)
+                parse_ok = True
+                break
+            except json.JSONDecodeError:
+                pass
+
+            try:
+                cleaned = _repair_json_string(candidate)
+                data = json.loads(cleaned, strict=False)
                 parse_ok = True
                 break
             except json.JSONDecodeError:
