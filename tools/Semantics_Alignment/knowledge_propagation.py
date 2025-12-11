@@ -1408,17 +1408,18 @@ def build_global_var_graph(
     #    排除掉显然是函数调用的引用类型 (CALL)
     #    仅保留 DATA 读写相关的引用
     cur.execute(
-        f"""
-        SELECT DISTINCT dst_va, dst_name
-        FROM xrefs
-        WHERE view_id IN ({placeholders}) 
-          AND dst_va IS NOT NULL
-          AND ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
-        """,
-        view_ids,
+            f"""
+            SELECT DISTINCT dst_va, dst_name
+            FROM xrefs
+            WHERE view_id IN ({placeholders}) 
+                AND dst_va IS NOT NULL
+                AND ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
+            """,
+            view_ids,
     )
 
     candidate_globals: Dict[int, Set[str]] = {}
+    text_based_readers: Dict[int, Set[int]] = {}
 
     # 获取已知的所有函数入口，用于过滤
     code_entry_addrs: Set[int] = set(graph.nodes.keys())
@@ -1498,17 +1499,59 @@ def build_global_var_graph(
         if name:
             candidate_globals[addr].add(str(name))
 
+    # 3) 扫描伪代码文本，捕获 xrefs 漏掉的默认命名全局变量
+    print("[Global] 正在从伪代码文本中挖掘潜在的全局变量引用...")
+    cur.execute(
+        f"""
+        SELECT f.entry_va, pf.body
+        FROM pseudo_functions AS pf
+        JOIN functions AS f ON pf.function_id = f.id
+        JOIN binary_views AS bv ON f.view_id = bv.id
+        WHERE bv.binary_id = ? AND pf.body IS NOT NULL;
+        """,
+        (binary_id,),
+    )
+
+    scan_pattern = re.compile(
+        r"\b((?:off|dword|byte|qword|unk|word|xmmword|float|double)_[0-9A-Fa-f]+)\b",
+        re.IGNORECASE,
+    )
+
+    for entry_va, code_body in cur.fetchall():
+        if entry_va is None or not code_body:
+            continue
+
+        matches = scan_pattern.findall(code_body)
+        if not matches:
+            continue
+
+        for raw_name in matches:
+            parts = raw_name.rsplit("_", 1)
+            if len(parts) != 2:
+                continue
+
+            try:
+                addr = int(parts[1], 16)
+            except ValueError:
+                continue
+
+            if addr in code_entry_addrs:
+                continue
+
+            candidate_globals.setdefault(addr, set()).add(raw_name)
+            text_based_readers.setdefault(addr, set()).add(int(entry_va))
+
     if not candidate_globals:
         return {}
 
-    # 3) 构建 GlobalVarNode
+    # 4) 构建 GlobalVarNode
     globals_by_addr: Dict[int, GlobalVarNode] = {}
     for addr, names in candidate_globals.items():
         node = GlobalVarNode(address_va=addr)
         node.names = names
         globals_by_addr[addr] = node
 
-    # 4) 填充 readers / writers (这步逻辑不变，用于计算上下文)
+    # 5) 填充 readers / writers (这步逻辑不变，用于计算上下文)
     #    先构建快速查找表
     addr_to_func: Dict[Tuple[int, int], int] = {}
     cur.execute(
@@ -1560,6 +1603,13 @@ def build_global_var_graph(
             node.writers.add(entry_va)
         else:
             node.readers.add(entry_va)
+
+    # 6) 合并伪代码扫描得到的读者集合（避免漏掉未生成 xref 的引用）
+    for addr, readers in text_based_readers.items():
+        node = globals_by_addr.get(addr)
+        if not node:
+            continue
+        node.readers.update(readers)
 
     return globals_by_addr
 

@@ -1772,3 +1772,6 @@
 2025-12-10 11:50:25,802 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
 2025-12-10 11:50:25,802 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
 2025-12-10 11:50:25,805 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-11 18:10:58,036 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2025-12-11 18:10:58,037 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_ghidemo
+2025-12-11 18:10:58,053 - ghidra_adapter - INFO - 执行Ghidra命令...
