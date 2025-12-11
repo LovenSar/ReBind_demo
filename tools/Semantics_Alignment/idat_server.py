@@ -432,6 +432,13 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 if not isinstance(old_name, str) or not isinstance(new_name, str):
                     continue
 
+                # 避免将全局地址样式的名字当作局部变量改名
+                if re.match(r"^(qword|dword|byte|word|off|asc|unk|stru|loc)_", old_name):
+                    print(
+                        f"[IDAT-Server] Skip global-like name '{old_name}' in 0x{ea:X}"
+                    )
+                    continue
+
                 # 1. 精确查找
                 lvar = lvars_by_name.get(old_name)
 
@@ -458,36 +465,62 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                     continue
 
                 try:
-                    # 关键修改：直接修改 lvar 对象并保存
                     print(
                         f"[IDAT-Server] Applying lvar rename 0x{ea:X}: "
                         f"{lvar.name} -> {safe_new}"
                     )
 
-                    # 1. 尝试使用高层 API (如果可用)
+                    rename_done = False
+
+                    # 1. 优先使用官方高层 API（会尝试持久化）
                     if hasattr(ida_hexrays, "rename_lvar"):
-                        ida_hexrays.rename_lvar(func.start_ea, lvar.name, safe_new)
+                        try:
+                            rename_done = bool(
+                                ida_hexrays.rename_lvar(func.start_ea, lvar.name, safe_new)
+                            )
+                        except Exception as exc:
+                            print(f"[IDAT-Server] ida_hexrays.rename_lvar failed: {exc}")
 
-                    # 2. 无论上面是否成功，直接操作 lvar_t 并调用 set_user_name
-                    lvar.name = safe_new
-                    lvar.set_user_name()
+                    # 2. 兼容旧版：直接修改 lvar_t 并标记用户名称
+                    if not rename_done:
+                        lvar.name = safe_new
+                        lvar.set_user_name()
+                        rename_done = True
 
-                    applied[old_name] = safe_new
-                    modified = True
+                    if rename_done:
+                        applied[old_name] = safe_new
+                        modified = True
 
                 except Exception as exc:
                     print(f"[IDAT-Server] Error setting lvar name {old_name}: {exc}")
 
             if modified:
-                # 必须调用 save_user_lvars 才能持久化到数据库
+                # 尝试持久化：新版 API 可直接保存，旧版依赖 save_user_lvars
                 try:
-                    cfunc.save_user_lvars()
-                    # 再次刷新以确保生效
-                    ida_hexrays.clear_cached_cfuncs()
-                    cfunc = ida_hexrays.decompile(func.start_ea)
+                    if hasattr(cfunc, "save_user_lvars"):
+                        cfunc.save_user_lvars()
                 except Exception as exc:
                     print(f"[IDAT-Server] save_user_lvars failed: {exc}")
-                    return {"status": "error", "msg": f"save failed: {exc}"}
+
+                try:
+                    ida_hexrays.clear_cached_cfuncs()
+                except Exception:
+                    pass
+
+                try:
+                    idc.mark_position(func.start_ea, 1, 0, 0, 0, "")
+                except Exception:
+                    pass
+
+                try:
+                    ida_loader.save_database(None, 0)
+                except Exception as exc:
+                    print(f"[IDAT-Server] save_database failed: {exc}")
+
+                try:
+                    cfunc = ida_hexrays.decompile(func.start_ea)
+                except Exception:
+                    cfunc = None
 
             res["applied"] = applied
 
