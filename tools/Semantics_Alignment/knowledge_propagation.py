@@ -48,7 +48,7 @@ import builtins
 import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import heapq
 import re
@@ -56,6 +56,9 @@ import unicodedata
 
 import yaml
 from tqdm import tqdm
+
+# 共享的“动态 Prompt + 动态 Batch”生成器
+from dynamic_batching import DynamicBatchResult, yield_dynamic_batch
 
 try:
     import requests  # type: ignore
@@ -477,6 +480,24 @@ SUBFUNC_NAME_PATTERN = re.compile(r"\bsub_[0-9A-Fa-f]+\b")
 
 # 用于检测明显“默认地址命名”的函数名，例如 sub_401000 / fun_0010E210 / loc_80483F0 等
 DEFAULT_FUNC_NAME_PATTERN = re.compile(r"^(?:sub_|fun_|loc_)[0-9A-Fa-f]+$")
+
+
+def _count_effective_pseudocode_lines(code: str) -> int:
+    """统计“有效伪代码行数”。
+
+    过滤空行与仅包含大括号的行，避免把导入/桩函数的极短伪代码也计入。
+    """
+    if not code:
+        return 0
+    lines = []
+    for raw in code.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        if s in ("{", "}"):
+            continue
+        lines.append(s)
+    return len(lines)
 
 
 def _find_generic_lvar_names(code: str) -> Set[str]:
@@ -1619,13 +1640,37 @@ def build_validation_prompt(
     graph: UnifiedGraph,
     entry_va: int,
 ) -> str:
-    """
-    第二阶段：基于调用链的“Top-down Validation” Prompt。
-    上下文包括：
-      - 当前函数第一阶段的 signature / summary；
-      - 上游调用者的调用点代码片段；
-      - 下游被调用者的名称与摘要占位。
-    """
+    """第二阶段：单函数 Top-down Validation Prompt。"""
+
+    context = build_validation_context(conn, graph, entry_va)
+    prompt = f"""
+你是一名进行“第二阶段 Top-down 校验”的逆向工程专家。
+
+{context}
+
+[任务]
+1. 根据调用者的使用方式（参数含义、返回值用途等），评估当前名称 / Signature 是否合理。
+2. 如果名称过于泛泛（如 sub_XXXXXX）、或与实际用途明显不符，请给出一个更精准的新名称。
+3. 如果当前名称基本合理，可以选择确认。
+
+请严格返回 JSON：
+{{
+  "action": "RENAME" 或 "CONFIRM",
+  "new_name": "新的函数名（仅当 action 为 RENAME 时有效）",
+  "confidence": 0.0 ~ 1.0,
+  "reasoning": "简要说明你做出该判断的理由"
+}}
+"""
+    return prompt.strip()
+
+
+def build_validation_context(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_va: int,
+) -> str:
+    """构造 Phase2 校验的“上下文段”，便于单体/批量 Prompt 复用。"""
+
     node = graph.nodes[entry_va]
 
     # 当前函数第一阶段分析结果
@@ -1647,15 +1692,25 @@ def build_validation_prompt(
             current_sig = row[0] or ""
             current_summary = row[1] or ""
 
-    display_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
+    display_name = (
+        next(iter(sorted(node.names)), f"sub_{entry_va:08X}")
+        if node.names
+        else f"sub_{entry_va:08X}"
+    )
 
     # 上游调用者视角
     caller_snippets: List[str] = []
     for caller_va in sorted(node.caller_vas):
         snippet = _get_call_site_snippet(conn, graph, caller_va, node.names)
-        caller_name = next(iter(sorted(graph.nodes[caller_va].names)), f"sub_{caller_va:08X}") if caller_va in graph.nodes else f"sub_{caller_va:08X}"
+        caller_name = (
+            next(iter(sorted(graph.nodes[caller_va].names)), f"sub_{caller_va:08X}")
+            if caller_va in graph.nodes
+            else f"sub_{caller_va:08X}"
+        )
         if snippet:
-            caller_snippets.append(f"[Caller {caller_name} @ 0x{caller_va:08X}]\n{snippet}")
+            caller_snippets.append(
+                f"[Caller {caller_name} @ 0x{caller_va:08X}]\n{snippet}"
+            )
         if len(caller_snippets) >= 5:
             break
 
@@ -1670,41 +1725,139 @@ def build_validation_prompt(
         callee = graph.nodes.get(callee_va)
         if not callee:
             continue
-        callee_name = next(iter(sorted(callee.names)), f"sub_{callee_va:08X}") if callee.names else f"sub_{callee_va:08X}"
+        callee_name = (
+            next(iter(sorted(callee.names)), f"sub_{callee_va:08X}")
+            if callee.names
+            else f"sub_{callee_va:08X}"
+        )
         callee_lines.append(f"- {callee_name} @ 0x{callee_va:08X}")
         if len(callee_lines) >= 8:
             break
     callee_section = "\n".join(callee_lines) if callee_lines else "(无内部调用或信息不足)"
 
-    prompt = f"""
-你是一名进行“第二阶段 Top-down 校验”的逆向工程专家。
+    return (
+        f"当前目标函数：{display_name} (@ 0x{entry_va:08X})\n\n"
+        f"[第一阶段分析结果]\nSignature: {current_sig}\nSummary: {current_summary}\n\n"
+        f"[调用者如何使用该函数（Caller Context）]\n{caller_section}\n\n"
+        f"[该函数内部调用了哪些子函数（Callee List）]\n{callee_section}"
+    ).strip()
 
-当前目标函数：{display_name} (@ 0x{entry_va:08X})
 
-[第一阶段分析结果]
-Signature: {current_sig}
-Summary: {current_summary}
+def build_validation_batch_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_vas: List[int],
+) -> str:
+    """Phase2：批量校验 Prompt（返回 JSON 数组，顺序与输入一致）。"""
+    lines: List[str] = []
+    lines.append("你是一名进行‘第二阶段 Top-down 校验’的逆向工程专家。")
+    lines.append(
+        "请对以下多个函数的命名/签名进行校验。返回一个 JSON 数组，长度必须等于条目数量，顺序完全一致。"
+    )
+    lines.append(
+        '数组中每个对象字段：{"entry_va":"0x...","action":"RENAME"|"CONFIRM","new_name":"...","confidence":0.0-1.0,"reasoning":"..."}。'
+    )
+    lines.append("仅当当前名称为默认风格(sub_/fun_/loc_)且你有更好建议时选择 RENAME。")
 
-[调用者如何使用该函数（Caller Context）]
-{caller_section}
+    for idx, va in enumerate(entry_vas, 1):
+        ctx = build_validation_context(conn, graph, va)
+        lines.append(f"\n[Item {idx}/{len(entry_vas)}] entry_va=0x{va:08X}\n{ctx}")
 
-[该函数内部调用了哪些子函数（Callee List）]
-{callee_section}
+    return "\n".join(lines)
 
-[任务]
-1. 根据调用者的使用方式（参数含义、返回值用途等），评估当前名称 / Signature 是否合理。
-2. 如果名称过于泛泛（如 sub_XXXXXX）、或与实际用途明显不符，请给出一个更精准的新名称。
-3. 如果当前名称基本合理，可以选择确认。
 
-请严格返回 JSON：
-{{
-  "action": "RENAME" 或 "CONFIRM",
-  "new_name": "新的函数名（仅当 action 为 RENAME 时有效）",
-  "confidence": 0.0 ~ 1.0,
-  "reasoning": "简要说明你做出该判断的理由"
-}}
-"""
-    return prompt.strip()
+def _apply_validation_llm_result(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_va: int,
+    result: Dict[str, Any],
+    ida_sync: bool,
+    ida_url: str,
+) -> Optional[float]:
+    """将 Phase2 单条结果落库/同步，并返回后验置信度。"""
+
+    node = graph.nodes[entry_va]
+    display_name = (
+        next(iter(sorted(node.names)), f"sub_{entry_va:08X}")
+        if node.names
+        else f"sub_{entry_va:08X}"
+    )
+
+    action = str(result.get("action", "")).strip().upper()
+    new_name_raw = str(result.get("new_name", "")).strip()
+    reasoning = str(result.get("reasoning", "")).strip()
+    conf_val = result.get("confidence")
+    try:
+        confidence = float(conf_val) if conf_val is not None else 0.8
+    except (TypeError, ValueError):
+        confidence = 0.8
+
+    print("\n[VALIDATION RESULT]")
+    print("action    :", action)
+    print("new_name  :", new_name_raw)
+    print("confidence:", confidence)
+    if reasoning:
+        print("reasoning :", reasoning)
+
+    logger.info(
+        "[Phase2] RESULT entry_va=0x%08X, name=%s, action=%s, new_name=%s, confidence=%s",
+        entry_va,
+        display_name,
+        action,
+        new_name_raw,
+        confidence,
+    )
+
+    current_name = display_name
+    final_name = current_name
+
+    if action == "RENAME" and new_name_raw:
+        candidate = new_name_raw
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate) and len(candidate) <= 255:
+            final_name = candidate
+        else:
+            print("[VALIDATION] LLM 提议的新名称不符合标识符规范，忽略本次改名。")
+
+    if final_name != current_name:
+        print(f"[VALIDATION] 应用二次改名：{current_name} -> {final_name}")
+        fid = _get_any_function_id_for_va(graph, entry_va)
+        signature = ""
+        if fid is not None:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT summary_signature FROM analysis_status WHERE function_id = ?;",
+                (fid,),
+            )
+            row = cur.fetchone()
+            if row:
+                signature = row[0] or ""
+
+        if signature and current_name in signature:
+            signature = signature.replace(current_name, final_name)
+
+        _sync_with_ida_and_update_db(
+            conn=conn,
+            graph=graph,
+            node=node,
+            entry_va=entry_va,
+            signature=signature,
+            summary=f"[validation] {reasoning}",
+            ida_url=ida_url,
+        )
+
+    cur = conn.cursor()
+    for fid in node.function_ids:
+        cur.execute(
+            """
+            UPDATE analysis_status
+            SET analysis_state = 'LOCKED'
+            WHERE function_id = ?;
+            """,
+            (fid,),
+        )
+    conn.commit()
+
+    return max(0.0, min(1.0, confidence))
 
 
 def validate_one_function(
@@ -1764,87 +1917,14 @@ def validate_one_function(
         )
         return None
 
-    action = str(result.get("action", "")).strip().upper()
-    new_name_raw = str(result.get("new_name", "")).strip()
-    reasoning = str(result.get("reasoning", "")).strip()
-    conf_val = result.get("confidence")
-    try:
-        confidence = float(conf_val) if conf_val is not None else 0.8
-    except (TypeError, ValueError):
-        confidence = 0.8
-
-    print("\n[VALIDATION RESULT]")
-    print("action    :", action)
-    print("new_name  :", new_name_raw)
-    print("confidence:", confidence)
-    if reasoning:
-        print("reasoning :", reasoning)
-
-    logger.info(
-        "[Phase2] RESULT entry_va=0x%08X, name=%s, action=%s, new_name=%s, confidence=%s",
-        entry_va,
-        display_name,
-        action,
-        new_name_raw,
-        confidence,
+    return _apply_validation_llm_result(
+        conn=conn,
+        graph=graph,
+        entry_va=entry_va,
+        result=result,
+        ida_sync=ida_sync,
+        ida_url=ida_url,
     )
-
-    # 确定当前名称
-    current_name = display_name
-    final_name = current_name
-
-    if action == "RENAME" and new_name_raw:
-        candidate = new_name_raw
-        # 简单校验：必须是合法 C 标识符，且不过长
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate) and len(candidate) <= 255:
-            final_name = candidate
-        else:
-            print("[VALIDATION] LLM 提议的新名称不符合标识符规范，忽略本次改名。")
-
-    if final_name != current_name:
-        print(f"[VALIDATION] 应用二次改名：{current_name} -> {final_name}")
-        # 利用现有的 IDA 同步 + 数据库更新逻辑
-        # 这里复用第一阶段的签名（若有），否则使用空串
-        fid = _get_any_function_id_for_va(graph, entry_va)
-        signature = ""
-        if fid is not None:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT summary_signature FROM analysis_status WHERE function_id = ?;",
-                (fid,),
-            )
-            row = cur.fetchone()
-            if row:
-                signature = row[0] or ""
-        # 如果 signature 中包含旧名字，尝试替换为新名字
-        if signature and current_name in signature:
-            signature = signature.replace(current_name, final_name)
-
-        _sync_with_ida_and_update_db(
-            conn=conn,
-            graph=graph,
-            node=node,
-            entry_va=entry_va,
-            signature=signature,
-            summary=f"[validation] {reasoning}",
-            ida_url=ida_url,
-        )
-
-    # 将该节点对应的 analysis_status 标记为 LOCKED，表示已通过第二阶段校验
-    cur = conn.cursor()
-    for fid in node.function_ids:
-        cur.execute(
-            """
-            UPDATE analysis_status
-            SET analysis_state = 'LOCKED'
-            WHERE function_id = ?;
-            """,
-            (fid,),
-        )
-    conn.commit()
-
-    # 返回后验置信度（裁剪到 [0,1]）
-    return max(0.0, min(1.0, confidence))
 
 
 def run_validation_phase(
@@ -1854,6 +1934,7 @@ def run_validation_phase(
     ida_sync: bool,
     ida_url: str,
     dry_run: bool = False,
+    batch_size: int = 10,
 ) -> None:
     """
     第二阶段：基于调用链的 Top-down 校验。
@@ -1912,16 +1993,171 @@ def run_validation_phase(
 
     processed = 0
     failed_primary: List[int] = []
-    while queue:
-        task = heapq.heappop(queue)
-        entry_va = task.entry_va
+    batch_target = max(1, int(batch_size) if batch_size else 1)
 
-        # 已经 LOCKED 的节点：跳过 LLM，仅用于向下传播
-        if _is_locked(entry_va):
+    while queue:
+        # 每一轮尽量取出 Top-N 个需要 LLM 校验的默认命名函数
+        to_validate: List[int] = []
+
+        while queue and len(to_validate) < batch_target:
+            task = heapq.heappop(queue)
+            entry_va = task.entry_va
+
+            # 已经 LOCKED 的节点：跳过 LLM，仅用于向下传播
+            if _is_locked(entry_va):
+                node = graph.nodes.get(entry_va)
+                if node:
+                    posterior_conf = 0.9
+                    for callee_va in node.internal_callee_vas:
+                        if callee_va in visited or callee_va not in graph.nodes:
+                            continue
+                        visited.add(callee_va)
+                        heapq.heappush(
+                            queue,
+                            ValidationTask(
+                                entry_va=callee_va,
+                                priority=posterior_conf * 100.0,
+                                path_confidence=posterior_conf,
+                            ),
+                        )
+                        if pbar is not None:
+                            pbar.total += 1
+                            pbar.refresh()
+                if pbar is not None:
+                    pbar.update(1)
+                    pbar.set_description(f"Phase 2: Skip LOCKED 0x{entry_va:08X}")
+                continue
+
+            # 具名函数跳过 LLM 校验
             node = graph.nodes.get(entry_va)
-            if node:
-                # 假定较高置信度，继续向下传播
-                posterior_conf = 0.9
+            if not node:
+                if pbar is not None:
+                    pbar.update(1)
+                continue
+
+            current_name = (
+                next(iter(sorted(node.names)), f"sub_{entry_va:08X}")
+                if node.names
+                else f"sub_{entry_va:08X}"
+            )
+            is_default_name = bool(DEFAULT_FUNC_NAME_PATTERN.fullmatch(current_name))
+
+            if not is_default_name:
+                posterior_conf = 1.0
+                if pbar is not None:
+                    pbar.set_description(f"Phase 2: Skip Named 0x{entry_va:08X}")
+                    pbar.update(1)
+
+                if posterior_conf > 0.6:
+                    for callee_va in node.internal_callee_vas:
+                        if callee_va in visited or callee_va not in graph.nodes:
+                            continue
+                        visited.add(callee_va)
+                        heapq.heappush(
+                            queue,
+                            ValidationTask(
+                                entry_va=callee_va,
+                                priority=posterior_conf * 100.0,
+                                path_confidence=posterior_conf,
+                            ),
+                        )
+                        if pbar is not None:
+                            pbar.total += 1
+                            pbar.refresh()
+                continue
+
+            # 默认名函数进入批量校验
+            to_validate.append(entry_va)
+
+        if not to_validate:
+            continue
+
+        def _builder(vs: List[int]) -> str:
+            return build_validation_batch_prompt(conn, graph, vs)
+
+        for batch in yield_dynamic_batch(
+            to_validate,
+            prompt_builder=_builder,
+            max_prompt_tokens=llm_settings.max_tokens,
+            token_estimator=estimate_token_usage,
+            initial_batch_size=len(to_validate),
+            min_batch_size=1,
+        ):
+            if pbar is not None:
+                top_va = batch.items[0]
+                pbar.set_description(f"Phase 2: batch={len(batch.items)} top=0x{top_va:08X}")
+
+            if dry_run:
+                print("=" * 80)
+                print(f"[Phase 2 DRY-RUN] batch size={len(batch.items)}")
+                print(batch.prompt[:2000])
+                # dry-run 不落库，仍以高置信度向下传播
+                for entry_va in batch.items:
+                    node = graph.nodes.get(entry_va)
+                    if pbar is not None:
+                        pbar.update(1)
+                    posterior_conf = 1.0
+                    if not node or posterior_conf <= 0.6:
+                        continue
+                    for callee_va in node.internal_callee_vas:
+                        if callee_va in visited or callee_va not in graph.nodes:
+                            continue
+                        visited.add(callee_va)
+                        heapq.heappush(
+                            queue,
+                            ValidationTask(
+                                entry_va=callee_va,
+                                priority=posterior_conf * 100.0,
+                                path_confidence=posterior_conf,
+                            ),
+                        )
+                        if pbar is not None:
+                            pbar.total += 1
+                            pbar.refresh()
+                continue
+
+            conversation, request_kwargs = build_chat_request(batch.prompt, llm_settings)
+            result_list = call_llm_analyze_function(
+                conversation=conversation,
+                request_kwargs=request_kwargs,
+                api_settings=llm_settings.api_settings,
+                expect_array=True,
+                expected_size=len(batch.items),
+                max_attempts=3,
+            )
+
+            if not result_list or not isinstance(result_list, list):
+                for entry_va in batch.items:
+                    failed_primary.append(entry_va)
+                    if pbar is not None:
+                        pbar.update(1)
+                continue
+
+            for entry_va, res in zip(batch.items, result_list):
+                node = graph.nodes.get(entry_va)
+                if pbar is not None:
+                    pbar.update(1)
+
+                if not node or not isinstance(res, dict):
+                    failed_primary.append(entry_va)
+                    continue
+
+                posterior_conf = _apply_validation_llm_result(
+                    conn=conn,
+                    graph=graph,
+                    entry_va=entry_va,
+                    result=res,
+                    ida_sync=ida_sync,
+                    ida_url=ida_url,
+                )
+                if posterior_conf is None:
+                    failed_primary.append(entry_va)
+                    continue
+
+                processed += 1
+                if posterior_conf <= 0.6:
+                    continue
+
                 for callee_va in node.internal_callee_vas:
                     if callee_va in visited or callee_va not in graph.nodes:
                         continue
@@ -1934,59 +2170,9 @@ def run_validation_phase(
                             path_confidence=posterior_conf,
                         ),
                     )
-                    # 新发现的待校验节点，扩展进度条总量
                     if pbar is not None:
                         pbar.total += 1
                         pbar.refresh()
-            # 这个节点本身在本轮视为“已处理”（来自断点续工），应更新进度条
-            if pbar is not None:
-                pbar.update(1)
-            if pbar is not None:
-                pbar.set_description(f"Phase 2: Skip LOCKED 0x{entry_va:08X}")
-            continue
-
-        if pbar is not None:
-            pbar.set_description(f"Phase 2: 0x{entry_va:08X}")
-
-        posterior_conf = validate_one_function(
-            conn=conn,
-            graph=graph,
-            entry_va=entry_va,
-            llm_settings=llm_settings,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            dry_run=dry_run,
-            max_attempts=3,
-        )
-        processed += 1
-        if pbar is not None:
-            pbar.update(1)
-
-        if posterior_conf is None:
-            failed_primary.append(entry_va)
-            continue
-
-        # 置信度不足则不向下传播
-        if posterior_conf <= 0.6:
-            continue
-
-        node = graph.nodes[entry_va]
-        for callee_va in node.internal_callee_vas:
-            if callee_va in visited or callee_va not in graph.nodes:
-                continue
-            visited.add(callee_va)
-            heapq.heappush(
-                queue,
-                ValidationTask(
-                    entry_va=callee_va,
-                    priority=posterior_conf * 100.0,
-                    path_confidence=posterior_conf,
-                ),
-            )
-            # 新发现的待校验节点，扩展进度条总量
-            if pbar is not None:
-                pbar.total += 1
-                pbar.refresh()
 
     if pbar is not None:
         pbar.close()
@@ -2241,6 +2427,170 @@ def build_global_var_prompt(
     return prompt.strip()
 
 
+def _build_global_var_context(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    var_node: GlobalVarNode,
+    analysis_info: Dict[int, dict],
+    max_users: int = 6,
+) -> str:
+    """构造 Phase3 单个全局变量的上下文段（供批量 Prompt 复用）。"""
+
+    addr = var_node.address_va
+    current_names = sorted(var_node.names) or [f"byte_{addr:08X}"]
+
+    access_funcs: List[Tuple[float, int, str, str]] = []
+
+    all_users = list(var_node.writers | var_node.readers)
+    for entry_va in all_users:
+        fn = graph.nodes.get(entry_va)
+        if not fn:
+            continue
+        fn_name = (
+            next(iter(sorted(fn.names)), f"sub_{entry_va:08X}")
+            if fn.names
+            else f"sub_{entry_va:08X}"
+        )
+
+        best_conf = 0.0
+        for fid in fn.function_ids:
+            info = analysis_info.get(fid)
+            if not info:
+                continue
+            st = (info.get("analysis_state") or "").upper()
+            base = float(info.get("confidence_score") or 0) / 100.0
+            if st == "LOCKED":
+                base = max(base, 0.9)
+            if base > best_conf:
+                best_conf = base
+
+        if best_conf <= 0.0:
+            continue
+
+        snippet = _get_global_use_snippet(conn, graph, entry_va, var_node)
+        if not snippet:
+            continue
+
+        access_funcs.append((best_conf, entry_va, fn_name, snippet))
+
+    if not access_funcs:
+        usage_section = "(没有找到可靠的函数访问上下文，仅基于名称和地址做轻量推断。)"
+    else:
+        access_funcs.sort(key=lambda x: x[0], reverse=True)
+        lines: List[str] = []
+        for conf, entry_va, fn_name, snippet in access_funcs[:max_users]:
+            lines.append(
+                f"[Function {fn_name} @ 0x{entry_va:08X}, confidence={conf:.2f}]\n{snippet}"
+            )
+        usage_section = "\n\n".join(lines)
+
+    return (
+        f"当前全局变量：0x{addr:08X}\n"
+        f"当前名称候选：{', '.join(current_names)}\n\n"
+        f"[访问上下文（函数如何读写该变量）]\n{usage_section}"
+    ).strip()
+
+
+def build_global_var_batch_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    var_nodes: List[GlobalVarNode],
+    analysis_info: Dict[int, dict],
+) -> str:
+    """Phase3：批量全局变量分析 Prompt（返回 JSON 数组，顺序与输入一致）。"""
+
+    lines: List[str] = []
+    lines.append("你是一名擅长从访问模式推断‘全局变量语义’的逆向工程专家。")
+    lines.append(
+        "请分析以下多个全局变量，返回一个 JSON 数组，长度必须等于条目数量，顺序完全一致。"
+    )
+    lines.append(
+        '数组中每个对象字段：{"address_va":"0x...","name":"g_VarName","type":"...","confidence":0.0-1.0,"reason":"..."}。'
+    )
+
+    for idx, node in enumerate(var_nodes, 1):
+        ctx = _build_global_var_context(conn, graph, node, analysis_info)
+        lines.append(
+            f"\n[Item {idx}/{len(var_nodes)}] address_va=0x{node.address_va:08X}\n{ctx}"
+        )
+
+    return "\n".join(lines)
+
+
+def _apply_global_var_llm_result(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    var_node: GlobalVarNode,
+    result: Dict[str, Any],
+    ida_sync: bool,
+    ida_url: str,
+) -> float:
+    """将 Phase3 单条全局变量结果落库/同步，并返回后验置信度。"""
+
+    addr = var_node.address_va
+
+    name = str(result.get("name", "")).strip()
+    type_str = str(result.get("type", "")).strip() or None
+    reason = str(result.get("reason", "")).strip()
+    conf_val = result.get("confidence")
+    try:
+        confidence = float(conf_val) if conf_val is not None else 0.8
+    except (TypeError, ValueError):
+        confidence = 0.8
+
+    print("\n[GLOBAL RESULT]")
+    print("name      :", name)
+    print("type      :", type_str)
+    print("confidence:", confidence)
+    if reason:
+        print("reason    :", reason)
+
+    if not name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name) or len(name) > 255:
+        print("[GLOBAL] 提议的变量名不符合标识符规范，跳过改名。")
+        final_name = (
+            next(iter(sorted(var_node.names)), f"g_{addr:08X}")
+            if var_node.names
+            else f"g_{addr:08X}"
+        )
+        apply_rename = False
+    else:
+        final_name = name
+        apply_rename = True
+
+    ensure_global_vars_schema(conn)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO global_vars(address_va, name, guessed_type, analysis_state, confidence_score, reasoning)
+        VALUES(?, ?, ?, 'ANALYZED', ?, ?)
+        ON CONFLICT(address_va) DO UPDATE SET
+            name = excluded.name,
+            guessed_type = excluded.guessed_type,
+            analysis_state = excluded.analysis_state,
+            confidence_score = excluded.confidence_score,
+            reasoning = excluded.reasoning;
+        """,
+        (addr, final_name, type_str, int(confidence * 100), reason),
+    )
+
+    cur.execute(
+        "UPDATE symbols SET name = ? WHERE address_va = ?;",
+        (final_name, addr),
+    )
+    conn.commit()
+
+    if apply_rename and ida_sync:
+        _sync_global_with_ida_and_update_db(
+            conn=conn,
+            address_va=addr,
+            new_name=final_name,
+            type_str=type_str,
+            ida_url=ida_url,
+        )
+
+    return max(0.0, min(1.0, confidence))
+
+
 def analyze_one_global_var(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
@@ -2351,6 +2701,7 @@ def run_global_var_phase(
     ida_sync: bool,
     ida_url: str,
     dry_run: bool = False,
+    batch_size: int = 10,
 ) -> None:
     """
     第三阶段：全局变量重命名与类型推断。
@@ -2396,29 +2747,71 @@ def run_global_var_phase(
     pbar = tqdm(total=target_count, desc="Phase 3: Globals", unit="var")
     processed = 0
 
-    for addr in pending_addrs:
-        if processed >= target_count:
-            break
-        node = globals_by_addr[addr]
-        score = scores.get(addr, 0)
-        pbar.set_description(
-            f"Phase 3: 0x{addr:08X} (score={score})"
+    # 按优先级截取本次要处理的变量
+    selected_addrs = pending_addrs[:target_count]
+    selected_nodes = [globals_by_addr[a] for a in selected_addrs]
+    batch_target = max(1, int(batch_size) if batch_size else 1)
+
+    def _builder(nodes: List[GlobalVarNode]) -> str:
+        return build_global_var_batch_prompt(conn, graph, nodes, analysis_info)
+
+    for batch in yield_dynamic_batch(
+        selected_nodes,
+        prompt_builder=_builder,
+        max_prompt_tokens=llm_settings.max_tokens,
+        token_estimator=estimate_token_usage,
+        initial_batch_size=batch_target,
+        min_batch_size=1,
+    ):
+        if not batch.items:
+            continue
+
+        top_addr = batch.items[0].address_va
+        pbar.set_description(f"Phase 3: batch={len(batch.items)} top=0x{top_addr:08X}")
+
+        if dry_run:
+            print("=" * 80)
+            print(f"[Phase 3 DRY-RUN] batch size={len(batch.items)}")
+            print(batch.prompt[:2000])
+            processed += len(batch.items)
+            pbar.update(len(batch.items))
+            continue
+
+        conversation, request_kwargs = build_chat_request(batch.prompt, llm_settings)
+        result_list = call_llm_analyze_function(
+            conversation=conversation,
+            request_kwargs=request_kwargs,
+            api_settings=llm_settings.api_settings,
+            expect_array=True,
+            expected_size=len(batch.items),
         )
-        print(
-            f"\n[GLOBAL] 选择全局变量 0x{addr:08X} (score={score}, names={sorted(node.names)})"
-        )
-        analyze_one_global_var(
-            conn=conn,
-            graph=graph,
-            var_node=node,
-            analysis_info=analysis_info,
-            llm_settings=llm_settings,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            dry_run=dry_run,
-        )
-        processed += 1
-        pbar.update(1)
+
+        if not result_list or not isinstance(result_list, list):
+            print("[GLOBAL] 批量 LLM 返回非法，跳过该批次。")
+            processed += len(batch.items)
+            pbar.update(len(batch.items))
+            continue
+
+        for var_node, res in zip(batch.items, result_list):
+            addr = var_node.address_va
+            score = scores.get(addr, 0)
+            print(
+                f"\n[GLOBAL] 选择全局变量 0x{addr:08X} (score={score}, names={sorted(var_node.names)})"
+            )
+            if isinstance(res, dict):
+                _apply_global_var_llm_result(
+                    conn=conn,
+                    graph=graph,
+                    var_node=var_node,
+                    result=res,
+                    ida_sync=ida_sync,
+                    ida_url=ida_url,
+                )
+            else:
+                print("[GLOBAL] 跳过：返回值不是 JSON 对象。")
+
+        processed += len(batch.items)
+        pbar.update(len(batch.items))
 
     pbar.close()
     print(f"[GLOBAL] 第三阶段共处理全局变量数量：{processed}")
@@ -2883,7 +3276,7 @@ def build_chat_request(prompt: str, llm_settings: LLMSettings) -> Tuple[List[Dic
             "role": "system",
             "content": (
                 "You are an expert reverse engineer. "
-                "You must respond with a single valid JSON object only."
+                "You must respond with a single valid JSON value only."
             ),
         },
         {"role": "user", "content": prompt},
@@ -4127,14 +4520,12 @@ Summary: {summary}
 {code}
 
 [任务]
-1. 分析伪代码逻辑，识别无意义的默认命名：
-   - 重点关注参数：a1, a2, a3, arg1, arg2...
-   - 重点关注局部变量：v1, v2, v3, var_C, var_10...
-2. 根据上下文推断它们的实际含义，并赋予有意义的变量名（如 index, user_id, connection_handle）。
+1. **强制要求**：分析函数的形参（a1, a2, a3, arg1...），必须根据 Signature 和函数体内的使用方式赋予有意义的名字（如 env, packet_buf, size）。这是最高优先级。
+2. **尽力而为**：分析函数内部局部变量（v1, v2, var_10...），根据逻辑上下文推断含义并重命名（如 index, status, temp_ptr）。
 3. 请适度激进一些：
-   - 如果 a1 明显是源缓冲区，可以重命名为 src_buf；
-   - 如果 v5 明显是循环变量，可以重命名为 i 或 idx；
-   - 如果 v8 接收了函数返回值并用于判断，可以重命名为 ret_val 或 status。
+    - 如果 a1 明显是源缓冲区，可以重命名为 src_buf；
+    - 如果 v5 明显是循环变量，可以重命名为 i 或 idx；
+    - 如果 v8 接收了函数返回值并用于判断，可以重命名为 ret_val 或 status。
 4. 如果变量名已经具有清晰语义（如 file_name、buffer_ptr），请不要修改它。
 5. 如果确实无法推断任何变量含义，请返回空 JSON。
 
@@ -4147,6 +4538,334 @@ Summary: {summary}
 }}
 """
     return prompt.strip()
+
+
+def build_local_var_batch_prompt(items: List[Dict[str, Any]]) -> str:
+    """Phase4：批量局部变量重命名 Prompt（返回 JSON 数组，顺序与输入一致）。"""
+
+    lines: List[str] = []
+    lines.append("你是一个代码重构专家。当前任务是优化反编译代码的可读性。")
+    lines.append("**核心原则：必须优先重命名函数形参（a1, a2...），其次尽力重命名内部变量（v1, v2...）。**")
+    lines.append(
+        "请对以下多个函数分别给出变量重命名建议。返回一个 JSON 数组，长度必须等于条目数量，顺序完全一致。"
+    )
+    lines.append(
+        "数组中每个元素格式：{\"entry_va\":\"0x...\",\"renames\":{\"old\":\"new\",...}}。"
+    )
+    lines.append(
+        "若无法推断任何变量含义，请返回 renames 为 {}（空对象）。不要输出除 JSON 数组之外的任何文字。"
+    )
+
+    for idx, item in enumerate(items, 1):
+        node: UnifiedFunctionNode = item["node"]
+        code = item.get("code", "") or ""
+        signature = item.get("signature", "") or ""
+        summary = item.get("summary", "") or ""
+        display_name = "/".join(sorted(node.names)) if node.names else f"sub_{node.entry_va:08X}"
+
+        lines.append(
+            f"\n[Function {idx}/{len(items)}] {display_name} entry_va=0x{node.entry_va:08X}"
+        )
+        lines.append(f"Signature: {signature}")
+        lines.append(f"Summary: {summary}")
+        lines.append("[Pseudocode]")
+        lines.append(code)
+
+    return "\n".join(lines)
+
+
+def _prepare_lvar_candidate(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    node: UnifiedFunctionNode,
+    analysis_info: Dict[int, dict],
+    ida_sync: bool,
+    allowed_fids: Optional[Set[int]] = None,
+    min_pseudo_lines: int = 0,
+    allow_unanalyzed: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """为 Phase4 构造单个函数的 batch item（选择最佳 fid + 伪代码 + 摘要）。"""
+
+    preferred_tool = "ida" if ida_sync else None
+    candidates: List[Dict[str, Any]] = []
+
+    cur = conn.cursor()
+
+    for fid in node.function_ids:
+        if allowed_fids is not None and fid not in allowed_fids:
+            continue
+
+        info = analysis_info.get(fid) or {}
+        state = (info.get("analysis_state") or "")
+        if not allow_unanalyzed:
+            if not info:
+                continue
+            if state not in ("ANALYZED", "LOCKED"):
+                continue
+
+        score = int(info.get("confidence_score", 0) or 0)
+        tool_name = (graph.func_tool.get(fid, "") or "").lower()
+
+        cur.execute(
+            "SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;",
+            (int(fid),),
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            continue
+        code = row[0]
+        line_cnt = _count_effective_pseudocode_lines(code)
+        if min_pseudo_lines and line_cnt < int(min_pseudo_lines):
+            continue
+
+        signature = (info.get("summary_signature") or "") if info else ""
+        summary = (info.get("semantic_summary") or "") if info else ""
+        candidates.append(
+            {
+                "fid": int(fid),
+                "score": score,
+                "tool": tool_name,
+                "signature": signature,
+                "summary": summary,
+                "code": code,
+                "line_cnt": line_cnt,
+            }
+        )
+
+    if not candidates:
+        return None
+
+    chosen: Optional[Dict[str, Any]] = None
+    if preferred_tool:
+        ida_candidates = [c for c in candidates if preferred_tool in (c.get("tool") or "")]
+        if ida_candidates:
+            ida_candidates.sort(key=lambda c: (int(c.get("score", 0) or 0), int(c.get("line_cnt", 0) or 0)), reverse=True)
+            chosen = ida_candidates[0]
+
+    if chosen is None:
+        candidates.sort(key=lambda c: (int(c.get("score", 0) or 0), int(c.get("line_cnt", 0) or 0)), reverse=True)
+        chosen = candidates[0]
+
+    best_fid = int(chosen["fid"])
+    best_conf = int(chosen.get("score", 0) or 0)
+    signature = chosen.get("signature", "") or ""
+    summary = chosen.get("summary", "") or ""
+    original_code = chosen.get("code", "") or ""
+
+    return {
+        "node": node,
+        "entry_va": node.entry_va,
+        "best_fid": best_fid,
+        "score": best_conf,
+        "tool": chosen.get("tool") or "unknown",
+        "signature": signature,
+        "summary": summary,
+        "code": original_code,
+    }
+
+
+def _clean_lvar_rename_map(rename_map: Dict[str, Any]) -> Dict[str, str]:
+    clean_map: Dict[str, str] = {}
+    for k, v in rename_map.items():
+        if isinstance(k, str) and isinstance(v, str) and k != v:
+            if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+                clean_map[k] = v
+    return clean_map
+
+
+def _apply_lvar_result_for_candidate(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    item: Dict[str, Any],
+    rename_map: Dict[str, Any],
+    ida_sync: bool,
+    ida_url: str,
+) -> bool:
+    """对单个 Phase4 candidate 应用重命名（含可选 IDA 同步 + 持久化验证）。"""
+
+    node: UnifiedFunctionNode = item["node"]
+    best_fid: int = int(item["best_fid"])
+    original_code: str = item.get("code", "") or ""
+
+    clean_map = _clean_lvar_rename_map(rename_map)
+    changed = False
+    total_renamed = 0
+    updated_code: Optional[str] = None
+
+    cur = conn.cursor()
+
+    if not clean_map:
+        print(f"[LVAR] 0x{node.entry_va:08X} LLM 未提供有效的重命名建议。")
+    else:
+        print(f"[LVAR] 0x{node.entry_va:08X} 应用重命名: {json.dumps(clean_map, ensure_ascii=False)}")
+        new_code = apply_local_var_renames(original_code, clean_map)
+        cur.execute(
+            "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+            (new_code, best_fid),
+        )
+        conn.commit()
+        changed = True
+        total_renamed = len(clean_map)
+
+        if ida_sync and ida_url:
+            updated = _sync_lvars_with_ida(node.entry_va, clean_map, ida_url)
+            if updated:
+                updated_code = updated
+                cur.execute(
+                    "UPDATE pseudo_functions SET body = ? WHERE function_id = ?;",
+                    (updated, best_fid),
+                )
+                conn.commit()
+
+    # 读取最终伪代码并检查残留默认名
+    final_code: Optional[str]
+    cur.execute(
+        "SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;",
+        (best_fid,),
+    )
+    row2 = cur.fetchone()
+    if row2 and row2[0]:
+        final_code = row2[0]
+    else:
+        if updated_code is not None:
+            final_code = updated_code
+        elif changed:
+            final_code = new_code
+        else:
+            final_code = original_code
+
+    remaining_generics = _find_generic_lvar_names(final_code or "")
+    if changed and ida_sync and clean_map:
+        verified_code, remaining_generics = _verify_lvar_persistence(
+            conn=conn,
+            function_id=best_fid,
+            entry_va=node.entry_va,
+            ida_url=ida_url,
+            rename_map=clean_map,
+            initial_code=final_code,
+        )
+        if verified_code:
+            final_code = verified_code
+
+    # 策略与旧逻辑保持一致：只要完成了一次尝试，就标记为已检查
+    mark_optimized = True
+    try:
+        cur.execute(
+            "UPDATE analysis_status SET lvar_optimized = ? WHERE function_id = ?;",
+            (1 if mark_optimized else 0, best_fid),
+        )
+        conn.commit()
+    except Exception as exc:
+        logger.warning("更新 lvar_optimized 状态失败 function_id=%s: %s", best_fid, exc)
+
+    if remaining_generics:
+        generic_list = sorted(remaining_generics)
+        generic_preview = ", ".join(generic_list[:8]) + (", ..." if len(generic_list) > 8 else "")
+    else:
+        generic_preview = ""
+
+    if changed:
+        print(
+            f"[LVAR] 0x{node.entry_va:08X} 局部变量重命名完成，共修改 {total_renamed} 个标识符，已标记为已检查。"
+        )
+    else:
+        if generic_preview:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} 未进行局部变量重命名，已标记为已检查。"
+                f"仍检测到默认变量名：{generic_preview}"
+            )
+        else:
+            print(
+                f"[LVAR] 0x{node.entry_va:08X} 未进行局部变量重命名，已标记为已检查。"
+            )
+
+    return changed
+
+
+def analyze_local_var_batch(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    items: List[Dict[str, Any]],
+    llm_settings: LLMSettings,
+    ida_sync: bool,
+    ida_url: str,
+    dry_run: bool = False,
+    prompt: Optional[str] = None,
+) -> int:
+    """对一批候选函数执行一次 LLM 调用并分别应用结果，返回发生修改的函数数量。"""
+
+    if not items:
+        return 0
+
+    if prompt is None:
+        prompt = build_local_var_batch_prompt(items)
+    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+    print("=" * 80)
+    print(f"[LVAR-BATCH] size={len(items)}")
+
+    if dry_run:
+        print("\n[LVAR-BATCH DRY-RUN] Prompt 预览：")
+        print(prompt[:2000])
+        return 0
+
+    result_list = call_llm_analyze_function(
+        conversation=conversation,
+        request_kwargs=request_kwargs,
+        api_settings=llm_settings.api_settings,
+        expect_array=True,
+        expected_size=len(items),
+        return_raw_on_error=True,
+    )
+
+    if isinstance(result_list, dict) and "_raw_text" in result_list:
+        raw_text = result_list.get("_raw_text", "")
+        raw_err = result_list.get("_raw_error", "")
+        print(
+            "[LVAR-BATCH] JSON 解析失败，跳过该批次以便后续重试。\n"
+            f"[LVAR-BATCH-ERROR] {raw_err}\n"
+            f"[LVAR-BATCH-RAW]\n{'-' * 40}\n{raw_text}\n{'-' * 40}"
+        )
+        return 0
+
+    if not result_list or not isinstance(result_list, list):
+        return 0
+
+    changed_count = 0
+
+    for item, res in zip(items, result_list):
+        node: UnifiedFunctionNode = item["node"]
+        entry_va = int(item.get("entry_va", node.entry_va))
+
+        if not isinstance(res, dict):
+            print(f"[LVAR] 0x{entry_va:08X} 跳过：返回值不是 JSON 对象。")
+            continue
+
+        # 兼容两种格式：
+        # 1) {entry_va:..., renames:{...}}
+        # 2) 直接返回 {old:new,...}
+        renames_obj: Dict[str, Any]
+        if "renames" in res and isinstance(res.get("renames"), dict):
+            renames_obj = res.get("renames")  # type: ignore[assignment]
+        else:
+            # 尽量过滤掉 entry_va 等非映射字段
+            renames_obj = {k: v for k, v in res.items() if isinstance(k, str) and k != "entry_va"}
+
+        if ida_sync and ida_url:
+            wait_for_ida_server(ida_url)
+
+        changed = _apply_lvar_result_for_candidate(
+            conn=conn,
+            graph=graph,
+            item=item,
+            rename_map=renames_obj,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+        )
+        if changed:
+            changed_count += 1
+
+    return changed_count
 
 
 def apply_local_var_renames(code: str, rename_map: Dict[str, str]) -> str:
@@ -4543,6 +5262,11 @@ def run_local_var_phase(
     ida_sync: bool,
     ida_url: str,
     dry_run: bool = False,
+    batch_size: int = 3,
+    only_sub: bool = False,
+    ida_only: bool = True,
+    min_pseudo_lines: int = 6,
+    exclude_import_export: bool = True,
 ) -> None:
     """
     第四阶段入口：遍历高置信度函数，优化局部变量名。
@@ -4552,6 +5276,8 @@ def run_local_var_phase(
 
     # 确保 analysis_status 表以及 lvar_optimized 字段存在
     ensure_analysis_schema(conn)
+    # Phase4 可能会处理未经过 Phase1 的函数，因此需要确保全 binary 行已补齐
+    ensure_analysis_rows_for_binary(conn, graph.binary_id)
     analysis_info = load_analysis_info(conn)
 
     # 预加载已完成局部变量优化的函数，支持断点续工
@@ -4559,20 +5285,151 @@ def run_local_var_phase(
     cur.execute("SELECT function_id FROM analysis_status WHERE lvar_optimized = 1;")
     optimized_fids: Set[int] = {int(row[0]) for row in cur.fetchall()}
 
-    # 筛选候选函数：已分析且分数较高，且尚未做过局部变量优化
+    def _ida_name_is_sub(entry_va: int) -> bool:
+        """判断该物理函数在 IDA 视图里的名字是否仍为 sub_XXXX。"""
+        node = graph.nodes.get(entry_va)
+        if not node or not node.function_ids:
+            return False
+
+        placeholders = ",".join("?" for _ in node.function_ids)
+        cur2 = conn.cursor()
+        cur2.execute(
+            f"""
+            SELECT f.name, COALESCE(t.name, '') AS tool_name
+            FROM functions AS f
+            JOIN binary_views AS bv ON f.view_id = bv.id
+            JOIN tools AS t ON bv.tool_id = t.id
+            WHERE f.id IN ({placeholders});
+            """,
+            tuple(node.function_ids),
+        )
+
+        ida_seen = False
+        for nm, tool_name in cur2.fetchall():
+            tool_lower = (tool_name or "").lower()
+            if tool_lower != "ida":
+                continue
+            ida_seen = True
+            name = (nm or "").strip()
+            if SUBFUNC_NAME_PATTERN.fullmatch(name):
+                return True
+
+        if ida_seen:
+            return False
+
+        # fallback：没有 IDA 记录时，退回用统一节点名字集合做粗判
+        if node.names:
+            any_sub = any(SUBFUNC_NAME_PATTERN.fullmatch((n or "").strip()) for n in node.names)
+            any_semantic = any(
+                n and not DEFAULT_FUNC_NAME_PATTERN.fullmatch((n or "").strip())
+                for n in node.names
+            )
+            return bool(any_sub and not any_semantic)
+
+        return False
+
+    def _load_ida_phase4_eligible_fids() -> Dict[int, Set[int]]:
+        """返回 entry_va -> {ida_function_id,...}，满足：
+        - 来自 IDA 视图
+        - 非 import/external（可选也排除 export source）
+        - 伪代码有效行数 >= min_pseudo_lines
+        """
+
+        cur0 = conn.cursor()
+        cur0.execute(
+            """
+            SELECT f.entry_va,
+                   f.id AS function_id,
+                   pf.body,
+                   COALESCE(s.kind, '') AS sym_kind,
+                   COALESCE(s.source, '') AS sym_source,
+                   COALESCE(s.is_external, 0) AS sym_is_external
+            FROM functions AS f
+            JOIN binary_views AS bv ON f.view_id = bv.id
+            JOIN tools AS t ON bv.tool_id = t.id
+            LEFT JOIN symbols AS s ON f.source_symbol_id = s.id
+            LEFT JOIN pseudo_functions AS pf ON pf.function_id = f.id
+            WHERE bv.binary_id = ? AND LOWER(t.name) = 'ida';
+            """,
+            (int(graph.binary_id),),
+        )
+
+        eligible: Dict[int, Set[int]] = {}
+        for entry_va, fid, body, sym_kind, sym_source, sym_is_external in cur0.fetchall():
+            entry_va_i = int(entry_va)
+            fid_i = int(fid)
+            code = body or ""
+            if not code:
+                continue
+
+            if exclude_import_export:
+                if (sym_kind or "").strip().lower() == "import":
+                    continue
+                if int(sym_is_external or 0) != 0:
+                    continue
+                # IDA symbols.csv 的 Source 字段在不同导出器下可能是 Export/EXPORT/Exported
+                if "export" in (sym_source or "").strip().lower():
+                    continue
+
+            if min_pseudo_lines and _count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
+                continue
+
+            if entry_va_i not in eligible:
+                eligible[entry_va_i] = set()
+            eligible[entry_va_i].add(fid_i)
+        return eligible
+
+    ida_eligible_fids_by_entry: Optional[Dict[int, Set[int]]] = None
+    if ida_only:
+        ida_eligible_fids_by_entry = _load_ida_phase4_eligible_fids()
+        print(
+            f"[Phase 4] IDA 过滤：eligible_entry={len(ida_eligible_fids_by_entry)} "
+            f"(min_lines={min_pseudo_lines}, exclude_import_export={exclude_import_export})"
+        )
+
+    # 筛选候选函数：尚未做过局部变量优化
+    # - ida_only=True 时：以 IDA 视图中“有效伪代码行数达标”的函数为准，不再强制要求 Phase1 已 ANALYZED
+    # - ida_only=False 时：保持旧行为（仍依赖 analysis_state）
     candidates: List[Tuple[int, int]] = []
     for entry_va, node in graph.nodes.items():
         max_score = 0
         already_optimized = False
-        for fid in node.function_ids:
-            if fid in optimized_fids:
-                already_optimized = True
-            info = analysis_info.get(fid)
-            if info:
-                max_score = max(max_score, info.get("confidence_score", 0))
+        has_analyzed = False
 
-        if not already_optimized and max_score >= 70:
-            candidates.append((entry_va, max_score))
+        if ida_eligible_fids_by_entry is not None:
+            allowed = ida_eligible_fids_by_entry.get(int(entry_va))
+            if not allowed:
+                continue
+            for fid in allowed:
+                if fid in optimized_fids:
+                    already_optimized = True
+                info = analysis_info.get(fid)
+                if info:
+                    max_score = max(max_score, info.get("confidence_score", 0))
+                    if info.get("analysis_state") in ("ANALYZED", "LOCKED"):
+                        has_analyzed = True
+        else:
+            for fid in node.function_ids:
+                if fid in optimized_fids:
+                    already_optimized = True
+                info = analysis_info.get(fid)
+                if info:
+                    max_score = max(max_score, info.get("confidence_score", 0))
+                    if info.get("analysis_state") in ("ANALYZED", "LOCKED"):
+                        has_analyzed = True
+
+        if only_sub and not _ida_name_is_sub(int(entry_va)):
+            continue
+
+        if already_optimized:
+            continue
+
+        if ida_eligible_fids_by_entry is not None:
+            # IDA-only 模式：不强制要求 has_analyzed
+            candidates.append((int(entry_va), int(max_score)))
+        else:
+            if has_analyzed:
+                candidates.append((int(entry_va), int(max_score)))
 
     # 按分数从高到低排序
     candidates.sort(key=lambda x: x[1], reverse=True)
@@ -4582,23 +5439,96 @@ def run_local_var_phase(
     pbar = tqdm(total=len(candidates), desc="Phase 4: Local Vars", unit="func")
 
     processed_count = 0
+    batch_target = max(1, int(batch_size) if batch_size else 1)
+    prepared: List[Dict[str, Any]] = []
+
+    def _builder(items: List[Dict[str, Any]]) -> str:
+        return build_local_var_batch_prompt(items)
+
     for entry_va, score in candidates:
         node = graph.nodes[entry_va]
         pbar.set_description(f"Phase 4: 0x{entry_va:08X} (score={score})")
 
-        changed = analyze_one_function_vars(
+        allowed_fids: Optional[Set[int]] = None
+        allow_unanalyzed = False
+        min_lines = 0
+        if ida_eligible_fids_by_entry is not None:
+            allowed_fids = ida_eligible_fids_by_entry.get(int(entry_va))
+            allow_unanalyzed = True
+            min_lines = int(min_pseudo_lines or 0)
+
+        item = _prepare_lvar_candidate(
             conn=conn,
             graph=graph,
             node=node,
             analysis_info=analysis_info,
-            llm_settings=llm_settings,
             ida_sync=ida_sync,
-            ida_url=ida_url,
-            dry_run=dry_run,
+            allowed_fids=allowed_fids,
+            min_pseudo_lines=min_lines,
+            allow_unanalyzed=allow_unanalyzed,
         )
-        if changed:
-            processed_count += 1
-        pbar.update(1)
+        if item is None:
+            pbar.update(1)
+            continue
+
+        prepared.append(item)
+
+        if len(prepared) < batch_target:
+            continue
+
+        # 动态 batch：可能会进一步拆成更小的 micro-batch
+        for batch in yield_dynamic_batch(
+            prepared,
+            prompt_builder=_builder,
+            max_prompt_tokens=llm_settings.max_tokens,
+            token_estimator=estimate_token_usage,
+            initial_batch_size=len(prepared),
+            min_batch_size=1,
+        ):
+            if batch.estimated_tokens > llm_settings.max_tokens and len(batch.items) == 1:
+                logger.warning(
+                    "[Phase4] 单函数 Prompt 预估已超过 max_tokens: estimated=%d, max=%d",
+                    batch.estimated_tokens,
+                    llm_settings.max_tokens,
+                )
+
+            changed_in_batch = analyze_local_var_batch(
+                conn=conn,
+                graph=graph,
+                items=batch.items,
+                llm_settings=llm_settings,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                dry_run=dry_run,
+                prompt=batch.prompt,
+            )
+            processed_count += changed_in_batch
+            pbar.update(len(batch.items))
+
+        prepared = []
+
+    # 收尾：处理最后不足 batch_target 的尾巴
+    if prepared:
+        for batch in yield_dynamic_batch(
+            prepared,
+            prompt_builder=_builder,
+            max_prompt_tokens=llm_settings.max_tokens,
+            token_estimator=estimate_token_usage,
+            initial_batch_size=len(prepared),
+            min_batch_size=1,
+        ):
+            changed_in_batch = analyze_local_var_batch(
+                conn=conn,
+                graph=graph,
+                items=batch.items,
+                llm_settings=llm_settings,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                dry_run=dry_run,
+                prompt=batch.prompt,
+            )
+            processed_count += changed_in_batch
+            pbar.update(len(batch.items))
 
     pbar.close()
     print(f"[Phase 4] 完成，共优化了 {processed_count} 个函数的局部变量。")
@@ -5123,6 +6053,32 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="跳过第四阶段局部变量（v1, a2...）的易读性整理。",
     )
     parser.add_argument(
+        "--lvar-only-sub",
+        action="store_true",
+        help="第四阶段仅对 IDA 侧仍为 sub_XXXX 的函数执行局部变量重命名（默认：对所有符合条件函数执行）。",
+    )
+    parser.add_argument(
+        "--lvar-min-lines",
+        type=int,
+        default=6,
+        help="第四阶段仅处理有效伪代码行数 >= N 的函数（默认 6，即要求 >5 行）。",
+    )
+    parser.add_argument(
+        "--lvar-ida-only",
+        action="store_true",
+        help="第四阶段仅基于 IDA 视图的函数列表进行候选筛选（推荐）。",
+    )
+    parser.add_argument(
+        "--lvar-include-non-ida",
+        action="store_true",
+        help="允许第四阶段候选包含非 IDA 视图函数（与 --lvar-ida-only 互斥；默认只做 IDA）。",
+    )
+    parser.add_argument(
+        "--lvar-include-import-export",
+        action="store_true",
+        help="第四阶段不排除导入/外部/导出来源符号（默认会排除）。",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="仅构建依赖图并计算评分，不实际调用 LLM。",
@@ -5191,35 +6147,65 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         ensure_analysis_schema(conn)
         ensure_analysis_rows_for_binary(conn, binary_id)
 
-        # 在构建统一图之前，仅当所有函数均为 PENDING 时才做一次 IDA/DB 差异对齐
+        # [Config] 按需求跳过 IDA/DB 不一致对齐（避免全量扫描与额外 LLM/token 开销）
+        # 原逻辑会在 all_pending 时调用 _reconcile_ida_db_mismatch(...)。
         if args.ida_sync:
-            analysis_info_probe = load_analysis_info(conn)
-            total = 0
-            pending = 0
-            for info in analysis_info_probe.values():
-                total += 1
-                state = (info or {}).get("analysis_state")
-                if state is None or state == "PENDING":
-                    pending += 1
-
-            all_pending = total > 0 and pending == total
-
-            if all_pending:
-                _reconcile_ida_db_mismatch(
-                    conn=conn,
-                    binary_id=binary_id,
-                    ida_url=args.ida_url,
-                    llm_settings=llm_settings,
-                    ida_sync=args.ida_sync,
-                )
-            else:
-                print(
-                    f"[Align] 存在非 PENDING 函数，跳过 IDA/DB 不一致对齐 (pending={pending}, total={total})."
-                )
+            print("[Config] 已跳过 IDA/DB 不一致性检查 (Alignment Check)。")
+            logger.info("[Config] 已跳过 IDA/DB 不一致性检查 (Alignment Check)。")
 
         # 构建跨视图统一依赖图（在可能的删除/同步之后）
         unified_graph = build_unified_graph(conn, binary_id)
         print(f"统一图中共有 {len(unified_graph.nodes)} 个物理函数节点。")
+
+        # [Config] 仅分析 IDA 侧仍为 sub_ 前缀的函数（避免对已命名函数的全量分析）
+        print("[Config] 正在获取 IDA 侧仍为 sub_ 前缀的函数列表...")
+        target_sub_map = _load_ida_subfunc_entries(
+            conn,
+            binary_id,
+            ida_url=args.ida_url if args.ida_sync else None,
+        )
+        target_sub_vas: Set[int] = set(target_sub_map.keys())
+        print(
+            f"[Config] 锁定目标: 仅分析 {len(target_sub_vas)} 个 sub_ 开头的未命名函数。"
+        )
+
+        # 强制重跑：即使某些 sub_ 已被标成 ANALYZED/LOCKED，也一律重置为 PENDING。
+        # 目标是“直到 IDA 侧名称不再是 sub_”为止。
+        if target_sub_vas:
+            cur = conn.cursor()
+            ids_to_reset: Set[int] = set()
+            missing_nodes: List[Tuple[int, str]] = []
+
+            for entry_va, ida_name in target_sub_map.items():
+                node = unified_graph.nodes.get(entry_va)
+                if not node:
+                    missing_nodes.append((entry_va, ida_name))
+                    continue
+                for fid in node.function_ids:
+                    ids_to_reset.add(fid)
+
+            if missing_nodes:
+                print(
+                    f"[Phase 1] 警告: {len(missing_nodes)} 个 sub_ 函数在统一依赖图中未找到 (可能是新生成的)，已跳过重置。"
+                )
+
+            if ids_to_reset:
+                placeholders = ",".join("?" for _ in ids_to_reset)
+                cur.execute(
+                    f"""
+                    UPDATE analysis_status
+                    SET analysis_state = 'PENDING',
+                        confidence_score = 0,
+                        summary_signature = NULL,
+                        semantic_summary = NULL
+                    WHERE function_id IN ({placeholders});
+                    """,
+                    tuple(ids_to_reset),
+                )
+                conn.commit()
+                print(
+                    f"[Phase 1] 已强制重置 {len(ids_to_reset)} 条记录为 PENDING（含原 ANALYZED/LOCKED）。"
+                )
 
         # ===== 第一阶段：底向上知识传播（带断点续工 + 进度条） =====
         # 预估本轮要处理的物理函数数量：
@@ -5229,7 +6215,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         update_unified_scores_in_db(conn, unified_graph, scores)
 
         pending_nodes_initial: List[UnifiedFunctionNode] = []
-        for _, node in unified_graph.nodes.items():
+        for entry_va, node in unified_graph.nodes.items():
+            if entry_va not in target_sub_vas:
+                continue
             any_analyzed = False
             for fid in node.function_ids:
                 info = analysis_info.get(fid)
@@ -5239,82 +6227,23 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             if not any_analyzed:
                 pending_nodes_initial.append(node)
 
-        total_pending = len(pending_nodes_initial)
+        initial_pending_count = len(pending_nodes_initial)
         processed = 0
 
-        if total_pending == 0:
-            print("当前 binary 下已无 PENDING 物理函数。")
-
-            # 额外检查 IDA 视图是否仍存在 sub_ 前缀的函数名，若有则重置回 PENDING 并走批处理队列
-            ida_subs = _load_ida_subfunc_entries(
-                conn,
-                binary_id,
-                ida_url=args.ida_url if args.ida_sync else None,
-            )
-
-            if ida_subs:
-                print(
-                    f"[Phase 1] 发现 {len(ida_subs)} 个 IDA 函数仍为 sub_ 前缀，正在将其重置为 PENDING 以便批量分析..."
-                )
-
-                cur = conn.cursor()
-                ids_to_reset: Set[int] = set()
-                missing_nodes: List[Tuple[int, str]] = []
-
-                for entry_va, ida_name in ida_subs.items():
-                    node = unified_graph.nodes.get(entry_va)
-                    if not node:
-                        missing_nodes.append((entry_va, ida_name))
-                        continue
-
-                    for fid in node.function_ids:
-                        ids_to_reset.add(fid)
-
-                    if node not in pending_nodes_initial:
-                        pending_nodes_initial.append(node)
-
-                if missing_nodes:
-                    print(
-                        f"[Phase 1] 警告: {len(missing_nodes)} 个 sub_ 函数在统一依赖图中未找到 (可能是新生成的)，已跳过。"
-                    )
-
-                if ids_to_reset:
-                    placeholders = ",".join("?" for _ in ids_to_reset)
-                    cur.execute(
-                        f"""
-                        UPDATE analysis_status
-                        SET analysis_state = 'PENDING',
-                            confidence_score = 0,
-                            summary_signature = NULL,
-                            semantic_summary = NULL
-                        WHERE function_id IN ({placeholders});
-                        """,
-                        tuple(ids_to_reset),
-                    )
-                    conn.commit()
-                    print(f"[Phase 1] 已重置 {len(ids_to_reset)} 条记录为 PENDING。")
-
-                    total_pending = len(pending_nodes_initial)
-            else:
-                print("[Phase 1] 未发现 sub_ 前缀残留，直接跳过第一阶段。")
-
-        if total_pending > 0:
-            target_count = total_pending
-
+        if initial_pending_count > 0:
             print(
-                f"[Phase 1] 计划分析 {target_count} 个物理函数 "
-                f"(当前剩余 PENDING 物理函数总数: {total_pending})"
+                f"[Phase 1] 计划分析 {initial_pending_count} 个物理函数 (已过滤掉非 sub_ 函数)"
             )
 
             pbar = tqdm(
-                total=target_count,
+                total=initial_pending_count,
                 desc="Phase 1: Knowledge Propagation",
                 unit="func",
             )
 
             batch_target = max(1, args.batch or 1)
 
-            while processed < target_count:
+            while True:
                 analysis_info = load_analysis_info(conn)
                 scores = compute_unified_scores(unified_graph, analysis_info)
                 update_unified_scores_in_db(conn, unified_graph, scores)
@@ -5323,6 +6252,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 # 该节点下所有 function_id 都是 PENDING/NULL 才算 PENDING。
                 pending_nodes: List[UnifiedFunctionNode] = []
                 for entry_va, node in unified_graph.nodes.items():
+                    if entry_va not in target_sub_vas:
+                        continue
                     any_analyzed = False
                     for fid in node.function_ids:
                         info = analysis_info.get(fid)
@@ -5333,7 +6264,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                         pending_nodes.append(node)
 
                 if not pending_nodes:
-                    pbar.write("当前 binary 下已无 PENDING 物理函数，分析提前结束。")
+                    pbar.write("所有目标 sub_ 函数均已分析完毕。")
                     break
 
                 # 按得分排序，优先处理高分节点
@@ -5342,43 +6273,55 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     reverse=True,
                 )
 
-                batch_size = min(batch_target, len(pending_nodes))
-                selected_nodes = pending_nodes[:batch_size]
+                requested_nodes = pending_nodes[: min(batch_target, len(pending_nodes))]
 
-                # 预组装批量 Prompt，并按 token 限制动态缩减 batch
+                def _phase1_builder(nodes: List[UnifiedFunctionNode]) -> str:
+                    if len(nodes) == 1:
+                        return build_unified_prompt(
+                            conn,
+                            unified_graph,
+                            nodes[0],
+                            analysis_info,
+                        )
+                    return build_unified_batch_prompt(
+                        conn,
+                        unified_graph,
+                        nodes,
+                        analysis_info,
+                    )
+
+                # 动态 batch：使用共享生成器，从“Top-N”中挑出能塞进 token 预算的最大前缀
                 prompt: Optional[str] = None
                 estimated_tokens: Optional[int] = None
-                while batch_size >= 1:
-                    if batch_size == 1:
-                        prompt = build_unified_prompt(
-                            conn,
-                            unified_graph,
-                            selected_nodes[0],
-                            analysis_info,
-                        )
-                    else:
-                        prompt = build_unified_batch_prompt(
-                            conn,
-                            unified_graph,
-                            selected_nodes,
-                            analysis_info,
-                        )
+                selected_nodes: List[UnifiedFunctionNode] = []
 
-                    estimated_tokens = estimate_token_usage(prompt)
-                    if estimated_tokens <= llm_settings.max_tokens or batch_size == 1:
-                        break
+                try:
+                    first_batch = next(
+                        yield_dynamic_batch(
+                            requested_nodes,
+                            prompt_builder=_phase1_builder,
+                            max_prompt_tokens=llm_settings.max_tokens,
+                            token_estimator=estimate_token_usage,
+                            initial_batch_size=len(requested_nodes),
+                            min_batch_size=1,
+                        )
+                    )
+                    selected_nodes = first_batch.items  # type: ignore[assignment]
+                    prompt = first_batch.prompt
+                    estimated_tokens = first_batch.estimated_tokens
+                except StopIteration:
+                    selected_nodes = []
 
-                    batch_size -= 1
-                    selected_nodes = pending_nodes[:batch_size]
+                batch_size = len(selected_nodes)
 
                 if batch_size == 0:
                     pbar.write("[Phase 1] 未能构造有效批次，终止本轮。")
                     break
 
-                if batch_size < min(batch_target, len(pending_nodes)) and estimated_tokens is not None:
+                if batch_size < len(requested_nodes) and estimated_tokens is not None:
                     logger.info(
                         "[Phase1-Batch] 因 token 预估调整批量大小：requested=%d, applied=%d, estimated_tokens=%d, max_tokens=%d",
-                        batch_target,
+                        len(requested_nodes),
                         batch_size,
                         estimated_tokens,
                         llm_settings.max_tokens,
@@ -5466,6 +6409,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                     ida_sync=args.ida_sync,
                     ida_url=args.ida_url,
                     dry_run=args.dry_run,
+                    batch_size=max(1, int(args.batch or 1)),
                 )
             finally:
                 conn2.close()
@@ -5482,6 +6426,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 ida_sync=args.ida_sync,
                 ida_url=args.ida_url,
                 dry_run=args.dry_run,
+                batch_size=max(1, int(args.batch or 1)),
             )
         finally:
             conn3.close()
@@ -5497,6 +6442,11 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 ida_sync=args.ida_sync,
                 ida_url=args.ida_url,
                 dry_run=args.dry_run,
+                batch_size=max(1, min(3, int(args.batch or 1))),
+                only_sub=bool(args.lvar_only_sub),
+                ida_only=bool(args.lvar_ida_only or not args.lvar_include_non_ida),
+                min_pseudo_lines=max(0, int(args.lvar_min_lines or 0)),
+                exclude_import_export=not bool(args.lvar_include_import_export),
             )
         finally:
             conn4.close()

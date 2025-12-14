@@ -419,3 +419,69 @@
 2025-12-11 22:35:12,877 - ida_adapter - INFO - 所有脚本执行完成
 2025-12-11 22:35:12,878 - ida_adapter - INFO - 处理输出文件...
 2025-12-11 22:35:12,880 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgct_so_idademo
+2025-12-11 22:59:37,005 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgdlp.so
+2025-12-11 22:59:37,005 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgdlp_so_idademo
+2025-12-11 22:59:37,013 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 22:59:42,037 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 22:59:42,037 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 22:59:46,275 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 22:59:46,277 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-11 22:59:52,351 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-11 22:59:52,351 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-11 22:59:52,352 - ida_adapter - INFO - 处理输出文件...
+2025-12-11 22:59:52,354 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgdlp_so_idademo
+2025-12-11 23:16:46,555 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgfwctr.so
+2025-12-11 23:16:46,558 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgfwctr_so_idademo
+2025-12-11 23:16:46,565 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 23:16:51,541 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 23:16:51,541 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 23:16:55,854 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 23:16:55,854 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-11 23:17:00,829 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-11 23:17:00,829 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-11 23:17:00,830 - ida_adapter - INFO - 处理输出文件...
+2025-12-11 23:17:00,833 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgfwctr_so_idademo
+2025-12-11 23:24:04,228 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwglog.so
+2025-12-11 23:24:04,229 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwglog_so_idademo
+2025-12-11 23:24:04,236 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 23:24:09,378 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 23:24:09,378 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 23:24:14,074 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 23:24:14,075 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-11 23:24:20,911 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-11 23:24:20,911 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-11 23:24:20,912 - ida_adapter - INFO - 处理输出文件...
+2025-12-11 23:24:20,914 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwglog_so_idademo
+2025-12-11 23:25:02,735 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgsi.so
+2025-12-11 23:25:02,735 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgsi_so_idademo
+2025-12-11 23:25:02,742 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 23:25:07,148 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 23:25:07,148 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 23:25:11,425 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 23:25:11,425 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-11 23:25:16,285 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-11 23:25:16,285 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-11 23:25:16,286 - ida_adapter - INFO - 处理输出文件...
+2025-12-11 23:25:16,288 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgsi_so_idademo
+2025-12-11 23:33:59,455 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgvoip.so
+2025-12-11 23:33:59,456 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgvoip_so_idademo
+2025-12-11 23:33:59,463 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 23:34:04,270 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 23:34:04,271 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 23:34:08,591 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 23:34:08,591 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-11 23:34:14,750 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-11 23:34:14,751 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-11 23:34:14,751 - ida_adapter - INFO - 处理输出文件...
+2025-12-11 23:34:14,753 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\libwgvoip_so_idademo
+2025-12-11 23:54:19,175 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\123\libwgxbind.so
+2025-12-11 23:54:19,175 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\123\libwgxbind_so_idademo
+2025-12-11 23:54:19,183 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-11 23:55:09,156 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-11 23:55:09,156 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-11 23:55:44,548 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-11 23:55:44,548 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-12 00:01:59,316 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-12 00:01:59,316 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-12 00:01:59,318 - ida_adapter - INFO - 处理输出文件...
+2025-12-12 00:01:59,320 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\123\libwgxbind_so_idademo
