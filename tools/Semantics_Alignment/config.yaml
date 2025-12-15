@@ -25,3 +25,59 @@ llm:
     # 例如：
     # request_timeout: 60
     # user: "semantics_alignment"
+
+
+# ==============================
+# Pipeline 参数（非 LLM）
+# 说明：把之前代码里“写死”的阈值抽出来，便于不同样本调参。
+# ==============================
+pipeline:
+  phase1:
+    # Phase 1 默认批处理大小（原 argparse 默认 25；如命令行传 --batch 则优先命令行）
+    batch_size_default: 25
+
+  phase4_lvar:
+    # Phase 4 默认仅处理有效伪代码行数 >= N（原默认 6；如命令行传 --lvar-min-lines 则优先命令行）
+    min_pseudo_lines_default: 6
+    # Phase 4 batch_size 的上限（原逻辑 min(3, batch)）
+    batch_size_cap: 3
+    # 同步到 IDA 后，为确认重命名持久化而进行的“保存+刷新”重试参数
+    verify_max_retries: 3
+    verify_wait_seconds: 1.0
+
+  prompt_limits:
+    # Phase 1 Prompt 里“代表视图反汇编”最多带多少行（原默认 200）
+    phase1_max_disasm_lines: 200
+    # Phase 1 Prompt 里“每个工具伪代码”最多带多少字符（原默认 4000）
+    phase1_max_pseudo_chars_per_tool: 4000
+    # Phase 1 Prompt 里“字符串引用示例”最多带多少条（原默认 20）
+    phase1_max_strings: 20
+
+    # Phase 5 构造上下文摘要时，最多带多少行反汇编（原默认 60）
+    annotation_context_max_disasm_lines: 60
+    # Phase 5 构造上下文摘要时，每个工具伪代码最多保留多少字符（原默认 1200）
+    annotation_context_max_pseudo_chars_per_tool: 1200
+    # Phase 5 构造上下文摘要时，最多带多少条字符串（原默认 20）
+    annotation_context_max_strings: 20
+
+    # 从 IDA 获取的 disassembly（给 LLM 的“最新反汇编”段）最多保留多少行（原默认 400）
+    ida_snapshot_max_disasm_lines: 400
+
+  phase5_annotation:
+    # 只要有效伪代码行数 >= N 就注释（按你要求默认 6，即 >5 行）
+    min_pseudo_lines: 6
+    # 写 Prompt 时对伪代码做字符截断，避免超长输入（原默认 8000）
+    max_code_chars: 8000
+
+    # LLM 分块注释策略：按伪代码行数选择 chunk_size
+    # - <= single_max_lines: 不分块
+    # - (single_max_lines, medium_max_lines]: chunk_size=medium_chunk_size
+    # - > medium_max_lines: chunk_size=large_chunk_size
+    llm_chunking:
+      single_max_lines: 80
+      medium_max_lines: 160
+      medium_chunk_size: 120
+      large_chunk_size: 80
+
+    # 同步到 IDA 时，每次 HTTP 提交多少条行注释（原默认 120）
+    ida_sync_chunk_size: 120

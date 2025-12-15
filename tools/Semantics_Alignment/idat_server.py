@@ -38,6 +38,12 @@ import idautils
 
 PORT = 12345
 
+# 逐行伪代码注释缓存：ea -> {line_no(1-based): comment}
+_PSEUDOCODE_LINE_COMMENTS: dict[int, dict[int, str]] = {}
+# 逐行伪代码行号到“代表性 EA”的缓存：func_ea -> {line_no(1-based): ea}
+# 用于将行号注释转换为 Hex-Rays treeloc_t(ea, itp) 注释。
+_PSEUDOCODE_LINE_EAS: dict[int, dict[int, int]] = {}
+
 _RUNNING = True  # 控制主循环是否继续
 _CLEANED_UP = False  # 确保清理逻辑只执行一次
 
@@ -172,6 +178,12 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 result = self._execute_in_main_thread(self._handle_get_function_info, payload)
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
+            elif action == "set_pseudocode_line_comments":
+                result = self._execute_in_main_thread(
+                    self._handle_set_pseudocode_line_comments, payload
+                )
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
             elif action == "get_sub_functions":
                 result = self._execute_in_main_thread(self._handle_get_sub_functions, payload)
                 resp = result or {"status": "error", "msg": "no result"}
@@ -219,6 +231,222 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
     # =========================
     # 业务逻辑处理
     # =========================
+
+    def _parse_ea(self, payload: dict) -> int | None:
+        ea = payload.get("ea")
+        if ea is None:
+            return None
+        if isinstance(ea, str):
+            s = ea.strip()
+            try:
+                if s.lower().startswith("0x"):
+                    return int(s, 16)
+                return int(s)
+            except ValueError:
+                return None
+        try:
+            return int(ea)
+        except Exception:
+            return None
+
+    def _append_line_comments_to_pseudocode(
+        self, ea: int, lines: list[str]
+    ) -> list[str]:
+        cmts = _PSEUDOCODE_LINE_COMMENTS.get(int(ea)) or {}
+        if not cmts:
+            return lines
+
+        out: list[str] = []
+        for idx, ln in enumerate(lines, 1):
+            c = (cmts.get(int(idx)) or "").strip()
+            if not c:
+                out.append(ln)
+                continue
+
+            s = ln.rstrip("\r\n")
+            ss = s.rstrip()
+            if not ss or ss in ("{", "}"):
+                out.append(ln)
+                continue
+
+            if "//" in ss:
+                out.append(s + " | " + c)
+            else:
+                out.append(s + "  // " + c)
+        return out
+
+    def _try_apply_hexrays_line_comments(
+        self,
+        func_ea: int,
+        line_comments: dict[int, str],
+        line_eas: dict[int, int] | None = None,
+    ) -> tuple[int, str]:
+        """尽力将“伪代码行号->注释”写入 Hex-Rays。
+
+        说明：IDA/Hex-Rays 的 Python API 在不同版本上存在差异，这里采用多种方式尝试。
+        返回 (applied_count, method_name)。
+        """
+
+        if not init_hexrays():
+            return 0, "no_hexrays"
+
+        func = ida_funcs.get_func(func_ea)
+        if not func:
+            return 0, "no_func"
+
+        try:
+            ida_hexrays.clear_cached_cfuncs()
+        except Exception:
+            pass
+
+        try:
+            cfunc = ida_hexrays.decompile(func.start_ea)
+        except Exception:
+            cfunc = None
+        if not cfunc:
+            return 0, "decompile_failed"
+
+        # 方式 A（IDA 9.2 / Hex-Rays 推荐）：cfunc.set_user_cmt(treeloc_t, text)
+        # 参考最小示例：
+        #   tl = hx.treeloc_t(); tl.ea = ea; tl.itp = idaapi.ITP_SEMI
+        #   cfunc.set_user_cmt(tl, comment); cfunc.save_user_cmts(); cfunc.refresh_func_ctext()
+        if hasattr(ida_hexrays, "treeloc_t") and hasattr(cfunc, "set_user_cmt"):
+            applied = 0
+            for lnnum, text in sorted(line_comments.items()):
+                comment = (text or "").strip()
+                if not comment:
+                    continue
+                try:
+                    tl = ida_hexrays.treeloc_t()  # type: ignore[attr-defined]
+
+                    # 关键：用“该伪代码行代表的 EA”来定位 treeloc。
+                    # 若缺失映射，则退回函数起始地址（可能会导致注释聚集到同一行）。
+                    line_ea = None
+                    if line_eas is not None:
+                        try:
+                            line_ea = int(line_eas.get(int(lnnum)) or 0)
+                        except Exception:
+                            line_ea = None
+                    if not line_ea:
+                        line_ea = int(func.start_ea)
+
+                    try:
+                        tl.ea = int(line_ea)
+                    except Exception:
+                        pass
+
+                    # 常用：行尾注释
+                    try:
+                        tl.itp = idaapi.ITP_SEMI
+                    except Exception:
+                        # 兼容：某些环境下常量可从 idaapi/ida_lines 等导入；失败就不设置
+                        pass
+
+                    cfunc.set_user_cmt(tl, comment)
+                    applied += 1
+                except Exception:
+                    continue
+
+            if applied > 0:
+                try:
+                    if hasattr(cfunc, "save_user_cmts"):
+                        cfunc.save_user_cmts()
+                    if hasattr(cfunc, "refresh_func_ctext"):
+                        cfunc.refresh_func_ctext()
+                    ida_kernwin.refresh_idaview_anyway()
+                except Exception:
+                    pass
+                return applied, "cfunc.set_user_cmt"
+
+        # 方式 B：set_user_cmt(cfunc, treeloc_t, text)（旧式全局函数）
+        if hasattr(ida_hexrays, "set_user_cmt") and hasattr(ida_hexrays, "treeloc_t"):
+            applied = 0
+            for lnnum, text in sorted(line_comments.items()):
+                comment = (text or "").strip()
+                if not comment:
+                    continue
+                try:
+                    tl = ida_hexrays.treeloc_t()  # type: ignore[attr-defined]
+                    line_ea = None
+                    if line_eas is not None:
+                        try:
+                            line_ea = int(line_eas.get(int(lnnum)) or 0)
+                        except Exception:
+                            line_ea = None
+                    if not line_ea:
+                        line_ea = int(func.start_ea)
+
+                    if hasattr(tl, "ea"):
+                        try:
+                            tl.ea = int(line_ea)
+                        except Exception:
+                            pass
+
+                    try:
+                        tl.itp = idaapi.ITP_SEMI
+                    except Exception:
+                        pass
+
+                    ida_hexrays.set_user_cmt(cfunc, tl, comment)  # type: ignore[attr-defined]
+                    applied += 1
+                except Exception:
+                    continue
+            if applied > 0:
+                try:
+                    ida_kernwin.refresh_idaview_anyway()
+                except Exception:
+                    pass
+                return applied, "ida_hexrays.set_user_cmt"
+
+        # 方式 B：user_cmts_t + restore/save
+        if (
+            hasattr(ida_hexrays, "user_cmts_t")
+            and hasattr(ida_hexrays, "restore_user_cmts")
+            and hasattr(ida_hexrays, "save_user_cmts")
+            and hasattr(ida_hexrays, "treeloc_t")
+        ):
+            try:
+                cmts = ida_hexrays.user_cmts_t()  # type: ignore[attr-defined]
+                ida_hexrays.restore_user_cmts(cfunc, cmts)  # type: ignore[attr-defined]
+
+                applied = 0
+                for lnnum, text in sorted(line_comments.items()):
+                    comment = (text or "").strip()
+                    if not comment:
+                        continue
+                    try:
+                        tl = ida_hexrays.treeloc_t()  # type: ignore[attr-defined]
+                        for attr, val in (
+                            ("ea", int(func.start_ea)),
+                            ("lnnum", int(lnnum)),
+                            ("line", int(lnnum)),
+                        ):
+                            try:
+                                if hasattr(tl, attr):
+                                    setattr(tl, attr, val)
+                            except Exception:
+                                pass
+
+                        if hasattr(cmts, "__setitem__"):
+                            cmts[tl] = comment  # type: ignore[index]
+                            applied += 1
+                        elif hasattr(cmts, "add"):
+                            cmts.add(tl, comment)  # type: ignore[attr-defined]
+                            applied += 1
+                    except Exception:
+                        continue
+
+                ida_hexrays.save_user_cmts(cfunc, cmts)  # type: ignore[attr-defined]
+                if applied > 0:
+                    try:
+                        ida_kernwin.refresh_idaview_anyway()
+                    except Exception:
+                        pass
+                    return applied, "user_cmts"
+            except Exception:
+                pass
+
+        return 0, "unsupported"
 
     def _handle_rename_and_sync(self, payload: dict) -> dict:
         ea = payload.get("ea")
@@ -592,22 +820,48 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             if not cfunc:
                 return {"status": "error", "msg": f"decompile failed at 0x{func.start_ea:X}"}
 
-            lines = []
-            for pline in cfunc.get_pseudocode():
+            lines: list[str] = []
+            pseudocode_lines: list[dict] = []
+            line_eas: dict[int, int] = {}
+            for idx, pline in enumerate(cfunc.get_pseudocode(), 1):
                 try:
                     text = ida_lines.tag_remove(pline.line)
                 except Exception:
                     text = str(pline.line)
+
+                pea = None
+                try:
+                    pea = int(getattr(pline, "ea", 0) or 0)
+                except Exception:
+                    pea = None
+                if pea:
+                    line_eas[int(idx)] = int(pea)
+
                 lines.append(text)
+                pseudocode_lines.append({"no": int(idx), "ea": int(pea or 0), "text": text})
+
+            # 缓存 line_no->ea 映射，便于后续 set_pseudocode_line_comments 精准落点
+            if line_eas:
+                _PSEUDOCODE_LINE_EAS[int(func.start_ea)] = dict(line_eas)
+
+            # 若已设置逐行注释，则在返回文本中附带行尾注释（便于外部脚本刷新 DB）
+            lines = self._append_line_comments_to_pseudocode(int(func.start_ea), lines)
 
             code = "\n".join(lines)
-            return {"status": "ok", "ea": func.start_ea, "pseudocode": code}
+            return {
+                "status": "ok",
+                "ea": int(func.start_ea),
+                "pseudocode": code,
+                "pseudocode_lines": pseudocode_lines,
+                "line_eas": {str(k): int(v) for k, v in line_eas.items()},
+            }
         except Exception as exc:
             print(f"[IDAT-Server] get_pseudocode failed: {exc}")
             return {"status": "error", "msg": str(exc)}
 
     def _handle_get_function_info(self, payload: dict) -> dict:
         """返回指定函数的当前名称与伪代码。"""
+        include_disasm = bool(payload.get("include_disasm") or False)
         ea = payload.get("ea")
         if ea is None:
             return {"status": "error", "msg": "missing 'ea'"}
@@ -642,20 +896,58 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             if not cfunc:
                 return {"status": "error", "msg": f"decompile failed at 0x{func.start_ea:X}"}
 
-            lines = []
-            for pline in cfunc.get_pseudocode():
+            lines: list[str] = []
+            pseudocode_lines: list[dict] = []
+            line_eas: dict[int, int] = {}
+            for idx, pline in enumerate(cfunc.get_pseudocode(), 1):
                 try:
                     text = ida_lines.tag_remove(pline.line)
                 except Exception:
                     text = str(pline.line)
+
+                pea = None
+                try:
+                    pea = int(getattr(pline, "ea", 0) or 0)
+                except Exception:
+                    pea = None
+                if pea:
+                    line_eas[int(idx)] = int(pea)
+
                 lines.append(text)
+                pseudocode_lines.append({"no": int(idx), "ea": int(pea or 0), "text": text})
+
+            # 缓存 line_no->ea 映射，便于后续 set_pseudocode_line_comments 精准落点
+            if line_eas:
+                _PSEUDOCODE_LINE_EAS[int(func.start_ea)] = dict(line_eas)
+
+            lines = self._append_line_comments_to_pseudocode(int(func.start_ea), lines)
 
             code = "\n".join(lines)
+
+            disasm_lines: list[dict] = []
+            if include_disasm:
+                try:
+                    for insn_ea in idautils.FuncItems(func.start_ea):
+                        try:
+                            dtext = idc.generate_disasm_line(insn_ea, 0) or ""
+                        except Exception:
+                            try:
+                                dtext = idc.GetDisasm(insn_ea) or ""
+                            except Exception:
+                                dtext = ""
+                        if dtext:
+                            disasm_lines.append({"ea": int(insn_ea), "text": dtext})
+                except Exception:
+                    disasm_lines = []
+
             return {
                 "status": "ok",
-                "ea": func.start_ea,
+                "ea": int(func.start_ea),
                 "name": name,
                 "pseudocode": code,
+                "pseudocode_lines": pseudocode_lines,
+                "line_eas": {str(k): int(v) for k, v in line_eas.items()},
+                "disassembly": disasm_lines,
             }
         except Exception as exc:
             print(f"[IDAT-Server] get_function_info failed: {exc}")
@@ -689,6 +981,90 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             return {"status": "error", "msg": str(exc)}
 
         return {"status": "ok", "sub_functions": result}
+
+    def _handle_set_pseudocode_line_comments(self, payload: dict) -> dict:
+        """为指定函数设置“伪代码行注释”。
+
+                payload:
+                    - ea: 函数地址
+                    - line_comments: {"1": "...", "2": "..."}
+                    - line_eas (optional): {"1": 268... , "2": 268...}  # 行号对应的代表性 EA
+
+        注意：不同 IDA/Hex-Rays 版本对“行注释”的支持能力不同。
+        - 若可写入 Hex-Rays user comments，会尽力应用并 refresh
+        - 无法写入时仍会缓存，供 get_pseudocode 返回带注释文本
+        """
+
+        ea = self._parse_ea(payload)
+        if ea is None:
+            return {"status": "error", "msg": "missing/invalid 'ea'"}
+
+        raw = payload.get("line_comments")
+        if not isinstance(raw, dict):
+            return {"status": "error", "msg": "missing/invalid 'line_comments'"}
+
+        raw_line_eas = payload.get("line_eas")
+        parsed_line_eas: dict[int, int] = {}
+        if isinstance(raw_line_eas, dict):
+            for k, v in raw_line_eas.items():
+                try:
+                    idx = int(str(k).strip())
+                    vea = int(str(v).strip(), 16) if isinstance(v, str) and str(v).strip().lower().startswith("0x") else int(v)
+                except Exception:
+                    continue
+                if idx <= 0:
+                    continue
+                if vea <= 0:
+                    continue
+                parsed_line_eas[int(idx)] = int(vea)
+
+        normalized: dict[int, str] = {}
+        for k, v in raw.items():
+            try:
+                idx = int(str(k).strip())
+            except Exception:
+                continue
+            if idx <= 0:
+                continue
+            text = (str(v) if v is not None else "").strip()
+            if not text:
+                continue
+            # 简单裁剪，避免单行注释过长导致视图很难读
+            if len(text) > 200:
+                text = text[:200] + "..."
+            normalized[idx] = text
+
+        if not normalized:
+            return {"status": "ok", "ea": int(ea), "applied": 0, "method": "none"}
+
+        # 始终缓存一份（用于 get_pseudocode 返回行尾注释文本）
+        # 注意：这里要“合并”而不是覆盖，支持分块增量提交。
+        existing_cmts = _PSEUDOCODE_LINE_COMMENTS.get(int(ea)) or {}
+        existing_cmts.update(normalized)
+        _PSEUDOCODE_LINE_COMMENTS[int(ea)] = dict(existing_cmts)
+
+        # 同步缓存一份 line_no->ea 映射（优先使用 payload 传入的；否则沿用最近一次反编译缓存）
+        # 同样使用合并，支持多次提交逐步补全映射。
+        if parsed_line_eas:
+            existing_eas = _PSEUDOCODE_LINE_EAS.get(int(ea)) or {}
+            existing_eas.update(parsed_line_eas)
+            _PSEUDOCODE_LINE_EAS[int(ea)] = dict(existing_eas)
+            parsed_line_eas = existing_eas
+        else:
+            parsed_line_eas = _PSEUDOCODE_LINE_EAS.get(int(ea)) or {}
+
+        applied, method = self._try_apply_hexrays_line_comments(
+            int(ea),
+            normalized,
+            line_eas=parsed_line_eas or None,
+        )
+        return {
+            "status": "ok",
+            "ea": int(ea),
+            "applied": int(applied),
+            "cached": len(normalized),
+            "method": method,
+        }
 
     def _handle_save_and_exit_request(self, payload: dict):
         """
