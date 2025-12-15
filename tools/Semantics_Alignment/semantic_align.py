@@ -1,32 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-semantic_align.py
+"""semantic_align.py
 
-一键执行“对齐加载 + 语义传播 + IDA 同步”的流水线：
+一键执行“对齐加载 + 语义传播(Phase1-5) + IDA 同步”的流水线：
 
-1. 调用 alignment_loader.py 从 Ghidra / IDA 导出的目录构建 SQLite 数据库；
-2. 启动 IDA（idat）加载 Malware_sample.exe，并在其中运行 idat_server.py；
-3. 以 --ida-sync 全量运行 knowledge_propagation.py，与 IDA 端保持联动。
+1) 调用 alignment_loader.py 从 Ghidra / IDA 导出的目录构建 SQLite 数据库；
+2) （可选）启动 IDA（idat）并运行 idat_server.py；
+3) 在本进程内依次执行 Phase1~Phase5（模块化实现位于 tools/Semantics_Alignment/phases/）。
 
-默认等价于依次执行：
-  python tools/Semantics_Alignment/alignment_loader.py --delete-db --db tmp/Malware_sample.exe.db ^
-         --ghidra-dir tmp/Malware_sample_exe_ghidemo ^
-         --ida-dir    tmp/Malware_sample_exe_idademo ^
-         --dump-db --dump-db-output tmp/db_sample_dump.txt ^
-         --dump-db-workbook tmp/db_sample_dump.xlsx
-
-  idat -A -L"idat_log.txt" ^
-       -S"tools/Semantics_Alignment/idat_server.py" "tmp/Malware_sample.exe"
-
-  python tools/Semantics_Alignment/knowledge_propagation.py ^
-      --db tmp/Malware_sample.exe.db ^
-      --ida-sync
+说明：此脚本是新的工作流入口，避免再通过子进程调用 knowledge_propagation.py。
+公共能力已下沉到 kp/（日志、配置、建图、评分等），工作流不再依赖 knowledge_propagation.py。
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import re
 import subprocess
 import sys
@@ -35,6 +24,25 @@ import builtins
 import inspect
 from pathlib import Path
 from typing import Iterable, Optional
+
+import sqlite3
+
+from dynamic_batching import yield_dynamic_batch
+from kp.kp_ida import IDAService
+from kp.kp_llm import estimate_token_usage
+from kp.kp_logging import install_stdout_tee, setup_logging
+from kp.kp_settings import build_llm_settings, load_semantics_config
+from kp.kp_graph import build_unified_graph
+from kp.kp_scoring import compute_unified_scores
+from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
+from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN
+from kp.kp_unified_prompt import build_unified_batch_prompt, build_unified_prompt
+from phases.phase1_kp import analyze_one_unified_function as phase1_analyze_one_unified_function
+from phases.phase1_kp import analyze_unified_batch as phase1_analyze_unified_batch
+from phases.phase2_validation import run_validation_phase as phase2_run_validation_phase
+from phases.phase3_globals import run_global_var_phase as phase3_run_global_var_phase
+from phases.phase4_lvar import run_local_var_phase as phase4_run_local_var_phase
+from phases.phase5_annotation import run_annotation_phase as phase5_run_annotation_phase
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -157,37 +165,224 @@ def launch_idat_server(
     return proc
 
 
-def run_knowledge_propagation(
+def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM binaries ORDER BY id LIMIT 1;")
+    row = cur.fetchone()
+    if not row:
+        raise RuntimeError("数据库中不存在 binaries 记录，无法确定 binary_id。")
+    return int(row[0])
+
+
+def run_semantic_pipeline(
+    *,
     db_path: Path,
     ida_url: str,
-    ida_sync: bool = True,
-) -> int:
-    """
-    调用 knowledge_propagation.py 执行语义传播与（可选）IDA 同步。
-    """
-    cmd = [
-        sys.executable,
-        str(TOOLS_DIR / "knowledge_propagation.py"),
-        "--db",
-        str(db_path),
-    ]
-    if ida_sync:
-        cmd.append("--ida-sync")
-        cmd.extend(["--ida-url", ida_url])
+    ida_sync: bool,
+) -> None:
+    """Run Phase1-5 in-process (no subprocess)."""
 
-    print("[SemanticAlign] 运行 knowledge_propagation.py 进行语义传播...")
-    print("  命令:", " ".join(cmd))
-    result = subprocess.run(cmd, cwd=str(REPO_ROOT))
-    if result.returncode != 0:
-        print(
-            f"[SemanticAlign] knowledge_propagation.py 返回非零退出码：{result.returncode}"
+    logger = logging.getLogger(__name__)
+
+    # 统一日志输出，便于回溯（沿用 knowledge_propagation 的日志格式）
+    setup_logging(TOOLS_DIR / "log.log", input_db=db_path)
+    install_stdout_tee(logger)
+    logger.info("知识传播管线启动，数据库: %s", db_path)
+
+    semantics_config = load_semantics_config(None)
+    llm_settings = build_llm_settings(
+        semantics_config,
+        model=None,
+        temperature=None,
+        max_tokens=None,
+    )
+
+    ida = IDAService(ida_url, enabled=ida_sync)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        binary_id = _pick_single_binary_id(conn)
+
+        ensure_analysis_schema(conn)
+        ensure_analysis_rows_for_binary(conn, binary_id)
+
+        unified_graph = build_unified_graph(conn, binary_id)
+
+        # ---------------------
+        # Phase 1: Knowledge Propagation (unified analysis)
+        # ---------------------
+        print("[SemanticAlign] Phase 1: Knowledge Propagation")
+        processed = 0
+
+        while True:
+            analysis_info = load_analysis_info(conn)
+
+            analyzed_entry_vas = set()
+            for entry_va, node in unified_graph.nodes.items():
+                for fid in node.function_ids:
+                    info = analysis_info.get(int(fid))
+                    if info and info.get("analysis_state") in ("ANALYZED", "LOCKED"):
+                        analyzed_entry_vas.add(int(entry_va))
+                        break
+
+            candidates = []
+            for entry_va, node in unified_graph.nodes.items():
+                if int(entry_va) in analyzed_entry_vas:
+                    continue
+
+                # 默认仅处理 sub_/fun_/loc_ 这类地址风格函数；已有语义命名的跳过
+                if node.names:
+                    if any((name and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(name)) for name in node.names):
+                        continue
+                candidates.append(node)
+
+            if not candidates:
+                break
+
+            # 对候选集计算分数，并取 Top-N
+            scores = {}
+            try:
+                scores = compute_unified_scores(unified_graph, analysis_info)
+            except Exception:
+                scores = {}
+
+            candidates.sort(key=lambda n: int(scores.get(n.entry_va, 0)), reverse=True)
+
+            requested_nodes = candidates[: min(50, len(candidates))]
+
+            def _phase1_builder(nodes):
+                if len(nodes) == 1:
+                    return build_unified_prompt(conn, unified_graph, nodes[0], analysis_info)
+                return build_unified_batch_prompt(conn, unified_graph, nodes, analysis_info)
+
+            try:
+                batch = next(
+                    yield_dynamic_batch(
+                        requested_nodes,
+                        prompt_builder=_phase1_builder,
+                        max_prompt_tokens=llm_settings.max_tokens,
+                        token_estimator=estimate_token_usage,
+                        initial_batch_size=len(requested_nodes),
+                        min_batch_size=1,
+                    )
+                )
+            except StopIteration:
+                break
+
+            selected_nodes = batch.items
+            if not selected_nodes:
+                break
+
+            if len(selected_nodes) > 1:
+                phase1_analyze_unified_batch(
+                    conn=conn,
+                    graph=unified_graph,
+                    nodes=selected_nodes,
+                    analysis_info=analysis_info,
+                    llm_settings=llm_settings,
+                    prompt=batch.prompt,
+                    estimated_tokens=batch.estimated_tokens,
+                    dry_run=False,
+                    ida_sync=ida_sync,
+                    ida_url=ida_url,
+                )
+                processed += len(selected_nodes)
+            else:
+                node = selected_nodes[0]
+                phase1_analyze_one_unified_function(
+                    conn=conn,
+                    graph=unified_graph,
+                    entry_va=node.entry_va,
+                    analysis_info=analysis_info,
+                    llm_settings=llm_settings,
+                    dry_run=False,
+                    ida_sync=ida_sync,
+                    ida_url=ida_url,
+                )
+                processed += 1
+
+        print(f"[SemanticAlign] Phase 1 完成，处理物理函数数量：{processed}")
+
+        # ---------------------
+        # Phase 2: Top-down validation
+        # ---------------------
+        print("[SemanticAlign] Phase 2: Validation")
+        phase2_run_validation_phase(
+            conn=conn,
+            graph=unified_graph,
+            llm_settings=llm_settings,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+            dry_run=False,
+            batch_size=10,
         )
-    return result.returncode
+
+        # ---------------------
+        # Phase 3: Globals
+        # ---------------------
+        print("[SemanticAlign] Phase 3: Globals")
+        phase3_run_global_var_phase(
+            conn=conn,
+            graph=unified_graph,
+            llm_settings=llm_settings,
+            max_globals=None,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+            dry_run=False,
+            batch_size=10,
+        )
+
+        # ---------------------
+        # Phase 4: Local vars
+        # ---------------------
+        print("[SemanticAlign] Phase 4: Local Vars")
+        phase4_run_local_var_phase(
+            conn=conn,
+            graph=unified_graph,
+            llm_settings=llm_settings,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+            semantics_config=semantics_config,
+            dry_run=False,
+            batch_size=3,
+            only_sub=False,
+            ida_only=ida_sync,
+            min_pseudo_lines=6,
+            exclude_import_export=True,
+        )
+
+        # ---------------------
+        # Phase 5: Annotation
+        # ---------------------
+        print("[SemanticAlign] Phase 5: Annotation")
+        phase5_run_annotation_phase(
+            conn=conn,
+            graph=unified_graph,
+            llm_settings=llm_settings,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+            semantics_config=semantics_config,
+            dry_run=False,
+            batch_size=5,
+            min_pseudo_lines=6,
+        )
+
+    finally:
+        conn.close()
+
+    # 请求 IDA 保存并退出（可选）
+    if ida_sync:
+        try:
+            print(f"[SemanticAlign] 请求 IDA 保存并退出: {ida_url}")
+            ida.save_and_exit(timeout=2.0)
+        except Exception:
+            # 连接中断通常是 IDA 正在关闭，属于预期
+            pass
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="一键执行 alignment_loader + IDA(idat_server) + knowledge_propagation 的语义对齐流水线。",
+        description="一键执行 alignment_loader + IDA(idat_server) + Phase1-5(语义传播) 的语义对齐流水线。",
     )
     parser.add_argument(
         "--db",
@@ -222,23 +417,23 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--ida-url",
         default=DEFAULT_IDA_URL,
-        help=f"knowledge_propagation.py 连接的 IDA HTTP 服务地址（默认: {DEFAULT_IDA_URL})",
+        help=f"连接的 IDA HTTP 服务地址（默认: {DEFAULT_IDA_URL})",
     )
     parser.add_argument(
         "--no-align",
         action="store_true",
-        help="跳过 alignment_loader 阶段，仅执行 IDA + knowledge_propagation。",
+        help="跳过 alignment_loader 阶段，仅执行 IDA + Phase1-5。",
     )
     parser.add_argument(
         "--no-ida",
         action="store_true",
-        help="不启动 IDA / idat_server，仅离线运行 knowledge_propagation（不会做 IDA 同步）。",
+        help="不启动 IDA / idat_server，仅离线运行 Phase1-5（不会做 IDA 同步）。",
     )
     parser.add_argument(
         "--ida-start-delay",
         type=float,
         default=3.0,
-        help="启动 idat 后在本地等待的秒数，再启动 knowledge_propagation（默认 3 秒）。",
+        help="启动 idat 后在本地等待的秒数，再启动 Phase1-5（默认 3 秒）。",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -280,12 +475,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     # 如果不需要 IDA，同步逻辑会关闭，仅离线跑 knowledge_propagation
     if args.no_ida:
-        print("[SemanticAlign] 不启动 IDA / idat_server，仅离线运行 knowledge_propagation。")
-        run_knowledge_propagation(
-            db_path=db_path,
-            ida_url=ida_url,
-            ida_sync=False,
-        )
+        print("[SemanticAlign] 不启动 IDA / idat_server，仅离线运行 Phase1-5（不做 IDA 同步）。")
+        run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=False)
         return
 
     # 启动 IDA(idat) + idat_server
@@ -297,17 +488,13 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         log_path=ida_log,
     )
 
-    # 给 IDA 一点时间启动（真正的连接检测由 knowledge_propagation 内部 wait_for_ida_server 负责）
+    # 给 IDA 一点时间启动（真正的连接检测由各 Phase 内的 wait_for_ida_server 负责）
     if args.ida_start_delay > 0:
         print(f"[SemanticAlign] 等待 {args.ida_start_delay:.1f} 秒以便 IDA 启动...")
         time.sleep(args.ida_start_delay)
 
-    # 运行 knowledge_propagation（会在内部与 idat_server 建立连接，并在结束时发出 save_and_exit）
-    kp_ret = run_knowledge_propagation(
-        db_path=db_path,
-        ida_url=ida_url,
-        ida_sync=True,
-    )
+    # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接，并在结束时发出 save_and_exit）
+    run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=True)
 
     # 等待 IDA 进程退出（save_and_exit 通常会触发有序关闭）
     print("[SemanticAlign] 等待 IDA(idat) 进程退出...")
@@ -319,9 +506,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             "[SemanticAlign] 等待 IDA 退出超时，如需强制终止请手动结束 idat 进程。"
         )
 
-    # 将 knowledge_propagation 的退出码作为整个脚本的退出码
-    if kp_ret != 0:
-        raise SystemExit(kp_ret)
+
+    # 若 run_semantic_pipeline 中无异常，则整体成功
 
 
 if __name__ == "__main__":

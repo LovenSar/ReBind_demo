@@ -26,6 +26,7 @@ from pathlib import Path
 import re
 
 import ida_auto
+import idaapi
 import ida_hexrays
 import ida_kernwin
 import ida_lines
@@ -181,6 +182,12 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             elif action == "set_pseudocode_line_comments":
                 result = self._execute_in_main_thread(
                     self._handle_set_pseudocode_line_comments, payload
+                )
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
+            elif action == "set_pseudocode_ea_comments":
+                result = self._execute_in_main_thread(
+                    self._handle_set_pseudocode_ea_comments, payload
                 )
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
@@ -445,6 +452,77 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                     return applied, "user_cmts"
             except Exception:
                 pass
+
+        return 0, "unsupported"
+
+    def _try_apply_hexrays_ea_comments(
+        self,
+        func_ea: int,
+        ea_comments: dict[int, str],
+    ) -> tuple[int, str]:
+        """尽力将“EA->注释”写入 Hex-Rays（treeloc_t.ea 定位）。"""
+
+        if not init_hexrays():
+            return 0, "no_hexrays"
+
+        func = ida_funcs.get_func(func_ea)
+        if not func:
+            return 0, "no_func"
+
+        try:
+            ida_hexrays.clear_cached_cfuncs()
+        except Exception:
+            pass
+
+        try:
+            cfunc = ida_hexrays.decompile(func.start_ea)
+        except Exception:
+            cfunc = None
+        if not cfunc:
+            return 0, "decompile_failed"
+
+        if hasattr(ida_hexrays, "treeloc_t") and hasattr(cfunc, "set_user_cmt"):
+            applied = 0
+            for ea, text in sorted(ea_comments.items()):
+                # 仅对该函数范围内的 EA 写注释，避免产生大量“Orphan comments”
+                try:
+                    iea = int(ea)
+                except Exception:
+                    continue
+                try:
+                    if iea < int(func.start_ea) or iea >= int(func.end_ea):
+                        continue
+                except Exception:
+                    pass
+
+                comment = (text or "").strip()
+                if not comment:
+                    continue
+                try:
+                    tl = ida_hexrays.treeloc_t()  # type: ignore[attr-defined]
+                    try:
+                        tl.ea = int(iea)
+                    except Exception:
+                        pass
+                    try:
+                        tl.itp = idaapi.ITP_SEMI
+                    except Exception:
+                        pass
+                    cfunc.set_user_cmt(tl, comment)
+                    applied += 1
+                except Exception:
+                    continue
+
+            if applied > 0:
+                try:
+                    if hasattr(cfunc, "save_user_cmts"):
+                        cfunc.save_user_cmts()
+                    if hasattr(cfunc, "refresh_func_ctext"):
+                        cfunc.refresh_func_ctext()
+                    ida_kernwin.refresh_idaview_anyway()
+                except Exception:
+                    pass
+                return applied, "cfunc.set_user_cmt"
 
         return 0, "unsupported"
 
@@ -1063,6 +1141,61 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             "ea": int(ea),
             "applied": int(applied),
             "cached": len(normalized),
+            "method": method,
+        }
+
+    def _handle_set_pseudocode_ea_comments(self, payload: dict) -> dict:
+        """为指定函数设置“按汇编地址(EA)定位”的伪代码行注释。
+
+        payload:
+            - ea: 函数地址
+            - ea_comments: {"0x140001000": "...", "140001234": "..."}
+
+        说明：这里直接按 EA 构造 treeloc_t(ea, ITP_SEMI) 写入 Hex-Rays user comments。
+        """
+
+        func_ea = self._parse_ea(payload)
+        if func_ea is None:
+            return {"status": "error", "msg": "missing/invalid 'ea'"}
+
+        raw = payload.get("ea_comments")
+        if not isinstance(raw, dict):
+            return {"status": "error", "msg": "missing/invalid 'ea_comments'"}
+
+        normalized: dict[int, str] = {}
+        for k, v in raw.items():
+            try:
+                s = str(k).strip()
+                ea = int(s, 16) if s.lower().startswith("0x") else int(s)
+            except Exception:
+                continue
+            if ea <= 0:
+                continue
+            text = (str(v) if v is not None else "").strip()
+            if not text:
+                continue
+            # 与 line_comments 一致：避免过长、避免以 // 开头
+            text = re.sub(r"^\s*//+\s*", "", text)
+            text = text.replace("\r", " ").replace("\n", " ").strip()
+            if len(text) > 200:
+                text = text[:200] + "..."
+
+            # 同一 EA 多次提交时做合并，避免覆盖丢信息
+            prev = normalized.get(ea)
+            if prev and text and text != prev:
+                normalized[ea] = prev + " | " + text
+            else:
+                normalized[ea] = text
+
+        if not normalized:
+            return {"status": "ok", "ea": int(func_ea), "applied": 0, "method": "none"}
+
+        applied, method = self._try_apply_hexrays_ea_comments(int(func_ea), normalized)
+        return {
+            "status": "ok",
+            "ea": int(func_ea),
+            "applied": int(applied),
+            "count": len(normalized),
             "method": method,
         }
 

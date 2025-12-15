@@ -60,6 +60,17 @@ from tqdm import tqdm
 # 共享的“动态 Prompt + 动态 Batch”生成器
 from dynamic_batching import DynamicBatchResult, yield_dynamic_batch
 
+# Phase modules (extracted implementations). Use aliases to avoid being shadowed by
+# legacy in-file implementations that still exist below in this file.
+from phases.phase1_kp import (
+    analyze_one_unified_function as phase1_analyze_one_unified_function,
+)
+from phases.phase1_kp import analyze_unified_batch as phase1_analyze_unified_batch
+from phases.phase2_validation import run_validation_phase as phase2_run_validation_phase
+from phases.phase3_globals import run_global_var_phase as phase3_run_global_var_phase
+from phases.phase4_lvar import run_local_var_phase as phase4_run_local_var_phase
+from phases.phase5_annotation import run_annotation_phase as phase5_run_annotation_phase
+
 try:
     import requests  # type: ignore
 except Exception:  # pragma: no cover - 可选依赖
@@ -6343,7 +6354,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                             f"function_ids={sorted(node.function_ids)}"
                         )
 
-                    analyze_unified_batch(
+                    phase1_analyze_unified_batch(
                         conn=conn,
                         graph=unified_graph,
                         nodes=selected_nodes,
@@ -6375,7 +6386,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                             llm_settings.max_tokens,
                         )
 
-                    analyze_one_unified_function(
+                    phase1_analyze_one_unified_function(
                         conn=conn,
                         graph=unified_graph,
                         entry_va=target_node.entry_va,
@@ -6402,7 +6413,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         if _prompt_run_validation_with_timeout(timeout_sec=5):
             conn2 = sqlite3.connect(str(db_path))
             try:
-                run_validation_phase(
+                phase2_run_validation_phase(
                     conn=conn2,
                     graph=unified_graph,
                     llm_settings=llm_settings,
@@ -6418,7 +6429,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     if not args.skip_global:
         conn3 = sqlite3.connect(str(db_path))
         try:
-            run_global_var_phase(
+            phase3_run_global_var_phase(
                 conn=conn3,
                 graph=unified_graph,
                 llm_settings=llm_settings,
@@ -6435,7 +6446,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     if not args.skip_lvar:
         conn4 = sqlite3.connect(str(db_path))
         try:
-            run_local_var_phase(
+            phase4_run_local_var_phase(
                 conn=conn4,
                 graph=unified_graph,
                 llm_settings=llm_settings,

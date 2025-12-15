@@ -518,7 +518,24 @@ def _parse_hex_int(value: str) -> Optional[int]:
     - "0x00401C0E"
     - "00401C0E"
     - 带其他前后缀时（例如 Ghidra 外部符号的 "0xEXTERNAL:00000001"）返回 None。
+
+    注意：SQLite 的 INTEGER 是 signed int64。
+    - 若解析值落在 [0, 2^64-1] 但超过 2^63-1，则按二补码转换为负数后返回。
+    - 若超过 64-bit（或无法可靠解释），返回 None。
     """
+
+    SQLITE_INT64_MIN = -(1 << 63)
+    SQLITE_INT64_MAX = (1 << 63) - 1
+    UINT64_MAX = (1 << 64) - 1
+
+    def _normalize_for_sqlite_int64(n: int) -> Optional[int]:
+        if SQLITE_INT64_MIN <= n <= SQLITE_INT64_MAX:
+            return n
+        # 支持把无符号 64-bit 地址映射到 signed int64（两者比特位一致）
+        if 0 <= n <= UINT64_MAX:
+            return n - (1 << 64)
+        return None
+
     value = value.strip()
     if not value:
         return None
@@ -526,16 +543,20 @@ def _parse_hex_int(value: str) -> Optional[int]:
     # 纯 0x 前缀形式
     if value.startswith("0x") and ":" not in value:
         try:
-            return int(value, 16)
+            parsed = int(value, 16)
         except ValueError:
             return None
+
+        return _normalize_for_sqlite_int64(parsed)
 
     # 纯十六进制数字，不带 0x
     if re.fullmatch(r"[0-9A-Fa-f]+", value):
         try:
-            return int(value, 16)
+            parsed = int(value, 16)
         except ValueError:
             return None
+
+        return _normalize_for_sqlite_int64(parsed)
 
     # 其他复杂形式（例如 0xEXTERNAL:00000001）不解析
     return None
@@ -590,6 +611,12 @@ def _parse_segments_ghidra(
         if address_offset:
             start_va -= address_offset
             end_va -= address_offset
+
+        # 保险起见：避免 SQLite INTEGER 溢出
+        if start_va < -(1 << 63) or start_va > ((1 << 63) - 1):
+            continue
+        if end_va < -(1 << 63) or end_va > ((1 << 63) - 1):
+            continue
 
         perm_r = _bool_from_str(row.get("Read", "") or "")
         perm_w = _bool_from_str(row.get("Write", "") or "")
@@ -682,6 +709,11 @@ def _parse_sections(
             start_va -= address_offset
             end_va -= address_offset
 
+        if start_va < -(1 << 63) or start_va > ((1 << 63) - 1):
+            continue
+        if end_va < -(1 << 63) or end_va > ((1 << 63) - 1):
+            continue
+
         conn.execute(
             """
             INSERT INTO sections(view_id, name, start_va, end_va, length)
@@ -731,6 +763,8 @@ def _parse_symbols(
         address_va = _parse_hex_int(raw_address)
         if address_va is not None and address_offset:
             address_va -= address_offset
+        if address_va is not None and (address_va < -(1 << 63) or address_va > ((1 << 63) - 1)):
+            address_va = None
         kind = _normalize_symbol_kind(raw_type, is_external)
 
         conn.execute(
@@ -899,12 +933,19 @@ def _parse_xrefs(
         dst_va, dst_name = _extract_dst_from_xrefs_filename(csv_path.name, is_ghidra=is_ghidra)
         if address_offset and dst_va is not None:
             dst_va -= address_offset
+
+        if dst_va is not None and (dst_va < -(1 << 63) or dst_va > ((1 << 63) - 1)):
+            dst_va = None
         for row in _read_csv(csv_path):
             src_va = _parse_hex_int(row.get("Reference From Address", "") or "")
             if src_va is None:
                 continue
             if address_offset:
                 src_va -= address_offset
+
+            if src_va < -(1 << 63) or src_va > ((1 << 63) - 1):
+                # src_va 是 NOT NULL，超界则跳过该行以避免 SQLite OverflowError
+                continue
             ref_type_raw = row.get("Reference Type", "") or ""
             containing_function = row.get("Containing Function", "") or ""
             is_primary = None
@@ -967,16 +1008,19 @@ def _parse_asm_functions_and_instructions(
             if "Address:" in s or "Start EA:" in s:
                 m = re.search(r"0x[0-9A-Fa-f]+", s)
                 if m:
-                    entry_va = int(m.group(0), 16)
+                    entry_va = _parse_hex_int(m.group(0))
         # 如果头部未解析出函数信息，尝试从文件名中解析地址
         if entry_va is None:
             m = re.match(r"0x([0-9A-Fa-f]+)_", asm_path.stem)
             if m:
-                entry_va = int(m.group(1), 16)
+                entry_va = _parse_hex_int(m.group(1))
         if entry_va is None:
             continue
         if address_offset:
             entry_va -= address_offset
+
+        if entry_va < -(1 << 63) or entry_va > ((1 << 63) - 1):
+            continue
         if func_name is None:
             # 从文件名中截取函数名部分
             m = re.match(r"0x[0-9A-Fa-f]+_(.+)", asm_path.stem)
@@ -1024,6 +1068,9 @@ def _parse_asm_functions_and_instructions(
                 continue
             if address_offset:
                 addr_va -= address_offset
+
+            if addr_va < -(1 << 63) or addr_va > ((1 << 63) - 1):
+                continue
 
             # 2. 拆分出 mnemonic + 操作数 + 注释
             # 去掉前导空格，再按 ';' 分割成 代码部分 / 注释部分
@@ -1112,15 +1159,18 @@ def _parse_pseudocode_functions(
             if "Address:" in s or "Start EA:" in s:
                 m = re.search(r"0x[0-9A-Fa-f]+", s)
                 if m:
-                    entry_va = int(m.group(0), 16)
+                    entry_va = _parse_hex_int(m.group(0))
         if entry_va is None:
             m = re.match(r"0x([0-9A-Fa-f]+)_", c_path.stem)
             if m:
-                entry_va = int(m.group(1), 16)
+                entry_va = _parse_hex_int(m.group(1))
         if entry_va is None:
             continue
         if address_offset:
             entry_va -= address_offset
+
+        if entry_va < -(1 << 63) or entry_va > ((1 << 63) - 1):
+            continue
         if func_name is None:
             m = re.match(r"0x[0-9A-Fa-f]+_(.+)\.c", c_path.name)
             if m:

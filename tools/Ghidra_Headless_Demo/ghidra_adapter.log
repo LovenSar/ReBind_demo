@@ -1922,3 +1922,12 @@
 2025-12-11 23:54:19,171 - ghidra_adapter - WARNING - 输出目录不存在: libwgxbind.so_binaryinfo
 2025-12-11 23:54:19,171 - ghidra_adapter - WARNING - 输出目录不存在: libwgxbind.so_pseudocode
 2025-12-11 23:54:19,174 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\123\libwgxbind_so_ghidemo
+2025-12-15 16:48:56,675 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-15 16:48:56,676 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-15 16:48:56,687 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-15 16:50:31,377 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-15 16:50:31,377 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-15 16:50:31,378 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE.exe_disassembly
+2025-12-15 16:50:31,378 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE.exe_binaryinfo
+2025-12-15 16:50:31,379 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE.exe_pseudocode
+2025-12-15 16:50:31,381 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo

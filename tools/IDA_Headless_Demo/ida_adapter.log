@@ -485,3 +485,14 @@
 2025-12-12 00:01:59,316 - ida_adapter - INFO - 所有脚本执行完成
 2025-12-12 00:01:59,318 - ida_adapter - INFO - 处理输出文件...
 2025-12-12 00:01:59,320 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\123\libwgxbind_so_idademo
+2025-12-15 16:50:31,381 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-15 16:50:31,382 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-15 16:50:31,391 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-15 16:50:37,258 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-15 16:50:37,258 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-15 16:50:42,271 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-15 16:50:42,271 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-15 16:50:52,343 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-15 16:50:52,343 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-15 16:50:52,344 - ida_adapter - INFO - 处理输出文件...
+2025-12-15 16:50:52,347 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
