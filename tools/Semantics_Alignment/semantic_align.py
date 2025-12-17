@@ -50,7 +50,7 @@ TOOLS_DIR = SCRIPT_PATH.parent
 REPO_ROOT = SCRIPT_PATH.parents[2]
 
 DEFAULT_IDA_URL = "http://127.0.0.1:12345"
-DEFAULT_IDAT_EXE = "idat"
+DEFAULT_IDAT_EXE = "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
 
 
 def _install_print_with_location() -> None:
@@ -127,6 +127,9 @@ def run_alignment_loader(
         str(dump_xlsx),
     ]
 
+    if delete_db:
+        cmd.append("--delete-db")
+
     print("[SemanticAlign] 运行 alignment_loader.py 构建对齐数据库...")
     print("  命令:", " ".join(cmd))
     result = subprocess.run(cmd, cwd=str(REPO_ROOT))
@@ -202,6 +205,18 @@ def run_semantic_pipeline(
     conn = sqlite3.connect(str(db_path))
     try:
         binary_id = _pick_single_binary_id(conn)
+
+        # 若对齐库未正确加载视图，后续建图会失败；这里提前给出更明确的引导。
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM binary_views WHERE binary_id = ?;", (int(binary_id),))
+        view_cnt = int(cur.fetchone()[0] or 0)
+        if view_cnt <= 0:
+            raise RuntimeError(
+                "对齐数据库中缺少 binary_views 记录，无法建图。\n"
+                f"  binary_id={binary_id}, binary_views.count={view_cnt}\n"
+                "通常原因：alignment_loader 未成功加载 Ghidra/IDA 输出目录（例如缺少 *_binaryinfo），或复用了旧 DB。\n"
+                "建议：重新运行 alignment_loader（在本脚本中不要使用 --no-align），并确认输出目录包含 *_binaryinfo / *_disassembly / *_pseudocode(或 *_pesudocode)。"
+            )
 
         ensure_analysis_schema(conn)
         ensure_analysis_rows_for_binary(conn, binary_id)

@@ -32,6 +32,13 @@ llm:
 # 说明：把之前代码里“写死”的阈值抽出来，便于不同样本调参。
 # ==============================
 pipeline:
+  # IDA 同步相关配置
+  ida_sync:
+    # 连接 idat_server 的最大等待秒数。
+    # - 设为 0 或不配置：表示无限等待（可能导致流水线卡住）
+    # - 设为正数：超过时间后会自动降级为离线模式（仅更新 DB，不再同步到 IDA）
+    connect_max_wait_seconds: 120
+
   phase1:
     # Phase 1 默认批处理大小（原 argparse 默认 25；如命令行传 --batch 则优先命令行）
     batch_size_default: 25

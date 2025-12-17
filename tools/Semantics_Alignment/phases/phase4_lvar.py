@@ -417,6 +417,7 @@ def analyze_local_var_batch(
     llm_settings: Any,
     ida_sync: bool,
     ida_url: str,
+    ida_connect_max_wait_seconds: float = 120.0,
     verify_max_retries: int = 3,
     verify_wait_seconds: float = 1.0,
     dry_run: bool = False,
@@ -463,6 +464,8 @@ def analyze_local_var_batch(
 
     changed_count = 0
 
+    ida_sync_active = bool(ida_sync)
+
     for item, res in zip(items, result_list):
         node: UnifiedFunctionNode = item["node"]
         entry_va = int(item.get("entry_va", node.entry_va))
@@ -476,15 +479,21 @@ def analyze_local_var_batch(
         else:
             renames_obj = {k: v for k, v in res.items() if isinstance(k, str) and k != "entry_va"}
 
-        if ida_sync and ida_url:
-            wait_for_ida_server(ida_url)
+        if ida_sync_active and ida_url:
+            ok = wait_for_ida_server(ida_url, max_wait_seconds=float(ida_connect_max_wait_seconds or 0.0) or None)
+            if not ok:
+                print(
+                    f"[IDA-Sync] IDA 服务器不可用，跳过本批次后续的 IDA 同步（仅更新 DB）。"
+                    f" ida_url={ida_url}, entry_va=0x{entry_va:08X}"
+                )
+                ida_sync_active = False
 
         changed = _apply_lvar_result_for_candidate(
             conn=conn,
             graph=graph,
             item=item,
             rename_map=renames_obj,
-            ida_sync=ida_sync,
+            ida_sync=ida_sync_active,
             ida_url=ida_url,
             verify_max_retries=verify_max_retries,
             verify_wait_seconds=verify_wait_seconds,
@@ -512,8 +521,16 @@ def run_local_var_phase(
 ) -> None:
     """Phase4 entry: optimize local variable names."""
 
-    if ida_sync and ida_url:
-        wait_for_ida_server(ida_url)
+    ida_connect_max_wait_seconds = _get_cfg_float(semantics_config, ("pipeline", "ida_sync", "connect_max_wait_seconds"), 120.0)
+
+    ida_sync_active = bool(ida_sync)
+    if ida_sync_active and ida_url:
+        ok = wait_for_ida_server(ida_url, max_wait_seconds=float(ida_connect_max_wait_seconds or 0.0) or None)
+        if not ok:
+            print(
+                f"[IDA-Sync] 启动阶段无法连接到 IDA 服务器，Phase4 将自动降级为离线模式（仅更新 DB）。 ida_url={ida_url}"
+            )
+            ida_sync_active = False
 
     ensure_analysis_schema(conn)
     ensure_analysis_rows_for_binary(conn, graph.binary_id)
@@ -684,7 +701,7 @@ def run_local_var_phase(
             graph=graph,
             node=node,
             analysis_info=analysis_info,
-            ida_sync=ida_sync,
+            ida_sync=ida_sync_active,
             allowed_fids=allowed_fids,
             min_pseudo_lines=min_lines,
             allow_unanalyzed=allow_unanalyzed,
@@ -718,8 +735,9 @@ def run_local_var_phase(
                 graph=graph,
                 items=batch.items,
                 llm_settings=llm_settings,
-                ida_sync=ida_sync,
+                ida_sync=ida_sync_active,
                 ida_url=ida_url,
+                ida_connect_max_wait_seconds=ida_connect_max_wait_seconds,
                 verify_max_retries=verify_max_retries,
                 verify_wait_seconds=verify_wait_seconds,
                 dry_run=dry_run,
@@ -744,8 +762,9 @@ def run_local_var_phase(
                 graph=graph,
                 items=batch.items,
                 llm_settings=llm_settings,
-                ida_sync=ida_sync,
+                ida_sync=ida_sync_active,
                 ida_url=ida_url,
+                ida_connect_max_wait_seconds=ida_connect_max_wait_seconds,
                 verify_max_retries=verify_max_retries,
                 verify_wait_seconds=verify_wait_seconds,
                 dry_run=dry_run,

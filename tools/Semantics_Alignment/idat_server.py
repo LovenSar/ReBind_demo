@@ -15,11 +15,14 @@ idat_server.py
 from __future__ import annotations
 
 import http.server
+import http.client
 import json
 import socketserver
 import sys
 import signal
 import os
+import atexit
+import time
 import builtins
 import inspect
 from pathlib import Path
@@ -128,6 +131,58 @@ def perform_cleanup_and_exit(signum=None, frame=None):
     except Exception as e:
         print(f"[IDAT-Server] Error calling qexit: {e}")
         sys.exit(0)
+
+
+def _post_json(port: int, payload: dict, timeout_s: float = 1.5) -> tuple[int | None, str | None]:
+    """向本机 IDAT-Server 发起 POST，返回 (status_code, response_text)。"""
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=timeout_s)
+        conn.request(
+            "POST",
+            "/",
+            body=body,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Content-Length": str(len(body)),
+            },
+        )
+        resp = conn.getresponse()
+        data = resp.read()
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:
+            text = None
+        return int(resp.status), text
+    except Exception as exc:
+        return None, str(exc)
+    finally:
+        try:
+            conn.close()  # type: ignore[name-defined]
+        except Exception:
+            pass
+
+
+def _request_remote_save_and_exit(port: int) -> bool:
+    """若已有旧实例占用端口，尝试请求其 save_and_exit。"""
+    status, text = _post_json(int(port), {"action": "save_and_exit"}, timeout_s=1.5)
+    if status is None:
+        # 旧版本可能在返回 HTTP 响应前就 qexit，导致连接被重置；这种情况下仍然很可能已触发退出
+        msg = (text or "").lower()
+        if any(k in msg for k in ("connection reset", "broken pipe", "connection aborted", "reset by peer")):
+            print(f"[IDAT-Server] save_and_exit connection dropped (likely exiting): {text}")
+            return True
+        print(f"[IDAT-Server] save_and_exit request failed: {text}")
+        return False
+    ok = 200 <= status < 300
+    if not ok:
+        print(f"[IDAT-Server] save_and_exit request returned HTTP {status}: {text}")
+    return ok
+
+
+class _ReusableTCPServer(socketserver.TCPServer):
+    # macOS 上端口回收更敏感：显式开启地址复用
+    allow_reuse_address = True
 
 
 class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -1215,9 +1270,8 @@ def _run_server():
     主循环：设置超时以便能响应 Ctrl+C
     """
     global _RUNNING
-    socketserver.TCPServer.allow_reuse_address = True
-    
-    with socketserver.TCPServer(("127.0.0.1", PORT), IDATRequestHandler) as httpd:
+
+    with _ReusableTCPServer(("127.0.0.1", PORT), IDATRequestHandler) as httpd:
         # [关键] 设置超时，否则 handle_request 会无限阻塞，导致 Ctrl+C 无法被 Python 及时捕获
         httpd.timeout = 1.0 
         print(f"[IDAT-Server] Listening on http://127.0.0.1:{PORT} ...")
@@ -1236,10 +1290,45 @@ def _run_server():
     print("[IDAT-Server] HTTP loop exited.")
 
 
+def _run_server_with_port_recovery(
+    max_attempts: int = 6,
+    base_wait_s: float = 0.8,
+    after_exit_wait_s: float = 2.0,
+) -> None:
+    """启动服务；若遇到 Errno 48，则请求旧实例 save_and_exit 后重试。"""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _run_server()
+            return
+        except OSError as exc:
+            # macOS: 48, Linux: 98, Windows: 10048
+            err = getattr(exc, "errno", None)
+            if err not in (48, 98, 10048):
+                raise
+
+            print(
+                f"[IDAT-Server] [Errno {err}] Address already in use on 127.0.0.1:{PORT} "
+                f"(attempt {attempt}/{max_attempts})."
+            )
+
+            requested = _request_remote_save_and_exit(PORT)
+            if requested:
+                print("[IDAT-Server] Requested existing server to save_and_exit; waiting...")
+                time.sleep(after_exit_wait_s)
+            else:
+                # 可能不是我们的服务占用，或旧实例已卡死；等待后继续重试
+                time.sleep(base_wait_s * attempt)
+
+    raise RuntimeError(f"[IDAT-Server] Failed to bind port {PORT} after {max_attempts} attempts")
+
+
 def main():
     # 1. 注册信号处理，拦截 Ctrl+C
     signal.signal(signal.SIGINT, perform_cleanup_and_exit)
     signal.signal(signal.SIGTERM, perform_cleanup_and_exit)
+
+    # 2. 无论何种退出路径（异常/脚本结束），都触发与 Ctrl+C 相同的安全清理流程
+    atexit.register(perform_cleanup_and_exit)
 
     print("[IDAT-Server] Waiting for auto-analysis to finish...")
     try:
@@ -1254,12 +1343,15 @@ def main():
     print("[IDAT-Server] Use Ctrl+C or POST {'action': 'save_and_exit'} to stop.")
 
     try:
-        _run_server()
+        _run_server_with_port_recovery()
     except KeyboardInterrupt:
         pass
-    
-    # 2. 无论是因为 _RUNNING=False 退出，还是异常跳出，最后都尝试执行清理
-    perform_cleanup_and_exit()
+    except Exception as exc:
+        # 这里不能直接抛出，否则会导致 IDA 以异常路径退出而不清理临时文件
+        print(f"[IDAT-Server] Fatal error: {exc}")
+    finally:
+        # 无论是因为 _RUNNING=False 退出，还是异常跳出，最后都尝试执行清理
+        perform_cleanup_and_exit()
 
 
 if __name__ == "__main__":

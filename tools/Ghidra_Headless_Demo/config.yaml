@@ -1,7 +1,7 @@
 # Ghidra Headless 分析工具配置
 ghidra:
   # Ghidra analyzeHeadless.bat 的完整路径
-  cmd_path: "E:\\Program Files (x86)\\ghidra_11.4.3_PUBLIC_20251203\\ghidra_11.4.3_PUBLIC\\support\\analyzeHeadless.bat"
+  cmd_path: "/Users/lovensar/Applications/ghidra_11.4.3_PUBLIC_20251203/ghidra_11.4.3_PUBLIC/support/analyzeHeadless"
   
   # 临时项目名称前缀
   project_name_prefix: "MyPEAnalysisTemp"

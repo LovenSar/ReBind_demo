@@ -72,7 +72,7 @@ def setup_logging(log_path: Optional[Path] = None, *, input_db: Optional[Path] =
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(
             logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s %(pathname)s:%(lineno)d - [db=%(db_path)s] %(message)s",
+                "%(asctime)s [%(levelname)s] %(name)s %(pathname)s:%(lineno)d - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
@@ -80,7 +80,7 @@ def setup_logging(log_path: Optional[Path] = None, *, input_db: Optional[Path] =
 
     ch = logging.StreamHandler(stream=sys.stderr)
     ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter("%(name)s %(pathname)s:%(lineno)d [db=%(db_path)s] %(message)s"))
+    ch.setFormatter(logging.Formatter("%(name)s %(pathname)s:%(lineno)d %(message)s"))
 
     db_filter = _DBPathFilter()
     for fh in file_handlers:

@@ -1,7 +1,7 @@
 # IDA Headless 分析工具配置
 ida:
   # IDA idat.exe 的完整路径
-  cmd_path: "C:\\Program Files\\IDA Professional 9.2\\idat.exe"
+  cmd_path: "/Applications/IDA\ Professional\ 9.2.app/Contents/MacOS/idat"
   
   # IDA 命令行参数
   args: "-A -c"

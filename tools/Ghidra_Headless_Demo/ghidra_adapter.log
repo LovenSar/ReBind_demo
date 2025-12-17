@@ -1931,3 +1931,156 @@
 2025-12-15 16:50:31,378 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE.exe_binaryinfo
 2025-12-15 16:50:31,379 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE.exe_pseudocode
 2025-12-15 16:50:31,381 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-16 22:59:40,264 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 22:59:40,264 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 22:59:40,265 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:00:13,167 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:00:13,168 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:00:13,168 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:00:13,169 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:00:13,169 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:00:13,169 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:00:45,420 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:00:45,420 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:00:45,421 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:00:57,618 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:00:57,619 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:00:57,620 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:00:57,620 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:00:57,620 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:00:57,621 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:01:16,517 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:01:16,517 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:01:16,518 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:01:24,759 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:01:24,761 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:01:24,761 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:01:24,762 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:01:24,762 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:01:24,762 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:03:23,055 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:03:23,056 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:03:23,059 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:03:31,087 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:03:31,088 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:03:31,088 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:03:31,089 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:03:31,089 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:03:31,089 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:04:29,456 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:04:29,456 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:04:29,458 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:04:45,998 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:04:45,999 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:04:45,999 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:04:45,999 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:04:46,000 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:04:46,000 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:06:15,959 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:06:15,959 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:06:15,960 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:06:50,287 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:06:50,288 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:06:50,289 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:06:50,289 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:06:50,289 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:06:50,289 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:07:09,822 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:07:09,822 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:07:09,824 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:07:28,490 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:07:28,491 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:07:28,491 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:07:28,491 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:07:28,492 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:07:28,492 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:08:04,806 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:08:04,806 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:08:04,807 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:08:20,515 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:08:20,515 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:08:20,515 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:08:20,515 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:08:20,515 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:08:20,516 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:08:47,554 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:08:47,554 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:08:47,555 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:09:04,565 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:09:04,566 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:09:04,567 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:09:04,567 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:09:04,567 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:09:04,567 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:14:37,341 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:14:37,341 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:14:37,344 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:14:52,730 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:14:52,731 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:14:52,731 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:14:52,731 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:14:52,731 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:14:52,732 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:16:21,235 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:16:21,235 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:16:21,237 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:16:36,702 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:16:36,704 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:16:36,704 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:16:36,704 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:16:36,704 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:16:36,705 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:17:06,046 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:17:06,046 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:17:06,047 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:17:21,172 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:17:21,174 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:17:21,174 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:17:21,174 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:17:21,174 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:17:21,175 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:19:06,698 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:19:06,699 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:19:06,700 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:19:23,290 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:19:23,291 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:19:23,291 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:19:23,291 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:19:23,292 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:19:23,292 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:21:34,238 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:21:34,238 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:21:34,241 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:21:51,001 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:21:51,003 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:21:51,003 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:21:51,003 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:21:51,003 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:21:51,004 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:31:53,485 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:31:53,486 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:31:53,488 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:32:08,542 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:32:08,543 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:32:08,543 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:32:08,543 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:32:08,543 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:32:08,544 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:37:09,951 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-16 23:37:09,951 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-16 23:37:09,953 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-16 23:37:25,872 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-16 23:37:25,873 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-16 23:37:25,873 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-16 23:37:25,873 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-16 23:37:25,873 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-16 23:37:25,874 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-17 10:11:03,509 - ghidra_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate.so
+2025-12-17 10:11:03,509 - ghidra_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-17 10:11:03,512 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-17 10:11:32,442 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-17 10:11:32,443 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-17 10:11:32,444 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_disassembly
+2025-12-17 10:11:32,444 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
+2025-12-17 10:11:32,444 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
+2025-12-17 10:11:32,445 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo

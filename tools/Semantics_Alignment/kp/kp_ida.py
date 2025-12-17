@@ -22,26 +22,57 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-def wait_for_ida_server(ida_url: str) -> None:
-    """检查与 idat_server 的连接情况。"""
+def wait_for_ida_server(
+    ida_url: str,
+    *,
+    retry_interval_s: float = 30.0,
+    ping_timeout_s: float = 3.0,
+    max_wait_seconds: Optional[float] = None,
+) -> bool:
+    """检查与 idat_server 的连接情况。
+
+    - 默认无限重试（保持历史行为）。
+    - 若设置 max_wait_seconds，则在超时后返回 False，避免流水线永久卡住。
+    - 在非交互 stdin 环境，不显示“按回车立即重试”的提示。
+    """
+
     if requests is None:
-        return
+        return False
+
+    interactive = bool(sys.stdin and getattr(sys.stdin, "isatty", lambda: False)())
+    started = time.time()
 
     while True:
         try:
             resp = requests.post(
                 ida_url,
                 json={"action": "ping"},
-                timeout=3.0,
+                timeout=float(ping_timeout_s),
             )
             if resp.status_code == 200:
-                return
+                return True
             raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as exc:
-            msg = (
-                f"[IDA-Sync] 无法连接到 IDA 服务器 {ida_url}: {exc}。"
-                " 将在 30 秒后自动重试，按回车可立即重试，Ctrl+C 终止。"
-            )
+            elapsed = time.time() - started
+            if max_wait_seconds is not None and elapsed >= float(max_wait_seconds):
+                msg = (
+                    f"[IDA-Sync] 无法连接到 IDA 服务器 {ida_url}: {exc}。"
+                    f" 已等待 {elapsed:.1f}s，超过 max_wait_seconds={float(max_wait_seconds):.1f}s，停止等待。"
+                )
+                print(msg)
+                logger.error("%s", msg)
+                return False
+
+            if interactive:
+                msg = (
+                    f"[IDA-Sync] 无法连接到 IDA 服务器 {ida_url}: {exc}。"
+                    f" 将在 {float(retry_interval_s):.0f} 秒后自动重试，按回车可立即重试，Ctrl+C 终止。"
+                )
+            else:
+                msg = (
+                    f"[IDA-Sync] 无法连接到 IDA 服务器 {ida_url}: {exc}。"
+                    f" 将在 {float(retry_interval_s):.0f} 秒后自动重试，Ctrl+C 终止。"
+                )
             print(msg)
             logger.warning("%s", msg)
 
@@ -54,17 +85,22 @@ def wait_for_ida_server(ida_url: str) -> None:
                 except EOFError:
                     user_triggered[0] = False
 
-            t: Optional[threading.Thread] = None
-            if sys.stdin and sys.stdin.isatty():
-                t = threading.Thread(target=_wait_input, daemon=True)
-                t.start()
+            if interactive:
+                threading.Thread(target=_wait_input, daemon=True).start()
 
-            start = time.time()
+            # 等待到：用户触发 / 到达 retry_interval / 达到 max_wait
+            per_round_start = time.time()
             while True:
                 if user_triggered[0] is not None:
                     break
-                if time.time() - start >= 30.0:
+
+                now = time.time()
+                if now - per_round_start >= float(retry_interval_s):
                     break
+
+                if max_wait_seconds is not None and (now - started) >= float(max_wait_seconds):
+                    return False
+
                 time.sleep(0.2)
 
 
@@ -82,8 +118,8 @@ class IDAService:
         if self._checked_online:
             return
         try:
-            wait_for_ida_server(self.url)
-            self._checked_online = True
+            ok = wait_for_ida_server(self.url)
+            self._checked_online = bool(ok)
         except Exception:
             self._checked_online = False
 
@@ -172,7 +208,7 @@ class IDAService:
     def get_sub_functions(self, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
         return self.request("get_sub_functions", timeout=timeout)
 
-    def rename_lvar(self, ea: int, renames: Dict[str, str], timeout: float = 10.0) -> Optional[str]:
+    def rename_lvar(self, ea: int, renames: Dict[str, str], timeout: float = 120.0) -> Optional[str]:
         data = self.request(
             "rename_lvar",
             {"ea": int(ea), "renames": renames},

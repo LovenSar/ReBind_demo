@@ -1265,9 +1265,37 @@ def load_ghidra_view(
     binary_id = _get_or_create_binary(conn, output_dir)
 
     # ===== 解析 segments / sections / symbols / xrefs ===== #
-    binaryinfo_dir = next(output_dir.glob("*_binaryinfo"), None)
+    def _pick_ghidra_binaryinfo_dir(view_dir: Path) -> Optional[Path]:
+        """Best-effort locate the directory containing *_segments/sections/symbols.csv and *_xrefs.
+
+        Historically some exporters used a nested '*_ghidemo' folder instead of '*_binaryinfo'.
+        We accept both to improve robustness.
+        """
+
+        # Preferred layout: <view>/*_binaryinfo/
+        candidate = next(view_dir.glob("*_binaryinfo"), None)
+        if candidate is not None and candidate.is_dir():
+            return candidate
+
+        # Common alternate layout observed in this repo: <view>/*_ghidemo/
+        candidate = next(view_dir.glob("*_ghidemo"), None)
+        if candidate is not None and candidate.is_dir():
+            return candidate
+
+        # Fallback: infer from presence of symbols/sections csv
+        symbols_csv = next(view_dir.rglob("*_symbols.csv"), None)
+        sections_csv = next(view_dir.rglob("*_sections.csv"), None)
+        if symbols_csv is not None:
+            return symbols_csv.parent
+        if sections_csv is not None:
+            return sections_csv.parent
+        return None
+
+    binaryinfo_dir = _pick_ghidra_binaryinfo_dir(output_dir)
     if binaryinfo_dir is None:
-        raise FileNotFoundError(f"未找到 Ghidra binaryinfo 目录: {output_dir}")
+        raise FileNotFoundError(
+            f"未找到 Ghidra binaryinfo 目录（期望 *_binaryinfo 或嵌套 *_ghidemo），且无法从 *_symbols.csv/_sections.csv 推断: {output_dir}"
+        )
 
     segments_csv = next(binaryinfo_dir.glob("*_segments.csv"), None)
     sections_csv = next(binaryinfo_dir.glob("*_sections.csv"), None)
@@ -1677,7 +1705,10 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     # 若同时提供 Ghidra / IDA 输出目录，则基于 symbols.csv 自动推断 Ghidra/IDA 基址偏移
     address_offset = 0
     if ghidra_dir is not None and ida_dir is not None:
+        # Ghidra 导出目录在历史版本中可能使用嵌套的 *_ghidemo 目录存放 csv。
         ghidra_binaryinfo = next(ghidra_dir.glob("*_binaryinfo"), None)
+        if ghidra_binaryinfo is None:
+            ghidra_binaryinfo = next(ghidra_dir.glob("*_ghidemo"), None)
         ida_binaryinfo = next(ida_dir.glob("*_binaryinfo"), None)
         if ghidra_binaryinfo is not None and ida_binaryinfo is not None:
             ghidra_symbols_csv = next(ghidra_binaryinfo.glob("*_symbols.csv"), None)
