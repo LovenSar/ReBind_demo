@@ -1,0 +1,152 @@
+# 全局配置（优先级最高）
+#
+# 合并规则（每个模块分别合并）：
+# 1) 读取模块目录下的 config.yaml 作为 base
+# 2) 合并本文件中同名模块的“通用覆盖”(ghidra/ida/semantics)
+# 3) 自动检测系统后，再合并 platforms.<os> 下的“平台覆盖”（优先级高于通用覆盖）
+#
+# os 取值：windows / macos / linux
+#
+# 注意：
+# - ghidra/ida 的结构与对应模块 config.yaml 一致（顶层包含 ghidra|ida / output / scripts / filename / logging）。
+# - semantics 的结构与 tools/Semantics_Alignment/config.yaml 一致（顶层包含 llm / pipeline），额外允许 runtime。
+
+platforms:
+  windows:
+    ghidra:
+      ghidra:
+        # Windows 下通常是 analyzeHeadless.bat
+        cmd_path: "E:\\Program Files (x86)\\ghidra_11.4.3_PUBLIC_20251203\\ghidra_11.4.3_PUBLIC\\support\\analyzeHeadless.bat"
+    ida:
+      ida:
+        # Windows 下通常是 idat64.exe（按安装路径调整）
+        cmd_path: "C:\\Program Files\\IDA Professional 9.2\\idat.exe"
+        args: ["-A", "-c"]
+    semantics:
+      runtime:
+        # semantic_align.py 启动 IDA(idat) 时使用的可执行文件
+        idat_exe: "C:\\Program Files\\IDA Professional 9.2\\idat.exe"
+
+  macos:
+    ghidra:
+      ghidra:
+        cmd_path: "/Applications/ghidra/support/analyzeHeadless"
+    ida:
+      ida:
+        cmd_path: "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
+        args: ["-A", "-c"]
+    semantics:
+      runtime:
+        idat_exe: "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
+
+  linux:
+    ghidra:
+      ghidra:
+        cmd_path: "/opt/ghidra/support/analyzeHeadless"
+    ida:
+      ida:
+        cmd_path: "/opt/ida/idat64"
+        args: ["-A", "-c"]
+    semantics:
+      runtime:
+        idat_exe: "/opt/ida/idat64"
+
+
+# -----------------------------
+# Ghidra Headless（通用覆盖）
+# -----------------------------
+ghidra:
+  ghidra:
+    # 工作空间目录（留空则使用输出目录）
+    workspace: ""
+    project_name_prefix: "ReBindDemo"
+  output:
+    dir_suffix: "_ghidemo"
+    keep_python_scripts: false
+    keep_input_copy: false
+  scripts:
+    post_scripts:
+      - "ExtractBinaryInfo.py"
+      - "ExtractDisassembly.py"
+      - "ExtractPseudocode.py"
+    script_path: ""
+  filename:
+    sanitize: true
+    allowed_chars_pattern: "[A-Za-z0-9]"
+    replacement_char: "_"
+  logging:
+    level: "INFO"
+    log_to_file: true
+    log_file_path: ""
+
+
+# -----------------------------
+# IDA Headless（通用覆盖）
+# -----------------------------
+ida:
+  ida:
+    # args 既可写成字符串，也可写成数组（推荐数组，避免空格解析问题）
+    args: ["-A", "-c"]
+  output:
+    dir_suffix: "_idademo"
+    keep_python_scripts: false
+    keep_input_copy: false
+  scripts:
+    scripts:
+      - "ExtractBinaryInfo_IDA.py"
+      - "ExtractDisassembly_IDA.py"
+      - "ExtractPseudocode_IDA.py"
+  filename:
+    sanitize: true
+    allowed_chars_pattern: "[A-Za-z0-9]"
+    replacement_char: "_"
+  logging:
+    level: "INFO"
+    log_to_file: true
+    log_file_path: ""
+
+
+# -----------------------------
+# Semantics Alignment（通用覆盖）
+# -----------------------------
+semantics:
+  runtime:
+    ida_url: "http://127.0.0.1:12345"
+    ida_start_delay: 3.0
+    no_ida: false
+    no_align: false
+  llm:
+    provider: "openai"
+    model: "LongCat-Flash-Chat"
+    temperature: 0.1
+    max_tokens: 6000
+    api:
+      key_env_var: "OPENAI_API_KEY"
+      base_url: "https://api.longcat.chat/openai/v1"
+  pipeline:
+    ida_sync:
+      connect_max_wait_seconds: 120
+    phase1:
+      batch_size_default: 25
+    phase4_lvar:
+      min_pseudo_lines_default: 6
+      batch_size_cap: 3
+      verify_max_retries: 3
+      verify_wait_seconds: 1.0
+    prompt_limits:
+      phase1_max_disasm_lines: 200
+      phase1_max_pseudo_chars_per_tool: 4000
+      phase1_max_strings: 20
+      annotation_context_max_disasm_lines: 60
+      annotation_context_max_pseudo_chars_per_tool: 1200
+      annotation_context_max_strings: 20
+      ida_snapshot_max_disasm_lines: 400
+    phase5_annotation:
+      min_pseudo_lines: 6
+      max_code_chars: 8000
+      llm_chunking:
+        single_max_lines: 80
+        medium_max_lines: 160
+        medium_chunk_size: 120
+        large_chunk_size: 80
+      ida_sync_chunk_size: 120

@@ -18,6 +18,16 @@ from typing import Optional, List, Dict, Any
 
 class GhidraAdapter:
     """Ghidra Headless 分析适配器"""
+
+    @staticmethod
+    def _normalize_cmd_path(value: Any) -> str:
+        text = str(value or "").strip()
+        # Handle strings like '\"C:\\Path\\to\\tool.bat\"' (common copy/paste mistake).
+        text = text.replace(r"\\\"", '"').replace(r"\\'", "'")
+        text = text.replace(r"\"", '"').replace(r"\'", "'")
+        if len(text) >= 2 and ((text[0] == text[-1] == '"') or (text[0] == text[-1] == "'")):
+            text = text[1:-1].strip()
+        return text
     
     def __init__(self, config_path: Optional[str] = None):
         """初始化适配器
@@ -103,7 +113,10 @@ class GhidraAdapter:
         replacement = self.config['filename'].get('replacement_char', '_')
         
         # 清理完整文件名（包含扩展名），与批处理文件行为一致
-        sanitized = re.sub(f'[^{pattern}]', replacement, filename)
+        raw = str(pattern).strip()
+        if raw.startswith("[") and raw.endswith("]") and len(raw) >= 2:
+            raw = raw[1:-1]
+        sanitized = re.sub(rf"[^{raw}]", replacement, filename)
         
         self.logger.debug(f"文件名清理: {filename} -> {sanitized}")
         return sanitized
@@ -163,7 +176,7 @@ class GhidraAdapter:
         ghidra_config = self.config.get('ghidra', {})
         scripts_config = self.config.get('scripts', {})
         
-        cmd_path = ghidra_config.get('cmd_path', '')
+        cmd_path = self._normalize_cmd_path(ghidra_config.get('cmd_path', ''))
         if not cmd_path:
             raise ValueError("配置文件中未设置 ghidra.cmd_path")
             
@@ -186,15 +199,16 @@ class GhidraAdapter:
             project_name,
             "-deleteProject",
             "-import", input_file,
-            "-scriptPath", script_path
+            "-scriptPath", script_path,
         ]
-        
+
         # 添加后处理脚本
         post_scripts = scripts_config.get('post_scripts', [])
         for script in post_scripts:
             command.extend(["-postScript", script])
-        
-        self.logger.debug(f"构建的命令: {' '.join(command)}")
+
+        command_display = command if isinstance(command, str) else ' '.join(command)
+        self.logger.debug(f"构建的命令: {command_display}")
         return command
     
     def process_output_files(self, output_dir: Path, sanitized_name: str):
@@ -278,15 +292,15 @@ class GhidraAdapter:
             command = self.build_ghidra_command(str(input_in_workdir), output_dir)
             
             self.logger.info(f"执行Ghidra命令...")
-            self.logger.debug(f"完整命令: {' '.join(command)}")
+            command_display = command if isinstance(command, str) else ' '.join(command)
+            self.logger.debug(f"完整命令: {command_display}")
             self.logger.debug(f"当前工作目录: {Path.cwd()}")
             
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
-                errors='ignore'
+                errors='replace'
             )
             
             # 输出所有脚本输出（DEBUG级别）

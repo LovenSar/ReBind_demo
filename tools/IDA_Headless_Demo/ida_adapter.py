@@ -12,12 +12,22 @@ import logging
 import argparse
 import subprocess
 import re
+import shlex
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 
 class IDAAdapter:
     """IDA Headless 分析适配器"""
+
+    @staticmethod
+    def _normalize_cmd_path(value: Any) -> str:
+        text = str(value or "").strip()
+        text = text.replace(r"\\\"", '"').replace(r"\\'", "'")
+        text = text.replace(r"\"", '"').replace(r"\'", "'")
+        if len(text) >= 2 and ((text[0] == text[-1] == '"') or (text[0] == text[-1] == "'")):
+            text = text[1:-1].strip()
+        return text
     
     def __init__(self, config_path: Optional[str] = None):
         """初始化适配器
@@ -103,7 +113,10 @@ class IDAAdapter:
         replacement = self.config['filename'].get('replacement_char', '_')
         
         # 清理完整文件名（包含扩展名），与Ghidra适配器行为一致
-        sanitized = re.sub(f'[^{pattern}]', replacement, filename)
+        raw = str(pattern).strip()
+        if raw.startswith("[") and raw.endswith("]") and len(raw) >= 2:
+            raw = raw[1:-1]
+        sanitized = re.sub(rf"[^{raw}]", replacement, filename)
         
         self.logger.debug(f"文件名清理: {filename} -> {sanitized}")
         return sanitized
@@ -164,16 +177,24 @@ class IDAAdapter:
         """
         ida_config = self.config.get('ida', {})
         
-        cmd_path = ida_config.get('cmd_path', '')
+        cmd_path = self._normalize_cmd_path(ida_config.get('cmd_path', ''))
         if not cmd_path:
             raise ValueError("配置文件中未设置 ida.cmd_path")
             
+        raw_args = ida_config.get('args', ['-A', '-c'])
+        if isinstance(raw_args, str):
+            extra_args = shlex.split(raw_args, posix=(os.name != "nt"))
+        elif isinstance(raw_args, list):
+            extra_args = [str(a) for a in raw_args if a is not None]
+        else:
+            extra_args = ['-A', '-c']
+
         # 构建命令
         command = [
             cmd_path,
-            ida_config.get('args', '-A -c'),
-            f'-S"{script_file}"',
-            input_file
+            *extra_args,
+            f"-S{script_file}",
+            input_file,
         ]
         
         self.logger.debug(f"构建的命令: {' '.join(command)}")
@@ -250,8 +271,7 @@ class IDAAdapter:
                         command,
                         capture_output=True,
                         text=True,
-                        encoding='utf-8',
-                        errors='ignore'
+                        errors='replace'
                     )
                     
                     # 输出所有脚本输出（DEBUG级别）

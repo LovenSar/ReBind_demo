@@ -2318,3 +2318,129 @@
 2025-12-18 00:42:40,258 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_binaryinfo
 2025-12-18 00:42:40,258 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate.so_pseudocode
 2025-12-18 00:42:40,258 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-18 11:39:26,994 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 11:39:26,995 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 11:39:27,003 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 11:39:27,038 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 11:39:27,039 - ghidra_adapter - ERROR - 标准错误: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 11:39:27,039 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 11:39:27,039 - ghidra_adapter - ERROR - 分析文件 E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 17:50:44,735 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 17:50:44,736 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 17:50:44,747 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 17:50:44,791 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 17:50:44,791 - ghidra_adapter - ERROR - 标准错误: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 17:50:44,791 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 17:50:44,791 - ghidra_adapter - ERROR - 分析文件 E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:06,082 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:05:06,082 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:05:06,090 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 19:05:06,240 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 19:05:06,240 - ghidra_adapter - ERROR - 标准错误: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:06,241 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:06,241 - ghidra_adapter - ERROR - 分析文件 E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:21,398 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:05:21,399 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:05:21,408 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 19:05:21,452 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 19:05:21,452 - ghidra_adapter - ERROR - 标准错误: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:21,452 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:05:21,452 - ghidra_adapter - ERROR - 分析文件 E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: 'E:\Program' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:08:17,701 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:08:17,702 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:08:17,711 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 19:08:17,748 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 19:08:17,748 - ghidra_adapter - ERROR - 标准错误: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:08:17,748 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:08:17,748 - ghidra_adapter - ERROR - 分析文件 E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:12:45,056 - ghidra_adapter - INFO - 开始分析文件: tmp\_top\VisiONiNdE.exe
+2025-12-18 19:12:45,057 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:12:45,060 - ghidra_adapter - DEBUG - 复制脚本: ExtractBinaryInfo.py
+2025-12-18 19:12:45,061 - ghidra_adapter - DEBUG - 复制脚本: ExtractDisassembly.py
+2025-12-18 19:12:45,063 - ghidra_adapter - DEBUG - 复制脚本: ExtractPseudocode.py
+2025-12-18 19:12:45,065 - ghidra_adapter - DEBUG - 复制脚本: ghidra_adapter.py
+2025-12-18 19:12:45,067 - ghidra_adapter - DEBUG - 复制输入文件: VisiONiNdE.exe
+2025-12-18 19:12:45,067 - ghidra_adapter - DEBUG - 文件名清理: VisiONiNdE.exe -> VisiONiNdE_exe
+2025-12-18 19:12:45,067 - ghidra_adapter - DEBUG - 构建的命令: cmd.exe /d /s /c "E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat" E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo ReBindDemo_VisiONiNdE_exe -deleteProject -import E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo\VisiONiNdE.exe -scriptPath E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo -postScript ExtractBinaryInfo.py -postScript ExtractDisassembly.py -postScript ExtractPseudocode.py
+2025-12-18 19:12:45,067 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 19:12:45,067 - ghidra_adapter - DEBUG - 完整命令: cmd.exe /d /s /c "E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat" E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo ReBindDemo_VisiONiNdE_exe -deleteProject -import E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo\VisiONiNdE.exe -scriptPath E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo -postScript ExtractBinaryInfo.py -postScript ExtractDisassembly.py -postScript ExtractPseudocode.py
+2025-12-18 19:12:45,067 - ghidra_adapter - DEBUG - 当前工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:12:45,114 - ghidra_adapter - DEBUG - Ghidra标准错误:
+2025-12-18 19:12:45,115 - ghidra_adapter - DEBUG -   '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+2025-12-18 19:12:45,115 - ghidra_adapter - DEBUG -   或批处理文件。
+2025-12-18 19:12:45,115 - ghidra_adapter - ERROR - Ghidra命令执行失败，返回码: 1
+2025-12-18 19:12:45,115 - ghidra_adapter - ERROR - 标准错误: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:12:45,115 - ghidra_adapter - ERROR - 执行Ghidra命令时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:12:45,115 - ghidra_adapter - ERROR - 分析文件 tmp\_top\VisiONiNdE.exe 时出错: Ghidra分析失败: '\"E:\Program Files (x86)\ghidra_11.4.3_PUBLIC_20251203\ghidra_11.4.3_PUBLIC\support\analyzeHeadless.bat\"' 不是内部或外部命令，也不是可运行的程序
+或批处理文件。
+
+2025-12-18 19:17:00,511 - ghidra_adapter - INFO - 开始分析文件: tmp\_top\VisiONiNdE.exe
+2025-12-18 19:17:00,511 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 19:17:00,522 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 19:17:35,373 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-18 19:17:35,373 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-18 19:17:35,373 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_disassembly
+2025-12-18 19:17:35,374 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_binaryinfo
+2025-12-18 19:17:35,374 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_pseudocode
+2025-12-18 19:17:35,377 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 20:06:24,703 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 20:06:24,704 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 20:06:24,712 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 20:06:59,959 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-18 20:06:59,960 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-18 20:06:59,960 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_disassembly
+2025-12-18 20:06:59,961 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_binaryinfo
+2025-12-18 20:06:59,961 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_pseudocode
+2025-12-18 20:06:59,963 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 21:49:17,748 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 21:49:17,748 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 21:49:17,760 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 21:49:54,850 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-18 21:49:54,851 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-18 21:49:54,851 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_disassembly
+2025-12-18 21:49:54,851 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_binaryinfo
+2025-12-18 21:49:54,852 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_pseudocode
+2025-12-18 21:49:54,854 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 22:15:32,648 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 22:15:32,650 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo
+2025-12-18 22:15:32,665 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-18 22:16:15,479 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-18 22:16:15,481 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-18 22:16:15,481 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_disassembly
+2025-12-18 22:16:15,482 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_binaryinfo
+2025-12-18 22:16:15,482 - ghidra_adapter - WARNING - 输出目录不存在: VisiONiNdE_exe_pseudocode
+2025-12-18 22:16:15,483 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_ghidemo

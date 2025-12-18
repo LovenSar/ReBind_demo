@@ -281,6 +281,26 @@ def _exit_if_library_init_failed(log_path: Path, ida_proc: subprocess.Popen) -> 
     raise SystemExit(msg)
 
 
+def _wait_for_ida_process_exit(proc: subprocess.Popen, *, timeout: float = 300.0) -> None:
+    """Wait for the IDA(idat) process to exit, printing status or timing out."""
+
+    if proc.poll() is not None:
+        print(f"[SemanticAlign] IDA(idat) 进程已退出，退出码={proc.returncode}")
+        return
+
+    try:
+        exit_code = proc.wait(timeout=timeout)
+        print(f"[SemanticAlign] IDA(idat) 进程已退出，退出码={exit_code}")
+    except subprocess.TimeoutExpired:
+        print(
+            "[SemanticAlign] 等待 IDA(idat) 进程退出超时，如需强制终止请手动结束 idat 进程。"
+        )
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
     cur = conn.cursor()
     cur.execute("SELECT id FROM binaries ORDER BY id LIMIT 1;")
@@ -332,6 +352,7 @@ def run_semantic_pipeline(
     db_path: Path,
     ida_url: str,
     ida_sync: bool,
+    semantics_config_path: Optional[str] = None,
 ) -> None:
     """Run Phase1-5 in-process (no subprocess)."""
 
@@ -342,7 +363,7 @@ def run_semantic_pipeline(
     install_stdout_tee(logger)
     logger.info("知识传播管线启动，数据库: %s", db_path)
 
-    semantics_config = load_semantics_config(None)
+    semantics_config = load_semantics_config(semantics_config_path)
     llm_settings = build_llm_settings(
         semantics_config,
         model=None,
@@ -578,6 +599,14 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="待分析二进制样本路径（必填）",
     )
     parser.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "语义对齐模块配置文件路径（默认: "
+            f"{TOOLS_DIR / 'config.yaml'})"
+        ),
+    )
+    parser.add_argument(
         "--idat-exe",
         default=DEFAULT_IDAT_EXE,
         help=f"IDA 命令行可执行文件名或完整路径（默认: {DEFAULT_IDAT_EXE})",
@@ -649,7 +678,12 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     # 如果不需要 IDA，同步逻辑会关闭，仅离线跑 knowledge_propagation
     if args.no_ida:
         print("[SemanticAlign] 不启动 IDA / idat_server，仅离线运行 Phase1-5（不做 IDA 同步）。")
-        run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=False)
+        run_semantic_pipeline(
+            db_path=db_path,
+            ida_url=ida_url,
+            ida_sync=False,
+            semantics_config_path=args.config,
+        )
         return
 
     _set_ctrl_c_exit_url(ida_url)
@@ -671,18 +705,23 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     _exit_if_library_init_failed(ida_log, ida_proc)
 
-    # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接，并在结束时发出 save_and_exit）
-    run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=True)
-
-    # 等待 IDA 进程退出（save_and_exit 通常会触发有序关闭）
-    print("[SemanticAlign] 等待 IDA(idat) 进程退出...")
+    # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接）
     try:
-        ida_exit = ida_proc.wait(timeout=300)
-        print(f"[SemanticAlign] IDA(idat) 进程已退出，退出码={ida_exit}")
-    except subprocess.TimeoutExpired:
-        print(
-            "[SemanticAlign] 等待 IDA 退出超时，如需强制终止请手动结束 idat 进程。"
+        run_semantic_pipeline(
+            db_path=db_path,
+            ida_url=ida_url,
+            ida_sync=True,
+            semantics_config_path=args.config,
         )
+    except Exception:
+        print("[SemanticAlign] 语义流水线异常终止，正在请求 IDA(save_and_exit)...")
+        _send_ida_save_and_exit()
+        _wait_for_ida_process_exit(ida_proc, timeout=30.0)
+        raise
+
+    # 运行成功后等待 IDA 进程退出
+    print("[SemanticAlign] 等待 IDA(idat) 进程退出...")
+    _wait_for_ida_process_exit(ida_proc)
 
 
     # 若 run_semantic_pipeline 中无异常，则整体成功

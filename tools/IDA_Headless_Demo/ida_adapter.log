@@ -934,3 +934,80 @@
 2025-12-18 00:42:49,613 - ida_adapter - INFO - 所有脚本执行完成
 2025-12-18 00:42:49,614 - ida_adapter - INFO - 处理输出文件...
 2025-12-18 00:42:49,614 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_idademo
+2025-12-18 11:39:27,039 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 11:39:27,040 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 11:39:27,046 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 11:39:29,296 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 11:39:29,296 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 17:50:44,792 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 17:50:44,792 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 17:50:44,798 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 17:50:47,521 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 17:50:47,521 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 17:50:49,917 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 17:50:49,918 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 17:50:56,198 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-18 17:50:56,198 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-18 17:50:56,199 - ida_adapter - INFO - 处理输出文件...
+2025-12-18 17:50:56,201 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 19:05:06,241 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:05:06,242 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 19:05:06,248 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 19:05:08,569 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 19:05:08,570 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 19:05:10,890 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 19:05:10,890 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 19:05:21,452 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:05:21,453 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 19:05:21,458 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 19:05:23,543 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 19:05:23,545 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 19:05:25,851 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 19:05:25,851 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 19:08:17,748 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 19:08:17,749 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 19:08:17,755 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 19:08:19,859 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 19:08:19,860 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 19:08:22,171 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 19:08:22,171 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 19:08:28,130 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-18 19:08:28,130 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-18 19:08:28,131 - ida_adapter - INFO - 处理输出文件...
+2025-12-18 19:08:28,132 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 20:06:59,963 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 20:06:59,964 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 20:06:59,972 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 20:07:02,900 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 20:07:02,900 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 20:07:05,796 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 20:07:05,796 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 20:07:13,753 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-18 20:07:13,753 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-18 20:07:13,754 - ida_adapter - INFO - 处理输出文件...
+2025-12-18 20:07:13,756 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 21:49:54,855 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 21:49:54,856 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 21:49:54,864 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 21:49:56,604 - ida_adapter - WARNING - 脚本 ExtractBinaryInfo_IDA.py 执行失败，返回码: 2
+2025-12-18 21:49:56,605 - ida_adapter - WARNING - 标准错误: 
+2025-12-18 21:49:56,605 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 21:49:57,774 - ida_adapter - WARNING - 脚本 ExtractDisassembly_IDA.py 执行失败，返回码: 2
+2025-12-18 21:49:57,774 - ida_adapter - WARNING - 标准错误: 
+2025-12-18 21:49:57,774 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 21:49:58,889 - ida_adapter - WARNING - 脚本 ExtractPseudocode_IDA.py 执行失败，返回码: 2
+2025-12-18 21:49:58,889 - ida_adapter - WARNING - 标准错误: 
+2025-12-18 21:49:58,889 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-18 21:49:58,891 - ida_adapter - INFO - 处理输出文件...
+2025-12-18 21:49:58,893 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 22:16:15,483 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE.exe
+2025-12-18 22:16:15,485 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
+2025-12-18 22:16:15,491 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-18 22:16:19,024 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-18 22:16:19,024 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-18 22:16:22,257 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-18 22:16:22,257 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-18 22:16:30,473 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-18 22:16:30,474 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-18 22:16:30,474 - ida_adapter - INFO - 处理输出文件...
+2025-12-18 22:16:30,478 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\_top\VisiONiNdE_exe_idademo
