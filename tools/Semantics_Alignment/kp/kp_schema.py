@@ -28,6 +28,17 @@ def ensure_analysis_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Phase1/Phase2: pipeline queue markers (resumable / inspectable)
+    try:
+        conn.execute("ALTER TABLE analysis_status ADD COLUMN phase1_pending INTEGER DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        conn.execute("ALTER TABLE analysis_status ADD COLUMN phase2_pending INTEGER DEFAULT 0;")
+    except sqlite3.OperationalError:
+        pass
+
     # Phase4: resumable flag
     try:
         conn.execute("ALTER TABLE analysis_status ADD COLUMN lvar_optimized INTEGER DEFAULT 0;")
@@ -114,6 +125,8 @@ def load_analysis_info(conn: sqlite3.Connection) -> Dict[int, dict]:
             """
             SELECT function_id, analysis_state, confidence_score,
                    summary_signature, semantic_summary,
+                   COALESCE(phase1_pending, 0) AS phase1_pending,
+                   COALESCE(phase2_pending, 0) AS phase2_pending,
                    COALESCE(annotation_status, 0) AS annotation_status,
                    structured_analysis
             FROM analysis_status;
@@ -124,7 +137,9 @@ def load_analysis_info(conn: sqlite3.Connection) -> Dict[int, dict]:
         cur.execute(
             """
             SELECT function_id, analysis_state, confidence_score,
-                   summary_signature, semantic_summary
+                   summary_signature, semantic_summary,
+                   COALESCE(phase1_pending, 0) AS phase1_pending,
+                   COALESCE(phase2_pending, 0) AS phase2_pending
             FROM analysis_status;
             """
         )
@@ -133,9 +148,9 @@ def load_analysis_info(conn: sqlite3.Connection) -> Dict[int, dict]:
     info: Dict[int, Dict[str, Any]] = {}
     for row in cur.fetchall():
         if with_annotation_cols:
-            fid, state, score, sig, summary, ann_status, structured = row
+            fid, state, score, sig, summary, p1_pending, p2_pending, ann_status, structured = row
         else:
-            fid, state, score, sig, summary = row
+            fid, state, score, sig, summary, p1_pending, p2_pending = row
             ann_status, structured = 0, None
 
         info[int(fid)] = {
@@ -143,6 +158,8 @@ def load_analysis_info(conn: sqlite3.Connection) -> Dict[int, dict]:
             "confidence_score": int(score or 0),
             "summary_signature": sig,
             "semantic_summary": summary,
+            "phase1_pending": int(p1_pending or 0),
+            "phase2_pending": int(p2_pending or 0),
             "annotation_status": int(ann_status or 0),
             "structured_analysis": structured,
         }

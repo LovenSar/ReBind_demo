@@ -4,10 +4,13 @@ ReBind Demo 综合脚本
 用于统一调用 Ghidra 和 IDA Headless 分析工具
 """
 
-import os
-import sys
 import argparse
+import http.client
+import json
+import os
+import signal
 import subprocess
+import sys
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,6 +33,44 @@ except ImportError as e:
 
 
 SEMANTIC_ALIGN_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "semantic_align.py"
+IDAT_EXIT_PORT = 12345
+_IDAT_EXIT_TIMEOUT = 2.0
+
+
+def _notify_idat_exit(port: int = IDAT_EXIT_PORT) -> None:
+    """Send a save_and_exit request to the headless IDA HTTP server."""
+    payload = json.dumps({"action": "save_and_exit"}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": str(len(payload)),
+    }
+    conn = None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=_IDAT_EXIT_TIMEOUT)
+        conn.request("POST", "/", body=payload, headers=headers)
+        resp = conn.getresponse()
+        resp.read()
+        if not (200 <= resp.status < 300):
+            print(
+                f"[ReBindDemo] IDAT exit request returned HTTP {resp.status}", file=sys.stderr
+            )
+        else:
+            print("[ReBindDemo] 请求已发送到 IDAT，等待其退出。")
+    except Exception as exc:
+        print(f"[ReBindDemo] 无法联系 IDAT HTTP 服务: {exc}", file=sys.stderr)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _handle_sigint(signum, frame):
+    """Forward SIGINT (Ctrl+C) to the IDAT server before exiting."""
+    print("\n[ReBindDemo] 捕获到 Ctrl+C，通知 IDAT 退出...")
+    _notify_idat_exit()
+    sys.exit(0)
 
 
 def run_semantic_align(sample_paths: List[Path]) -> None:
@@ -274,4 +315,5 @@ def main():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, _handle_sigint)
     main()

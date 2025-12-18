@@ -26,6 +26,44 @@ from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedGraph, ValidationTask
 logger = logging.getLogger(__name__)
 
 
+def _extract_name_from_signature(signature: str) -> str:
+    sig = (signature or "").strip()
+    if not sig:
+        return ""
+    before_paren = sig.split("(", 1)[0].strip()
+    if not before_paren:
+        return ""
+    tokens = before_paren.split()
+    if not tokens:
+        return ""
+    name = tokens[-1].strip("*&")
+    return name or ""
+
+
+def _get_phase2_pending_entry_vas(conn: sqlite3.Connection, graph: UnifiedGraph) -> List[int]:
+    """Return entry_vas that are marked as Phase2-PENDING (derived from Phase1 outputs)."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT f.entry_va
+            FROM analysis_status AS a
+            JOIN functions AS f ON f.id = a.function_id
+            WHERE COALESCE(a.analysis_state, 'PENDING') = 'ANALYZED'
+              AND (
+                    COALESCE(a.phase2_pending, 0) = 1
+                    OR (COALESCE(a.phase1_pending, 0) = 1 AND COALESCE(a.phase2_pending, 0) = 0)
+                  );
+            """
+        )
+    except sqlite3.OperationalError:
+        # 兼容旧数据库：退回到旧的入口点策略
+        return _get_entry_points_for_validation(conn, graph)
+
+    entry_vas = [int(row[0]) for row in cur.fetchall()]
+    return sorted([va for va in entry_vas if va in graph.nodes])
+
+
 def _get_any_function_id_for_va(graph: UnifiedGraph, entry_va: int) -> Optional[int]:
     node = graph.nodes.get(entry_va)
     if not node:
@@ -201,7 +239,6 @@ def build_validation_batch_prompt(conn: sqlite3.Connection, graph: UnifiedGraph,
 
 def _apply_validation_llm_result(conn: sqlite3.Connection, graph: UnifiedGraph, entry_va: int, result: Dict[str, Any], ida_sync: bool, ida_url: str) -> Optional[float]:
     node = graph.nodes[entry_va]
-    display_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
 
     action = str(result.get("action", "")).strip().upper()
     new_name_raw = str(result.get("new_name", "")).strip()
@@ -212,8 +249,37 @@ def _apply_validation_llm_result(conn: sqlite3.Connection, graph: UnifiedGraph, 
     except (TypeError, ValueError):
         confidence = 0.8
 
-    current_name = display_name
+    fid = _get_any_function_id_for_va(graph, entry_va)
+    cur = conn.cursor()
+    current_sig = ""
+    current_summary = ""
+    if fid is not None:
+        cur.execute(
+            "SELECT summary_signature, semantic_summary FROM analysis_status WHERE function_id = ?;",
+            (int(fid),),
+        )
+        row = cur.fetchone()
+        if row:
+            current_sig = row[0] or ""
+            current_summary = row[1] or ""
+
+    sig_name = _extract_name_from_signature(current_sig)
+    display_name = sig_name or (next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}")
+
+    current_name = sig_name or display_name
     final_name = current_name
+
+    feedback_payload = {
+        "entry_va": f"0x{entry_va:08X}",
+        "llm_name": current_name,
+        "action": action,
+        "suggested_name": new_name_raw,
+        "confidence": round(confidence, 4),
+        "reasoning": reasoning,
+    }
+    feedback_text = json.dumps(feedback_payload, ensure_ascii=False)
+    print(f"[VALIDATION] LLM 反馈: {feedback_text}")
+    logger.info("[Validation] Phase2 LLM feedback: %s", feedback_text)
 
     if action == "RENAME" and new_name_raw:
         candidate = new_name_raw
@@ -224,31 +290,62 @@ def _apply_validation_llm_result(conn: sqlite3.Connection, graph: UnifiedGraph, 
 
     if final_name != current_name:
         print(f"[VALIDATION] 应用二次改名：{current_name} -> {final_name}")
-        fid = _get_any_function_id_for_va(graph, entry_va)
-        signature = ""
-        if fid is not None:
-            cur = conn.cursor()
-            cur.execute("SELECT summary_signature FROM analysis_status WHERE function_id = ?;", (fid,))
-            row = cur.fetchone()
-            if row:
-                signature = row[0] or ""
+        updated_sig = current_sig
+        if updated_sig and current_name and current_name in updated_sig:
+            updated_sig = updated_sig.replace(current_name, final_name)
 
-        if signature and current_name in signature:
-            signature = signature.replace(current_name, final_name)
+        # 有 IDA 的情况下优先走同步流程；否则仅更新 DB（analysis_status / functions / pseudo_functions）
+        if ida_sync and ida_url:
+            _sync_with_ida_and_update_db(
+                conn=conn,
+                graph=graph,
+                node=node,
+                entry_va=entry_va,
+                signature=updated_sig or current_sig,
+                summary=f"[validation] {reasoning}",
+                ida_url=ida_url,
+            )
+        else:
+            for sub_fid in node.function_ids:
+                cur.execute("UPDATE functions SET name = ? WHERE id = ?;", (final_name, int(sub_fid)))
+                cur.execute("UPDATE pseudo_functions SET name = ?, prototype = ? WHERE function_id = ?;", (final_name, updated_sig or None, int(sub_fid)))
 
-        _sync_with_ida_and_update_db(
-            conn=conn,
-            graph=graph,
-            node=node,
-            entry_va=entry_va,
-            signature=signature,
-            summary=f"[validation] {reasoning}",
-            ida_url=ida_url,
-        )
+        current_sig = updated_sig or current_sig
 
-    cur = conn.cursor()
+    # 记录 Phase2 校验结论 + 从 Phase2-Pending 序列中移除
+    validation_note = f"\n[Phase2 validation] action={action} conf={confidence:.2f} reason={reasoning}".strip()
+    new_summary = (current_summary or "").strip()
+    if reasoning:
+        if new_summary:
+            if validation_note not in new_summary:
+                new_summary = f"{new_summary}\n{validation_note}"
+        else:
+            new_summary = validation_note
+
     for fid in node.function_ids:
-        cur.execute("UPDATE analysis_status SET analysis_state = 'LOCKED' WHERE function_id = ?;", (int(fid),))
+        try:
+            cur.execute(
+                """
+                UPDATE analysis_status
+                SET analysis_state = 'LOCKED',
+                    summary_signature = COALESCE(?, summary_signature),
+                    semantic_summary = COALESCE(?, semantic_summary),
+                    phase2_pending = 0
+                WHERE function_id = ?;
+                """,
+                (current_sig or None, new_summary or None, int(fid)),
+            )
+        except sqlite3.OperationalError:
+            cur.execute(
+                """
+                UPDATE analysis_status
+                SET analysis_state = 'LOCKED',
+                    summary_signature = COALESCE(?, summary_signature),
+                    semantic_summary = COALESCE(?, semantic_summary)
+                WHERE function_id = ?;
+                """,
+                (current_sig or None, new_summary or None, int(fid)),
+            )
     conn.commit()
 
     return max(0.0, min(1.0, confidence))
@@ -310,12 +407,24 @@ def run_validation_phase(
     if ida_sync and ida_url:
         wait_for_ida_server(ida_url)
 
-    entry_vas = _get_entry_points_for_validation(conn, graph)
+    entry_vas = _get_phase2_pending_entry_vas(conn, graph)
     if not entry_vas:
-        print("[Validation] 未找到合适的入口点，跳过第二阶段。")
+        print("[Validation] 未找到 Phase2-PENDING 函数，跳过第二阶段。")
         return
 
     print(f"[Validation] 入口点数量: {len(entry_vas)}")
+    entry_lines: List[str] = []
+    for va in entry_vas:
+        node = graph.nodes.get(va)
+        name = (
+            next(iter(sorted(node.names)), f"sub_{va:08X}") if node and node.names else f"sub_{va:08X}"
+        )
+        entry_lines.append(f"{name} @ 0x{va:08X}")
+    summary = " | ".join(entry_lines)
+    if summary:
+        print(f"[Validation] Phase2 正在校验的入口函数: {summary}")
+    logger.info("[Validation] Phase2 entry candidates (%d): %s", len(entry_vas), summary or "<none>")
+    pending_set: Set[int] = set(entry_vas)
 
     queue: List[ValidationTask] = []
     visited: Set[int] = set()
@@ -359,11 +468,18 @@ def run_validation_phase(
             task = heapq.heappop(queue)
             entry_va = task.entry_va
 
+            if entry_va not in pending_set:
+                if pbar is not None:
+                    pbar.update(1)
+                continue
+
             if _is_locked(entry_va):
                 node = graph.nodes.get(entry_va)
                 if node:
                     posterior_conf = 0.9
                     for callee_va in node.internal_callee_vas:
+                        if callee_va not in pending_set:
+                            continue
                         if callee_va in visited or callee_va not in graph.nodes:
                             continue
                         visited.add(callee_va)
@@ -379,25 +495,6 @@ def run_validation_phase(
             if not node:
                 if pbar is not None:
                     pbar.update(1)
-                continue
-
-            current_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
-            is_default_name = bool(DEFAULT_FUNC_NAME_PATTERN.fullmatch(current_name))
-
-            if not is_default_name:
-                posterior_conf = 1.0
-                if pbar is not None:
-                    pbar.update(1)
-
-                if posterior_conf > 0.6:
-                    for callee_va in node.internal_callee_vas:
-                        if callee_va in visited or callee_va not in graph.nodes:
-                            continue
-                        visited.add(callee_va)
-                        heapq.heappush(queue, ValidationTask(entry_va=callee_va, priority=posterior_conf * 100.0, path_confidence=posterior_conf))
-                        if pbar is not None:
-                            pbar.total += 1
-                            pbar.refresh()
                 continue
 
             to_validate.append(entry_va)

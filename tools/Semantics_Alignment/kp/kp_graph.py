@@ -64,16 +64,21 @@ def build_unified_graph(conn: sqlite3.Connection, binary_id: int) -> UnifiedGrap
             node = UnifiedFunctionNode(entry_va=entry_va, binary_id=int(binary_id))
             nodes[entry_va] = node
 
-        node.function_ids.add(fid)
-        if name:
-            node.names.add(str(name))
-
         function_id_to_va[fid] = entry_va
         function_id_to_view[fid] = view_id
 
         tool_id = view_to_tool.get(view_id)
+        tool_name = "unknown"
         if tool_id is not None:
-            func_tool[fid] = tool_map.get(int(tool_id), f"tool_{tool_id}")
+            tool_name = tool_map.get(int(tool_id), f"tool_{tool_id}")
+            func_tool[fid] = tool_name
+
+        tool_key = tool_name.lower()
+
+        node.function_ids.add(fid)
+        if name:
+            node.names.add(str(name))
+            node.names_by_tool.setdefault(tool_key, set()).add(str(name))
 
     if not nodes:
         raise RuntimeError(f"binary_id={binary_id} 下找不到任何函数。")

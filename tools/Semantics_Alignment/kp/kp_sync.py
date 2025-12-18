@@ -201,3 +201,4 @@ def _sync_with_ida_and_update_db(
 
     conn.commit()
     node.names.add(applied_name)
+    logger.info("[IDA-Sync] 成功同步: entry_va=0x%08X name=%s (%s)", entry_va, applied_name, ida_url)

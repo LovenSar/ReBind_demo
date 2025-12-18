@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import sqlite3
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tqdm import tqdm
@@ -18,6 +19,7 @@ from kp.kp_ida import wait_for_ida_server
 from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
 from kp.kp_schema import load_analysis_info
 from kp.kp_types import GlobalVarNode, UnifiedGraph
+from kp.kp_ida_utils import force_ida_save_database
 
 try:
     import requests  # type: ignore
@@ -26,6 +28,7 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+_IDA_SAVE_TIMEOUT_S = 15.0
 
 
 def ensure_global_vars_schema(conn: sqlite3.Connection) -> None:
@@ -547,6 +550,7 @@ def run_global_var_phase(
 
     processed = 0
 
+    pending_ida_save: Optional[threading.Thread] = None
     for batch in yield_dynamic_batch(
         selected_nodes,
         prompt_builder=_builder,
@@ -557,6 +561,8 @@ def run_global_var_phase(
     ):
         if not batch.items:
             continue
+        if pending_ida_save and not pending_ida_save.is_alive():
+            pending_ida_save = None
 
         top_addr = batch.items[0].address_va
         pbar.set_description(f"Phase 3: batch={len(batch.items)} top=0x{top_addr:08X}")
@@ -568,6 +574,17 @@ def run_global_var_phase(
             processed += len(batch.items)
             pbar.update(len(batch.items))
             continue
+
+        if ida_sync and ida_url and (pending_ida_save is None or not pending_ida_save.is_alive()):
+            logger.debug("[GLOBAL] 启动后台保存 IDA 数据库（并行 LLM 请求）")
+            pending = threading.Thread(
+                target=force_ida_save_database,
+                args=(ida_url,),
+                kwargs={"timeout": _IDA_SAVE_TIMEOUT_S},
+                daemon=True,
+            )
+            pending.start()
+            pending_ida_save = pending
 
         conversation, request_kwargs = build_chat_request(batch.prompt, llm_settings)
         result_list = call_llm_analyze_function(
@@ -597,4 +614,6 @@ def run_global_var_phase(
         pbar.update(len(batch.items))
 
     pbar.close()
+    if pending_ida_save and pending_ida_save.is_alive():
+        pending_ida_save.join(timeout=5.0)
     print(f"[GLOBAL] 第三阶段共处理全局变量数量：{processed}")

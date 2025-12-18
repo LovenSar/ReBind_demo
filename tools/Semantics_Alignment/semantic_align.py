@@ -16,16 +16,22 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import subprocess
 import sys
 import time
 import builtins
 import inspect
+import http.client
+import json
+import signal
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 import sqlite3
+
+from urllib.parse import urlparse
 
 from dynamic_batching import yield_dynamic_batch
 from kp.kp_ida import IDAService
@@ -35,8 +41,9 @@ from kp.kp_settings import build_llm_settings, load_semantics_config
 from kp.kp_graph import build_unified_graph
 from kp.kp_scoring import compute_unified_scores
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
-from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN
+from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, SUBFUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedGraph
 from kp.kp_unified_prompt import build_unified_batch_prompt, build_unified_prompt
+from tqdm import tqdm
 from phases.phase1_kp import analyze_one_unified_function as phase1_analyze_one_unified_function
 from phases.phase1_kp import analyze_unified_batch as phase1_analyze_unified_batch
 from phases.phase2_validation import run_validation_phase as phase2_run_validation_phase
@@ -49,8 +56,71 @@ SCRIPT_PATH = Path(__file__).resolve()
 TOOLS_DIR = SCRIPT_PATH.parent
 REPO_ROOT = SCRIPT_PATH.parents[2]
 
-DEFAULT_IDA_URL = "http://127.0.0.1:12345"
+DEFAULT_IDA_HTTP_PORT = 12345
+DEFAULT_IDA_URL = f"http://127.0.0.1:{DEFAULT_IDA_HTTP_PORT}"
 DEFAULT_IDAT_EXE = "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
+LIBRARY_INIT_FAILURE_MESSAGE = "Library initialization failed with result: 4"
+
+_CTRL_C_EXIT_REQUESTED = False
+_CTRL_C_EXIT_URL = DEFAULT_IDA_URL
+
+
+def _set_ctrl_c_exit_url(url: str) -> None:
+    """Remember which IDA HTTP address the Ctrl+C handler should target."""
+    global _CTRL_C_EXIT_URL
+    normalized = (url or "").strip()
+    if not normalized:
+        normalized = DEFAULT_IDA_URL
+    _CTRL_C_EXIT_URL = normalized
+
+
+def _send_ida_save_and_exit(timeout_s: float = 2.0) -> None:
+    """POST {'action': 'save_and_exit'} to the configured IDA URL."""
+    url = _CTRL_C_EXIT_URL
+    if not url:
+        return
+    parsed = urlparse(url)
+    if not parsed.scheme:
+        parsed = urlparse(f"http://{url}")
+    scheme = (parsed.scheme or "http").lower()
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if scheme == "https" else DEFAULT_IDA_HTTP_PORT)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    payload = json.dumps({"action": "save_and_exit"}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Content-Length": str(len(payload)),
+    }
+
+    conn_cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+    conn = None
+    try:
+        conn = conn_cls(host, port, timeout=float(timeout_s))
+        conn.request("POST", path, body=payload, headers=headers)
+        resp = conn.getresponse()
+        resp.read()
+        print(f"[SemanticAlign] 已向 {url} 发送 save_and_exit 请求 (HTTP {resp.status}).")
+    except Exception as exc:
+        print(f"[SemanticAlign] 发送 save_and_exit 请求失败: {exc}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _handle_ctrl_c(signum, frame):
+    """Signal handler that tells IDA to exit before propagating KeyboardInterrupt."""
+    global _CTRL_C_EXIT_REQUESTED
+    if not _CTRL_C_EXIT_REQUESTED:
+        _CTRL_C_EXIT_REQUESTED = True
+        print("[SemanticAlign] 捕获 Ctrl+C，正在请求 IDA save_and_exit...")
+        _send_ida_save_and_exit()
+    signal.default_int_handler(signum, frame)
 
 
 def _install_print_with_location() -> None:
@@ -127,8 +197,8 @@ def run_alignment_loader(
         str(dump_xlsx),
     ]
 
-    if delete_db:
-        cmd.append("--delete-db")
+    # if delete_db:
+    #     cmd.append("--delete-db")
 
     print("[SemanticAlign] 运行 alignment_loader.py 构建对齐数据库...")
     print("  命令:", " ".join(cmd))
@@ -159,13 +229,56 @@ def launch_idat_server(
     print("[SemanticAlign] 启动 IDA(idat) + idat_server...")
     print("  命令:", " ".join(str(c) for c in cmd))
     try:
-        proc = subprocess.Popen(cmd, cwd=str(REPO_ROOT))
+        # 让 idat 运行在独立的 session/process group 中，避免用户在终端按 Ctrl+C
+        # 中断主流程时把 idat_server 一起 SIGINT 掉，导致后续出现 Connection refused。
+        proc = subprocess.Popen(cmd, cwd=str(REPO_ROOT), start_new_session=True)
     except FileNotFoundError:
         raise SystemExit(
             f"[SemanticAlign] 无法找到可执行文件 {idat_exe!r}，"
             "请确认 IDA 的 idat 已添加到 PATH，或通过 --idat-exe 指定完整路径。"
         )
     return proc
+
+
+def _read_log_tail(log_path: Path, max_bytes: int = 64 * 1024) -> str:
+    """Return the last chunk of the IDA log to help detect startup failures."""
+    if not log_path.exists():
+        return ""
+    try:
+        with log_path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            end_pos = fh.tell()
+            start_pos = max(0, end_pos - int(max_bytes))
+            fh.seek(start_pos, os.SEEK_SET)
+            return fh.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _log_indicates_library_failure(log_path: Path) -> bool:
+    chunk = _read_log_tail(log_path)
+    return LIBRARY_INIT_FAILURE_MESSAGE in chunk
+
+
+def _exit_if_library_init_failed(log_path: Path, ida_proc: subprocess.Popen) -> None:
+    if not _log_indicates_library_failure(log_path):
+        return
+
+    msg = (
+        "[SemanticAlign] 发现 IDA 报错“Library initialization failed with result: 4”，"
+        "说明资源已锁定。已停止后续流水线。"
+    )
+    print(msg)
+    if ida_proc.poll() is None:
+        try:
+            ida_proc.terminate()
+            ida_proc.wait(timeout=5)
+        except Exception:
+            try:
+                ida_proc.kill()
+            except Exception:
+                pass
+    raise SystemExit(msg)
 
 
 def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
@@ -175,6 +288,43 @@ def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
     if not row:
         raise RuntimeError("数据库中不存在 binaries 记录，无法确定 binary_id。")
     return int(row[0])
+
+
+def _phase1_pending_nodes(
+    graph: UnifiedGraph, analysis_info: Dict[int, dict]
+) -> List[UnifiedFunctionNode]:
+    """Return the Phase1 candidates that still have default/empty names."""
+    locked_states = {"ANALYZED", "LOCKED"}
+    analyzed_entry_vas = set()
+    for node in graph.nodes.values():
+        for fid in node.function_ids:
+            info = analysis_info.get(int(fid))
+            if info and info.get("analysis_state") in locked_states:
+                analyzed_entry_vas.add(int(node.entry_va))
+                break
+
+    targets = []
+    for entry_va, node in graph.nodes.items():
+        if int(entry_va) in analyzed_entry_vas:
+            continue
+        if node.names:
+            if any((name and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(name)) for name in node.names):
+                continue
+        if not _node_has_ida_subfunc_candidate(node, graph):
+            continue
+        targets.append(node)
+    return targets
+
+
+def _node_has_ida_subfunc_candidate(node: UnifiedFunctionNode, graph: UnifiedGraph) -> bool:
+    """Only keep nodes backed by IDA's default sub_ function entries."""
+    ida_present = any(graph.func_tool.get(fid, "").lower() == "ida" for fid in node.function_ids)
+    if not ida_present:
+        return False
+    ida_names = node.names_by_tool.get("ida")
+    if not ida_names:
+        return False
+    return any(SUBFUNC_NAME_PATTERN.fullmatch(name or "") for name in ida_names)
 
 
 def run_semantic_pipeline(
@@ -229,28 +379,30 @@ def run_semantic_pipeline(
         print("[SemanticAlign] Phase 1: Knowledge Propagation")
         processed = 0
 
+        initial_analysis_info = load_analysis_info(conn)
+        phase1_targets = _phase1_pending_nodes(unified_graph, initial_analysis_info)
+        phase1_total_targets = len(phase1_targets)
+        phase1_progress: Optional[tqdm] = None
+        if phase1_total_targets:
+            print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数：")
+            for node in sorted(phase1_targets, key=lambda n: n.entry_va):
+                if node.names:
+                    name_repr = ", ".join(sorted(node.names))
+                else:
+                    name_repr = "(当前无语义命名)"
+                print(f"  - entry_va=0x{int(node.entry_va):08X}, 原始名称={name_repr}")
+            phase1_progress = tqdm(
+                total=phase1_total_targets,
+                desc="[SemanticAlign] Phase 1",
+                unit="func",
+                leave=True,
+            )
+        else:
+            print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
+
         while True:
             analysis_info = load_analysis_info(conn)
-
-            analyzed_entry_vas = set()
-            for entry_va, node in unified_graph.nodes.items():
-                for fid in node.function_ids:
-                    info = analysis_info.get(int(fid))
-                    if info and info.get("analysis_state") in ("ANALYZED", "LOCKED"):
-                        analyzed_entry_vas.add(int(entry_va))
-                        break
-
-            candidates = []
-            for entry_va, node in unified_graph.nodes.items():
-                if int(entry_va) in analyzed_entry_vas:
-                    continue
-
-                # 默认仅处理 sub_/fun_/loc_ 这类地址风格函数；已有语义命名的跳过
-                if node.names:
-                    if any((name and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(name)) for name in node.names):
-                        continue
-                candidates.append(node)
-
+            candidates = _phase1_pending_nodes(unified_graph, analysis_info)
             if not candidates:
                 break
 
@@ -302,6 +454,8 @@ def run_semantic_pipeline(
                     ida_url=ida_url,
                 )
                 processed += len(selected_nodes)
+                if phase1_progress:
+                    phase1_progress.update(len(selected_nodes))
             else:
                 node = selected_nodes[0]
                 phase1_analyze_one_unified_function(
@@ -315,7 +469,11 @@ def run_semantic_pipeline(
                     ida_url=ida_url,
                 )
                 processed += 1
+                if phase1_progress:
+                    phase1_progress.update(1)
 
+        if phase1_progress:
+            phase1_progress.close()
         print(f"[SemanticAlign] Phase 1 完成，处理物理函数数量：{processed}")
 
         # ---------------------
@@ -494,6 +652,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=False)
         return
 
+    _set_ctrl_c_exit_url(ida_url)
+    signal.signal(signal.SIGINT, _handle_ctrl_c)
+
     # 启动 IDA(idat) + idat_server
     ida_log = tmp_defaults["ida_log"]
     ida_proc = launch_idat_server(
@@ -507,6 +668,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     if args.ida_start_delay > 0:
         print(f"[SemanticAlign] 等待 {args.ida_start_delay:.1f} 秒以便 IDA 启动...")
         time.sleep(args.ida_start_delay)
+
+    _exit_if_library_init_failed(ida_log, ida_proc)
 
     # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接，并在结束时发出 save_and_exit）
     run_semantic_pipeline(db_path=db_path, ida_url=ida_url, ida_sync=True)

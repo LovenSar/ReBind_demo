@@ -422,7 +422,7 @@ def analyze_local_var_batch(
     verify_wait_seconds: float = 1.0,
     dry_run: bool = False,
     prompt: Optional[str] = None,
-) -> int:
+) -> tuple[int, bool]:
     """Analyze a batch and apply renames; returns number of changed functions."""
 
     if not items:
@@ -457,10 +457,10 @@ def analyze_local_var_batch(
             f"[LVAR-BATCH-ERROR] {raw_err}\n"
             f"[LVAR-BATCH-RAW]\n{'-' * 40}\n{raw_text}\n{'-' * 40}"
         )
-        return 0
+        return 0, bool(ida_sync)
 
     if not result_list or not isinstance(result_list, list):
-        return 0
+        return 0, bool(ida_sync)
 
     changed_count = 0
 
@@ -501,7 +501,7 @@ def analyze_local_var_batch(
         if changed:
             changed_count += 1
 
-    return changed_count
+    return changed_count, ida_sync_active
 
 
 def run_local_var_phase(
@@ -730,7 +730,7 @@ def run_local_var_phase(
                     llm_settings.max_tokens,
                 )
 
-            changed_in_batch = analyze_local_var_batch(
+            changed_in_batch, ida_sync_active = analyze_local_var_batch(
                 conn=conn,
                 graph=graph,
                 items=batch.items,
@@ -757,7 +757,7 @@ def run_local_var_phase(
             initial_batch_size=len(prepared),
             min_batch_size=1,
         ):
-            changed_in_batch = analyze_local_var_batch(
+            changed_in_batch, ida_sync_active = analyze_local_var_batch(
                 conn=conn,
                 graph=graph,
                 items=batch.items,

@@ -105,6 +105,7 @@ class UnifiedFunctionNode:
     binary_id: int
     function_ids: Set[int] = field(default_factory=set)
     names: Set[str] = field(default_factory=set)
+    names_by_tool: Dict[str, Set[str]] = field(default_factory=dict)
     instr_count: int = 0
     primary_function_id: Optional[int] = None
     pseudocodes: Dict[str, str] = field(default_factory=dict)

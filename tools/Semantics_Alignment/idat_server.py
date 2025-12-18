@@ -76,6 +76,33 @@ def _install_print_with_location() -> None:
 
 _install_print_with_location()
 
+# Regex helpers for type normalization: split "A or B" and convert "[]"
+_TYPE_VARIANT_SPLIT_RE = re.compile(r"\s+or\s+", re.IGNORECASE)
+_ARRAY_BRACKETS_RE = re.compile(r"\[\s*\]")
+
+
+def _generate_type_variants(type_str: str) -> list[str]:
+    """
+    Produce normalized type candidates (split `A or B`, expand array notation) for parsing attempts.
+    """
+    cleaned = type_str.strip().rstrip(";")
+    if not cleaned:
+        return []
+    parts = _TYPE_VARIANT_SPLIT_RE.split(cleaned)
+    seen: list[str] = []
+    for part in parts:
+        normalized = " ".join(part.split())
+        if not normalized:
+            continue
+        if normalized not in seen:
+            seen.append(normalized)
+        if _ARRAY_BRACKETS_RE.search(normalized):
+            pointer_variant = _ARRAY_BRACKETS_RE.sub("*", normalized)
+            pointer_variant = " ".join(pointer_variant.split())
+            if pointer_variant and pointer_variant not in seen:
+                seen.append(pointer_variant)
+    return seen
+
 
 def init_hexrays() -> bool:
     """确保 Hex-Rays 已加载，可用于反编译。"""
@@ -596,6 +623,12 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         ea = int(ea)
         
         res: dict = {"status": "ok", "ea": ea}
+        set_type_func = getattr(idc, "set_type", None)
+        set_type_name = "set_type"
+        if not set_type_func:
+            set_type_func = getattr(idc, "SetType", None)
+            set_type_name = "SetType" if set_type_func else None
+        set_type_missing_logged = False
 
         # 1) 重命名
         if name:
@@ -617,10 +650,11 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         updated_code: str | None = None
         try:
             if init_hexrays():
-                try:
-                    ida_hexrays.clear_cached_cfuncs()
-                except Exception:
-                    pass
+                if emit_pseudocode:
+                    try:
+                        ida_hexrays.clear_cached_cfuncs()
+                    except Exception:
+                        pass
                 cfunc = ida_hexrays.decompile(ea)
                 if cfunc:
                     lines = []
@@ -663,6 +697,12 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         ea = int(ea)
 
         res: dict = {"status": "ok", "ea": ea}
+        set_type_func = getattr(idc, "set_type", None)
+        set_type_name = "set_type"
+        if not set_type_func:
+            set_type_func = getattr(idc, "SetType", None)
+            set_type_name = "SetType" if set_type_func else None
+        set_type_missing_logged = False
 
         # 1) 重命名
         safe_name = ""
@@ -679,39 +719,80 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         # 2) 应用类型（若提供）
         if type_str:
             success = False
+            applied_variant = None
+            candidates = _generate_type_variants(type_str)
+            if not candidates:
+                candidates = [type_str.strip()]
+
             try:
                 til = ida_typeinf.get_idati()
-                tinfo = ida_typeinf.tinfo_t()
-
-                # 策略 A：尝试作为已命名类型（int / bool / FARPROC / HANDLE 等）
-                if tinfo.get_named_type(til, type_str):
-                    if ida_typeinf.apply_tinfo(
-                        ea, tinfo, ida_typeinf.TINFO_DEFINITE
-                    ):
-                        success = True
-
-                # 策略 B：复杂类型（函数指针、struct 指针等），使用 idc.parse_decl
-                if not success:
-                    # 构造完整声明，例如 "int (*dummy_var_for_parse)(void);"
-                    decl_str = f"{type_str} dummy_var_for_parse;"
-                    parsed = idc.parse_decl(decl_str, 0)
-                    # 现代 IDA：parse_decl 返回 (name, tinfo, fields)
-                    if parsed and len(parsed) >= 2 and isinstance(
-                        parsed[1], ida_typeinf.tinfo_t
-                    ):
-                        tinfo2 = parsed[1]
-                        if ida_typeinf.apply_tinfo(
-                            ea, tinfo2, ida_typeinf.TINFO_DEFINITE
-                        ):
-                            success = True
             except Exception as exc:
+                til = None
                 print(
-                    f"[IDAT-Server] Exception applying type '{type_str}' at 0x{ea:X}: {exc}"
+                    f"[IDAT-Server] Exception getting til for '{type_str}' at 0x{ea:X}: {exc}"
                 )
 
+            for candidate in candidates:
+                candidate = candidate.strip()
+                if not candidate:
+                    continue
+
+                candidate_success = False
+                try:
+                    tinfo = ida_typeinf.tinfo_t()
+                    if til and tinfo.get_named_type(til, candidate):
+                        if ida_typeinf.apply_tinfo(
+                            ea, tinfo, ida_typeinf.TINFO_DEFINITE
+                        ):
+                            candidate_success = True
+
+                    if not candidate_success:
+                        decl_str = f"{candidate} dummy_var_for_parse;"
+                        parsed = idc.parse_decl(decl_str, 0)
+                        if parsed and len(parsed) >= 2 and isinstance(
+                            parsed[1], ida_typeinf.tinfo_t
+                        ):
+                            tinfo2 = parsed[1]
+                            if ida_typeinf.apply_tinfo(
+                                ea, tinfo2, ida_typeinf.TINFO_DEFINITE
+                            ):
+                                candidate_success = True
+                except Exception as exc:
+                    print(
+                        f"[IDAT-Server] Exception applying variant '{candidate}' "
+                        f"for '{type_str}' at 0x{ea:X}: {exc}"
+                    )
+
+                if not candidate_success:
+                    if set_type_func:
+                        try:
+                            if set_type_func(ea, candidate):
+                                candidate_success = True
+                        except Exception as exc:
+                            func_name = set_type_name or "set_type/SetType"
+                            print(
+                                f"[IDAT-Server] {func_name} failed for variant '{candidate}' "
+                                f"from '{type_str}' at 0x{ea:X}: {exc}"
+                            )
+                    elif not set_type_missing_logged:
+                        set_type_missing_logged = True
+                        print(
+                            "[IDAT-Server] idc.set_type/SetType is unavailable in this build; "
+                            "skipping the legacy fallback."
+                        )
+
+                if candidate_success:
+                    success = True
+                    applied_variant = candidate
+                    break
+
             if success:
-                res["applied_type"] = type_str
-                print(f"[IDAT-Server] Applied type '{type_str}' at 0x{ea:X}")
+                applied_log = applied_variant or type_str
+                res["applied_type"] = applied_log
+                print(
+                    f"[IDAT-Server] Applied type '{applied_log}' at 0x{ea:X} "
+                    f"(requested '{type_str}')"
+                )
             else:
                 print(
                     f"[IDAT-Server] Failed to apply type '{type_str}' at 0x{ea:X} "
@@ -732,6 +813,8 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         """
         ea = payload.get("ea")
         renames = payload.get("renames") or {}
+        emit_pseudocode = bool(payload.get("emit_pseudocode", True))
+        persist_database = bool(payload.get("persist_database", True))
 
         if ea is None:
             return {"status": "error", "msg": "missing 'ea'"}
@@ -863,31 +946,36 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 except Exception as exc:
                     print(f"[IDAT-Server] save_user_lvars failed: {exc}")
 
-                try:
-                    ida_hexrays.clear_cached_cfuncs()
-                except Exception:
-                    pass
+                if emit_pseudocode:
+                    try:
+                        ida_hexrays.clear_cached_cfuncs()
+                    except Exception:
+                        pass
 
                 try:
                     idc.mark_position(func.start_ea, 1, 0, 0, 0, "")
                 except Exception:
                     pass
 
-                try:
-                    ida_loader.save_database(None, 0)
-                except Exception as exc:
-                    print(f"[IDAT-Server] save_database failed: {exc}")
+                if persist_database:
+                    try:
+                        ida_loader.save_database(None, 0)
+                    except Exception as exc:
+                        print(f"[IDAT-Server] save_database failed: {exc}")
 
-                try:
-                    cfunc = ida_hexrays.decompile(func.start_ea)
-                except Exception:
+                if emit_pseudocode:
+                    try:
+                        cfunc = ida_hexrays.decompile(func.start_ea)
+                    except Exception:
+                        cfunc = None
+                else:
                     cfunc = None
 
             res["applied"] = applied
 
             # 返回最新的伪代码供 knowledge_propagation.py 更新本地 DB
             updated_code: str | None = None
-            if cfunc:
+            if emit_pseudocode and cfunc:
                 try:
                     lines = []
                     for pline in cfunc.get_pseudocode():

@@ -49,6 +49,25 @@ def setup_logging(log_path: Optional[Path] = None, *, input_db: Optional[Path] =
             record.db_path = ACTIVE_INPUT_DB or "N/A"
             return True
 
+    class _HideHttp200Filter(logging.Filter):
+        """Console-only filter that suppresses HTTP 200 traces from httpx."""
+
+        OK_PATTERNS = ("HTTP/1.0 200", "HTTP/1.1 200", "HTTP/2 200", "HTTP/3 200")
+
+        def filter(self, record: logging.LogRecord) -> bool:
+            if not record.name.startswith("httpx"):
+                return True
+
+            try:
+                msg = record.getMessage()
+            except Exception:
+                return True
+
+            for pattern in self.OK_PATTERNS:
+                if pattern in msg:
+                    return False
+            return True
+
     if log_path is None:
         log_path = Path(__file__).resolve().parents[1] / "log.log"
 
@@ -83,9 +102,11 @@ def setup_logging(log_path: Optional[Path] = None, *, input_db: Optional[Path] =
     ch.setFormatter(logging.Formatter("%(name)s %(pathname)s:%(lineno)d %(message)s"))
 
     db_filter = _DBPathFilter()
+    http_filter = _HideHttp200Filter()
     for fh in file_handlers:
         fh.addFilter(db_filter)
     ch.addFilter(db_filter)
+    ch.addFilter(http_filter)
 
     for fh in file_handlers:
         root.addHandler(fh)

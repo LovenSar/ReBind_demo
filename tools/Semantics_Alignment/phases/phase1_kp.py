@@ -86,18 +86,35 @@ def _apply_unified_llm_result(
 
     cur = conn.cursor()
     analysis_state = "LOCKED" if libfunction else "ANALYZED"
+    extracted_name = _extract_name_from_signature(signature or "", fallback="") or ""
+    phase2_pending = 0 if libfunction else 1
     for fid in node.function_ids:
-        cur.execute(
-            """
-            UPDATE analysis_status
-            SET analysis_state = ?,
-                confidence_score = ?,
-                summary_signature = ?,
-                semantic_summary = ?
-            WHERE function_id = ?;
-            """,
-            (analysis_state, confidence_score, signature, summary, int(fid)),
-        )
+        try:
+            cur.execute(
+                """
+                UPDATE analysis_status
+                SET analysis_state = ?,
+                    confidence_score = ?,
+                    summary_signature = ?,
+                    semantic_summary = ?,
+                    phase2_pending = ?
+                WHERE function_id = ?;
+                """,
+                (analysis_state, confidence_score, signature, summary, int(phase2_pending), int(fid)),
+            )
+        except sqlite3.OperationalError:
+            # 兼容旧数据库（无 phase1_pending/phase2_pending 列）
+            cur.execute(
+                """
+                UPDATE analysis_status
+                SET analysis_state = ?,
+                    confidence_score = ?,
+                    summary_signature = ?,
+                    semantic_summary = ?
+                WHERE function_id = ?;
+                """,
+                (analysis_state, confidence_score, signature, summary, int(fid)),
+            )
     conn.commit()
 
     if ida_sync and signature and requests is not None:
@@ -134,6 +151,17 @@ def analyze_one_unified_function(
         wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
 
     node = graph.nodes[entry_va]
+
+    # 标记：该函数进入 Phase1-Pending 序列（供 Phase2 后续筛选）
+    try:
+        cur = conn.cursor()
+        for fid in node.function_ids:
+            cur.execute("UPDATE analysis_status SET phase1_pending = 1 WHERE function_id = ?;", (int(fid),))
+        conn.commit()
+    except sqlite3.OperationalError:
+        # 兼容旧数据库（无 phase1_pending 列）
+        pass
+
     prompt = build_unified_prompt(
         conn,
         graph,
@@ -186,6 +214,17 @@ def analyze_unified_batch(
 ) -> None:
     if not nodes:
         return
+
+    # 标记：本批次函数进入 Phase1-Pending 序列（供 Phase2 后续筛选）
+    try:
+        cur = conn.cursor()
+        for node in nodes:
+            for fid in node.function_ids:
+                cur.execute("UPDATE analysis_status SET phase1_pending = 1 WHERE function_id = ?;", (int(fid),))
+        conn.commit()
+    except sqlite3.OperationalError:
+        # 兼容旧数据库（无 phase1_pending 列）
+        pass
 
     if prompt is None:
         prompt = build_unified_batch_prompt(conn, graph, nodes, analysis_info)
