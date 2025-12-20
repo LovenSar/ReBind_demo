@@ -235,6 +235,7 @@ def call_llm_analyze_function(
     return_raw_on_error: bool = False,
     expect_array: bool = False,
     expected_size: Optional[int] = None,
+    on_raw_text: Optional[Callable[[str], None]] = None,
 ) -> Any:
     """调用 OpenAI ChatCompletion 做分析。
 
@@ -281,6 +282,12 @@ def call_llm_analyze_function(
                 last_error = f"LLM 调用失败({attempt}/{max_attempts}): {exc}"
                 logger.warning("%s", last_error)
                 break
+
+            if on_raw_text is not None:
+                try:
+                    on_raw_text(str(text or ""))
+                except Exception:
+                    logger.debug("on_raw_text 回调执行失败，已忽略。")
 
             text_str = (text or "").strip()
             if text_str.startswith("```"):

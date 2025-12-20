@@ -53,23 +53,28 @@ def _apply_unified_llm_result(
     except (TypeError, ValueError):
         confidence_score = 0
 
-    if signature and node.function_ids:
-        raw_name = _extract_name_from_signature(signature, fallback="") or ""
-        if raw_name:
-            if DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name):
-                logger.info("[Phase1] entry_va=0x%08X LLM 返回默认风格函数名 %s，保留现有命名。", node.entry_va, raw_name)
-            else:
-                ref_fid = next(iter(node.function_ids))
-                unique_name = _make_name_unique(conn, raw_name, ref_fid)
-                if unique_name != raw_name:
-                    logger.info("[Phase1] entry_va=0x%08X 函数名发生去重调整: %s -> %s", node.entry_va, raw_name, unique_name)
-                signature = signature.replace(raw_name, unique_name)
+    raw_name = _extract_name_from_signature(signature or "", fallback="") or ""
+    rename_ready = bool(raw_name) and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name)
+    if raw_name:
+        if DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name):
+            logger.info("[Phase1] entry_va=0x%08X LLM 返回默认风格函数名 %s，保留现有命名。", node.entry_va, raw_name)
+            rename_ready = False
+        elif signature and node.function_ids:
+            ref_fid = next(iter(node.function_ids))
+            unique_name = _make_name_unique(conn, raw_name, ref_fid)
+            if unique_name != raw_name:
+                logger.info("[Phase1] entry_va=0x%08X 函数名发生去重调整: %s -> %s", node.entry_va, raw_name, unique_name)
+            signature = signature.replace(raw_name, unique_name)
+            raw_name = unique_name
+            rename_ready = True
 
     libfunction = _coerce_libfunction_flag(result.get("libfunction"))
     if libfunction:
         confidence_score = 0
         print("[LLM] 模型判断为库函数/运行时，跳过后续视图查找与同步。")
         logger.info("[Phase1] entry_va=0x%08X 被标记为库函数，设置为 LOCKED 并停止后续尝试。", node.entry_va)
+    elif signature and not rename_ready:
+        logger.info("[Phase1] entry_va=0x%08X 未获得有效新函数名，保持 PENDING 以便后续重试。", node.entry_va)
 
     tags = result.get("tags") or []
     notes = result.get("notes") or ""
@@ -85,9 +90,9 @@ def _apply_unified_llm_result(
         print("notes    :", notes)
 
     cur = conn.cursor()
-    analysis_state = "LOCKED" if libfunction else "ANALYZED"
+    analysis_state = "LOCKED" if libfunction else ("ANALYZED" if rename_ready else "PENDING")
     extracted_name = _extract_name_from_signature(signature or "", fallback="") or ""
-    phase2_pending = 0 if libfunction else 1
+    phase2_pending = 1 if (not libfunction and rename_ready) else 0
     for fid in node.function_ids:
         try:
             cur.execute(
@@ -117,7 +122,7 @@ def _apply_unified_llm_result(
             )
     conn.commit()
 
-    if ida_sync and signature and requests is not None:
+    if ida_sync and signature and rename_ready and requests is not None:
         try:
             _sync_with_ida_and_update_db(
                 conn=conn,

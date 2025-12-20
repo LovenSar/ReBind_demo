@@ -30,7 +30,7 @@ platforms:
   macos:
     ghidra:
       ghidra:
-        cmd_path: "/Applications/ghidra/support/analyzeHeadless"
+        cmd_path: "/Users/lovensar/Applications/ghidra_11.4.3_PUBLIC_20251203/ghidra_11.4.3_PUBLIC/support/analyzeHeadless"
     ida:
       ida:
         cmd_path: "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
@@ -144,9 +144,14 @@ semantics:
     phase5_annotation:
       min_pseudo_lines: 6
       max_code_chars: 8000
+      max_comments_per_prompt: 60
+      max_comments_ratio: 0.35
+      max_duplicate_comment_occurrences: 2
       llm_chunking:
         single_max_lines: 80
         medium_max_lines: 160
         medium_chunk_size: 120
         large_chunk_size: 80
       ida_sync_chunk_size: 120
+      log_llm_response: true
+      log_llm_response_max_chars: 0

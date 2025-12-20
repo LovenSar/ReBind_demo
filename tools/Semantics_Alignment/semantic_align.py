@@ -27,7 +27,7 @@ import http.client
 import json
 import signal
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Set
 
 import sqlite3
 
@@ -41,7 +41,7 @@ from kp.kp_settings import build_llm_settings, load_semantics_config
 from kp.kp_graph import build_unified_graph
 from kp.kp_scoring import compute_unified_scores
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
-from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, SUBFUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedGraph
+from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedGraph
 from kp.kp_unified_prompt import build_unified_batch_prompt, build_unified_prompt
 from tqdm import tqdm
 from phases.phase1_kp import analyze_one_unified_function as phase1_analyze_one_unified_function
@@ -314,22 +314,8 @@ def _phase1_pending_nodes(
     graph: UnifiedGraph, analysis_info: Dict[int, dict]
 ) -> List[UnifiedFunctionNode]:
     """Return the Phase1 candidates that still have default/empty names."""
-    locked_states = {"ANALYZED", "LOCKED"}
-    analyzed_entry_vas = set()
-    for node in graph.nodes.values():
-        for fid in node.function_ids:
-            info = analysis_info.get(int(fid))
-            if info and info.get("analysis_state") in locked_states:
-                analyzed_entry_vas.add(int(node.entry_va))
-                break
-
     targets = []
     for entry_va, node in graph.nodes.items():
-        if int(entry_va) in analyzed_entry_vas:
-            continue
-        if node.names:
-            if any((name and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(name)) for name in node.names):
-                continue
         if not _node_has_ida_subfunc_candidate(node, graph):
             continue
         targets.append(node)
@@ -337,14 +323,14 @@ def _phase1_pending_nodes(
 
 
 def _node_has_ida_subfunc_candidate(node: UnifiedFunctionNode, graph: UnifiedGraph) -> bool:
-    """Only keep nodes backed by IDA's default sub_ function entries."""
+    """Only keep nodes backed by IDA's default sub_/fun_/loc_ entries."""
     ida_present = any(graph.func_tool.get(fid, "").lower() == "ida" for fid in node.function_ids)
     if not ida_present:
         return False
     ida_names = node.names_by_tool.get("ida")
     if not ida_names:
         return False
-    return any(SUBFUNC_NAME_PATTERN.fullmatch(name or "") for name in ida_names)
+    return any(DEFAULT_FUNC_NAME_PATTERN.fullmatch(name or "") for name in ida_names)
 
 
 def run_semantic_pipeline(
@@ -408,9 +394,14 @@ def run_semantic_pipeline(
         if 1 in phases_to_run:
             print("[SemanticAlign] Phase 1: Knowledge Propagation")
             processed = 0
+            phase1_attempted: Set[int] = set()
 
             initial_analysis_info = load_analysis_info(conn)
-            phase1_targets = _phase1_pending_nodes(unified_graph, initial_analysis_info)
+            phase1_targets = [
+                node
+                for node in _phase1_pending_nodes(unified_graph, initial_analysis_info)
+                if int(node.entry_va) not in phase1_attempted
+            ]
             phase1_total_targets = len(phase1_targets)
             phase1_progress: Optional[tqdm] = None
             if phase1_total_targets:
@@ -432,7 +423,11 @@ def run_semantic_pipeline(
 
             while True:
                 analysis_info = load_analysis_info(conn)
-                candidates = _phase1_pending_nodes(unified_graph, analysis_info)
+                candidates = [
+                    node
+                    for node in _phase1_pending_nodes(unified_graph, analysis_info)
+                    if int(node.entry_va) not in phase1_attempted
+                ]
                 if not candidates:
                     break
 
@@ -483,6 +478,7 @@ def run_semantic_pipeline(
                         ida_sync=ida_sync,
                         ida_url=ida_url,
                     )
+                    phase1_attempted.update(int(node.entry_va) for node in selected_nodes)
                     processed += len(selected_nodes)
                     if phase1_progress:
                         phase1_progress.update(len(selected_nodes))
@@ -498,6 +494,7 @@ def run_semantic_pipeline(
                         ida_sync=ida_sync,
                         ida_url=ida_url,
                     )
+                    phase1_attempted.add(int(node.entry_va))
                     processed += 1
                     if phase1_progress:
                         phase1_progress.update(1)

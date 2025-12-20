@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
-from kp.kp_config import _get_cfg_int, _get_cfg_section
+from kp.kp_config import _get_cfg_bool, _get_cfg_float, _get_cfg_int
 from kp.kp_ida import wait_for_ida_server
 from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
@@ -45,6 +45,66 @@ def _sanitize_line_comment(text: Any) -> str:
     if codey_tokens >= 6 and len(s) > 60:
         return ""
     return s
+
+
+def _format_llm_response_for_log(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return text
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + f"...(truncated {len(text) - max_chars} chars)"
+
+
+def _compute_comment_cap(total_lines: int, max_comments: int, ratio: float) -> int:
+    if total_lines <= 0:
+        return 0
+    cap = max(0, int(max_comments or 0))
+    ratio_val = float(ratio or 0.0)
+    if ratio_val > 0:
+        ratio_val = min(1.0, max(0.0, ratio_val))
+        derived = max(1, int(total_lines * ratio_val))
+        cap = min(cap, derived) if cap > 0 else derived
+    return cap
+
+
+def _prune_comment_map(
+    items: Dict[Any, str],
+    *,
+    max_total: int,
+    max_dup: int,
+) -> Dict[Any, str]:
+    if not items:
+        return {}
+    max_total = int(max_total or 0)
+    max_dup = int(max_dup or 0)
+    if max_total <= 0 and max_dup <= 0:
+        return dict(items)
+
+    def _key_as_int(value: Any) -> Tuple[int, int]:
+        try:
+            s = str(value).strip()
+            if s.lower().startswith("0x"):
+                return (0, int(s, 16))
+            return (0, int(s))
+        except Exception:
+            return (1, 0)
+
+    ordered_keys = sorted(items.keys(), key=_key_as_int)
+    out: Dict[Any, str] = {}
+    dup_counts: Dict[str, int] = {}
+    for key in ordered_keys:
+        text = items.get(key) or ""
+        if not text:
+            continue
+        if max_dup > 0:
+            count = dup_counts.get(text, 0)
+            if count >= max_dup:
+                continue
+            dup_counts[text] = count + 1
+        out[key] = text
+        if max_total > 0 and len(out) >= max_total:
+            break
+    return out
 
 
 def _normalize_line_comments_map(obj: Any) -> Dict[str, str]:
@@ -400,9 +460,52 @@ def run_annotation_phase(
         ("pipeline", "phase5_annotation", "ida_sync_chunk_size"),
         120,
     )
+    max_comments_per_prompt = _get_cfg_int(
+        semantics_config,
+        ("pipeline", "phase5_annotation", "max_comments_per_prompt"),
+        60,
+    )
+    max_comments_ratio = _get_cfg_float(
+        semantics_config,
+        ("pipeline", "phase5_annotation", "max_comments_ratio"),
+        0.35,
+    )
+    max_duplicate_comment_occurrences = _get_cfg_int(
+        semantics_config,
+        ("pipeline", "phase5_annotation", "max_duplicate_comment_occurrences"),
+        2,
+    )
+    log_llm_response = _get_cfg_bool(
+        semantics_config,
+        ("pipeline", "phase5_annotation", "log_llm_response"),
+        False,
+    )
+    log_llm_response_max_chars = _get_cfg_int(
+        semantics_config,
+        ("pipeline", "phase5_annotation", "log_llm_response_max_chars"),
+        4000,
+    )
 
-    if ida_sync and ida_url:
-        wait_for_ida_server(ida_url)
+    ida_connect_max_wait_seconds = _get_cfg_float(
+        semantics_config,
+        ("pipeline", "ida_sync", "connect_max_wait_seconds"),
+        120.0,
+    )
+    ida_sync_active = bool(ida_sync) and bool(ida_url) and (requests is not None)
+    if ida_sync_active:
+        ok = wait_for_ida_server(
+            ida_url,
+            max_wait_seconds=float(ida_connect_max_wait_seconds or 0.0) or None,
+        )
+        if not ok:
+            print(
+                "[Phase 5] IDA 服务器不可用或等待超时，Phase5 将自动降级为离线注释模式（仅写入 DB）。"
+            )
+            ida_sync_active = False
+    elif bool(ida_sync) and bool(ida_url) and requests is None:
+        print(
+            "[Phase 5] 请求 IDA 同步但未安装 requests 模块，跳过 IDA 注释同步。"
+        )
 
     ensure_analysis_schema(conn)
     ensure_analysis_rows_for_binary(conn, graph.binary_id)
@@ -496,7 +599,7 @@ def run_annotation_phase(
         ida_disasm_lines: List[str] = []
         ida_line_eas_payload: Dict[str, int] = {}
 
-        if ida_sync and ida_url:
+        if ida_sync_active:
             ida_snapshot = _fetch_ida_function_snapshot(int(entry_va), ida_url)
 
         if isinstance(ida_snapshot, dict):
@@ -567,6 +670,11 @@ def run_annotation_phase(
         ) -> str:
             base = int(start_line_no) if start_line_no > 0 else 1
             numbered = "\n".join(f"{(base + i - 1):03d}: {ln}" for i, ln in enumerate(chunk_lines, 1))
+            comment_cap = _compute_comment_cap(
+                len(chunk_lines),
+                max_comments_per_prompt,
+                max_comments_ratio,
+            )
 
             extra_sections = ""
             if ida_line_eas_payload:
@@ -604,6 +712,7 @@ def run_annotation_phase(
                     context_summary=ctx_summary,
                     numbered_code=numbered,
                     extra_sections=extra_sections,
+                    max_comment_count=comment_cap,
                 )
 
             return pmt_prompts.line_annotation_prompt(
@@ -611,6 +720,7 @@ def run_annotation_phase(
                 context_summary=ctx_summary,
                 numbered_code=numbered,
                 extra_sections=extra_sections,
+                max_comment_count=comment_cap,
             )
 
         def _align_chunk_comments(raw_obj: Any, start_no: int, end_no: int) -> Dict[str, str]:
@@ -741,12 +851,38 @@ def run_annotation_phase(
 
             prompt = _make_prompt(chunk_lines, start_no, inc_extras, ctx)
             conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+            raw_logger = None
+            if log_llm_response:
+                chunk_seq = processed_chunks + 1
+
+                def _log_raw_response(
+                    text: str,
+                    *,
+                    seq=chunk_seq,
+                    start=start_no,
+                    end=end_no,
+                    d=depth,
+                    eva=entry_va,
+                ) -> None:
+                    formatted = _format_llm_response_for_log(text or "", log_llm_response_max_chars)
+                    logger.info(
+                        "[Phase 5] LLM 响应 entry_va=0x%08X chunk=%d lines=%d-%d depth=%d:\n%s",
+                        eva,
+                        seq,
+                        start,
+                        end,
+                        d,
+                        formatted,
+                    )
+
+                raw_logger = _log_raw_response
             try:
                 chunk_result = call_llm_analyze_function(
                     conversation=conversation,
                     request_kwargs=request_kwargs,
                     api_settings=llm_settings.api_settings,
                     return_raw_on_error=True,
+                    on_raw_text=raw_logger,
                 )
             except Exception as exc:
                 logger.warning(
@@ -770,6 +906,12 @@ def run_annotation_phase(
                 continue
 
             ea_mode = bool(ida_line_eas_payload or ida_disasm_lines)
+            comment_cap = _compute_comment_cap(
+                len(chunk_lines),
+                max_comments_per_prompt,
+                max_comments_ratio,
+            )
+
             if ea_mode:
                 allowed_eas: set[int] = set()
                 if ida_line_eas_payload:
@@ -796,6 +938,20 @@ def run_annotation_phase(
                     chunk_result.get("ea_comments"),
                     allowed_eas=allowed_eas or None,
                 )
+                if ec and (comment_cap > 0 or max_duplicate_comment_occurrences > 0):
+                    pruned = _prune_comment_map(
+                        ec,
+                        max_total=comment_cap,
+                        max_dup=max_duplicate_comment_occurrences,
+                    )
+                    if len(pruned) < len(ec):
+                        logger.debug(
+                            "[Phase 5] 裁剪 EA 注释 entry_va=0x%08X: %d -> %d",
+                            entry_va,
+                            len(ec),
+                            len(pruned),
+                        )
+                    ec = pruned
                 if ec:
                     for ea, text in ec.items():
                         prev = merged_ea_comments.get(int(ea))
@@ -805,6 +961,20 @@ def run_annotation_phase(
                             merged_ea_comments[int(ea)] = text
 
                 cmts = _align_chunk_comments(chunk_result.get("line_comments"), start_no, end_no)
+                if cmts and (comment_cap > 0 or max_duplicate_comment_occurrences > 0):
+                    pruned = _prune_comment_map(
+                        cmts,
+                        max_total=comment_cap,
+                        max_dup=max_duplicate_comment_occurrences,
+                    )
+                    if len(pruned) < len(cmts):
+                        logger.debug(
+                            "[Phase 5] 裁剪行注释 entry_va=0x%08X: %d -> %d",
+                            entry_va,
+                            len(cmts),
+                            len(pruned),
+                        )
+                    cmts = pruned
                 if cmts:
                     merged_line_comments.update(cmts)
                     if ida_line_eas_payload:
@@ -817,6 +987,20 @@ def run_annotation_phase(
                                 merged_ea_comments[int(ea)] = text
             else:
                 cmts = _align_chunk_comments(chunk_result.get("line_comments"), start_no, end_no)
+                if cmts and (comment_cap > 0 or max_duplicate_comment_occurrences > 0):
+                    pruned = _prune_comment_map(
+                        cmts,
+                        max_total=comment_cap,
+                        max_dup=max_duplicate_comment_occurrences,
+                    )
+                    if len(pruned) < len(cmts):
+                        logger.debug(
+                            "[Phase 5] 裁剪行注释 entry_va=0x%08X: %d -> %d",
+                            entry_va,
+                            len(cmts),
+                            len(pruned),
+                        )
+                    cmts = pruned
                 if cmts:
                     merged_line_comments.update(cmts)
 
@@ -826,6 +1010,36 @@ def run_annotation_phase(
                     metadata_obj = meta
 
             processed_chunks += 1
+
+        if merged_ea_comments and max_duplicate_comment_occurrences > 0:
+            pruned = _prune_comment_map(
+                merged_ea_comments,
+                max_total=0,
+                max_dup=max_duplicate_comment_occurrences,
+            )
+            if len(pruned) < len(merged_ea_comments):
+                logger.debug(
+                    "[Phase 5] 归并后裁剪 EA 注释 entry_va=0x%08X: %d -> %d",
+                    entry_va,
+                    len(merged_ea_comments),
+                    len(pruned),
+                )
+                merged_ea_comments = pruned
+
+        if merged_line_comments and max_duplicate_comment_occurrences > 0:
+            pruned = _prune_comment_map(
+                merged_line_comments,
+                max_total=0,
+                max_dup=max_duplicate_comment_occurrences,
+            )
+            if len(pruned) < len(merged_line_comments):
+                logger.debug(
+                    "[Phase 5] 归并后裁剪行注释 entry_va=0x%08X: %d -> %d",
+                    entry_va,
+                    len(merged_line_comments),
+                    len(pruned),
+                )
+                merged_line_comments = pruned
 
         if not (merged_line_comments or merged_ea_comments):
             try:
@@ -905,7 +1119,7 @@ def run_annotation_phase(
             pbar.update(1)
             continue
 
-        if ida_sync and ida_url and requests is not None:
+        if ida_sync_active and requests is not None:
             try:
                 ea_mode = bool(ida_line_eas_payload or ida_disasm_text.strip())
                 if ea_mode and merged_ea_comments:

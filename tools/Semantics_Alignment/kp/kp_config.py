@@ -43,7 +43,27 @@ def get_cfg_float(cfg: Optional[Dict[str, Any]], keys: Tuple[str, ...], default:
         return float(default)
 
 
+def get_cfg_bool(cfg: Optional[Dict[str, Any]], keys: Tuple[str, ...], default: bool) -> bool:
+    cur: Any = cfg or {}
+    for k in keys:
+        if not isinstance(cur, dict):
+            return bool(default)
+        cur = cur.get(k)
+    if isinstance(cur, bool):
+        return cur
+    if isinstance(cur, (int, float)):
+        return bool(cur)
+    if isinstance(cur, str):
+        val = cur.strip().lower()
+        if val in ("1", "true", "yes", "y", "on"):
+            return True
+        if val in ("0", "false", "no", "n", "off", ""):
+            return False
+    return bool(default)
+
+
 # Backward-compatible aliases
 _get_cfg_section = get_cfg_section
 _get_cfg_int = get_cfg_int
 _get_cfg_float = get_cfg_float
+_get_cfg_bool = get_cfg_bool

@@ -388,9 +388,13 @@ def line_annotation_prompt(
     context_summary: str,
     numbered_code: str,
     extra_sections: str,
+    max_comment_count: int | None = None,
 ) -> str:
     node_name = (node_name or "").strip() or "(unknown)"
     context_summary = (context_summary or "(无额外上下文)").strip()
+    max_comment_count_hint = ""
+    if max_comment_count is not None and int(max_comment_count) > 0:
+        max_comment_count_hint = f"（建议不超过 {int(max_comment_count)} 条）"
 
     prompt = f"""
 你是一名资深的逆向工程与安全分析专家。请对下列反编译伪代码进行“逐行注释”。
@@ -406,13 +410,14 @@ def line_annotation_prompt(
 
 [任务]
 1) 只对「[伪代码（已编号）]」这一段中形如 "NNN: <code>" 的编号伪代码行生成注释；不要为任何额外段落生成注释（例如“行号->地址”“反汇编”等）。
-2) 对每一行伪代码追加一个简短行尾注释（解释这一行做了什么、关键变量含义、关键副作用）。
-2) 空行、仅包含大括号的行（"{{" 或 "}}"）可以不注释。
-3) 注释要“贴着代码行”，不要写头部大段注释。
-4) 不要编造不存在的系统调用；无法确定时用“疑似/可能”。
-5) line_comments 的 key 必须使用该行在「[伪代码（已编号）]」中显示的行号（NNN）；如果编号不是从 1 开始（分段/子片段），也必须保持原编号，不要重新从 1 编号（允许去掉前导 0）。
-6) line_comments 的 value 必须是“纯自然语言注释文本”，不要包含任何代码片段，也不要以 "//" 开头。
-7) 每条注释尽量短（建议 <= 30 中文字），不要换行。
+2) 只选择关键语义行（分支、关键调用、解析/格式化、边界检查等），无需逐行覆盖；跳过重复/低信息操作（如连续的标志位读写/赋值）。
+3) 空行、仅包含大括号的行（"{{" 或 "}}"）可以不注释。
+4) 注释要“贴着代码行”，不要写头部大段注释。
+5) 不要编造不存在的系统调用；无法确定时用“疑似/可能”。
+6) line_comments 的 key 必须使用该行在「[伪代码（已编号）]」中显示的行号（NNN）；如果编号不是从 1 开始（分段/子片段），也必须保持原编号，不要重新从 1 编号（允许去掉前导 0）。
+7) line_comments 的 value 必须是“纯自然语言注释文本”，不要包含任何代码片段，也不要以 "//" 开头。
+8) 每条注释尽量短（建议 <= 30 中文字），不要换行。
+9) 注释数量控制在合理范围{max_comment_count_hint}。
 
 [输出格式]
 请严格返回一个 JSON 对象（不要输出任何额外文字或 Markdown）：
@@ -438,9 +443,13 @@ def ea_annotation_prompt(
     context_summary: str,
     numbered_code: str,
     extra_sections: str,
+    max_comment_count: int | None = None,
 ) -> str:
     node_name = (node_name or "").strip() or "(unknown)"
     context_summary = (context_summary or "(无额外上下文)").strip()
+    max_comment_count_hint = ""
+    if max_comment_count is not None and int(max_comment_count) > 0:
+        max_comment_count_hint = f"（建议不超过 {int(max_comment_count)} 条）"
 
     prompt = f"""
 你是一名资深的逆向工程与安全分析专家。
@@ -461,13 +470,14 @@ def ea_annotation_prompt(
 {extra_sections}
 
 [任务]
-1) 结合反汇编/伪代码，为尽可能多的“可定位语句”生成简短行尾注释，并用对应的“地址 EA”作为 key。
+1) 结合反汇编/伪代码，为关键“可定位语句”生成简短行尾注释；无需逐行覆盖，优先关键语义/分支/关键调用，跳过重复或低信息操作（如连续的标志位读写/赋值）。
 2) 每条注释尽量短（建议 <= 30 中文字），不要换行。
 3) 不要编造不存在的系统调用；无法确定时用“疑似/可能”。
 4) value 必须是纯自然语言注释文本，不要包含任何代码片段，也不要以 "//" 开头。
 5) 若提供了“伪代码行号 -> 代表性地址(来自 IDA)”映射：你只能使用该映射中出现的 EA 作为 key。
     若未提供映射：才允许使用反汇编段中每行开头出现的 EA。
 6) 若多个伪代码行映射到同一 EA：请将它们的注释合并为该 EA 的一条注释（用“ | ”分隔）。
+7) 注释数量控制在合理范围{max_comment_count_hint}。
 
 [输出格式]
 请严格返回一个 JSON 对象（不要输出任何额外文字或 Markdown）：
