@@ -242,12 +242,6 @@ class GhidraAdapter:
                     shutil.rmtree(dst_path)
                 shutil.move(src_path, dst_path)
                 self.logger.debug(f"移动目录: {src_dir} -> {dst_path}")
-            else:
-                self.logger.warning(f"输出目录不存在: {src_dir}")
-                # 列出当前目录内容以帮助调试
-                self.logger.debug(f"当前目录内容:")
-                for item in Path.cwd().iterdir():
-                    self.logger.debug(f"  - {item.name}")
         
         # 清理临时文件
         output_config = self.config.get('output', {})

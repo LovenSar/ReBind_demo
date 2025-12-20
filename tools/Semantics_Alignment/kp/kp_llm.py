@@ -3,6 +3,12 @@
 大模型交互层：OpenAI 客户端初始化、请求构造、JSON 解析与 batch 调用封装。
 
 目标：让 Phase 层只关心 prompt/结果应用，不关心 OpenAI SDK 兼容与重试细节。
+
+功能特性：
+- 支持多个 API Key（逗号分隔）：在 .env 中设置 OPENAI_API_KEY=key1,key2,key3
+- 启动探测：自动检查并移除已被限流的 keys（不修改 .env）
+- 限流处理（429 错误）：检测到限流时等待 30 秒，然后切换到下一个可用 key
+- 自动降级：如果某个 key 被限流，不会再回到该 key，而是永久排除它
 """
 
 from __future__ import annotations
@@ -24,6 +30,67 @@ from dynamic_batching import DynamicBatchResult, yield_dynamic_batch
 logger = logging.getLogger(__name__)
 
 DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
+
+
+# 支持在环境变量中以逗号分隔提供多个 API Key，遇到限流或配额错误时可切换到下一个 key。
+_API_KEYS: list[str] = []
+_API_KEY_INDEX: int = 0
+_LAST_PARSED_ENV_KEYS: tuple[str, ...] = ()
+
+
+def _parse_api_keys_from_env(api_key_env: str) -> list:
+    """从环境变量中解析逗号分隔的 API keys 列表，并去掉可选的引号（" 或 '）。"""
+    val = os.getenv(api_key_env) or ""
+    keys = [_strip_optional_quotes(k.strip()) for k in val.split(",") if k.strip()]
+    return keys
+
+
+def _get_current_api_key() -> Optional[str]:
+    global _API_KEYS, _API_KEY_INDEX
+    if not _API_KEYS:
+        return None
+    if _API_KEY_INDEX < 0 or _API_KEY_INDEX >= len(_API_KEYS):
+        _API_KEY_INDEX = 0
+    return _API_KEYS[_API_KEY_INDEX]
+
+
+def _rotate_to_next_key() -> bool:
+    """尝试切换到下一个 key；返回 True 表示已切换，False 表示没有更多 key。
+
+    注意：该函数仅在不希望删除当前 key 的场景使用。默认场景遇到限流时会删除（discard）当前 key，
+    以保证不会再返回到已经被限流的 key 上。
+    """
+    global _API_KEY_INDEX, _API_KEYS
+    if len(_API_KEYS) <= 1:
+        return False
+    _API_KEY_INDEX += 1
+    if _API_KEY_INDEX >= len(_API_KEYS):
+        return False
+    return True
+
+
+def _discard_current_key() -> bool:
+    """将当前 key 从可用列表中删除并保持索引指向下一个 key（如果有）。
+
+    返回 True 表示删除后仍有下一个 key 可用，False 表示已无可用 key。
+    """
+    global _API_KEYS, _API_KEY_INDEX
+    if not _API_KEYS:
+        return False
+    # 删除当前 key
+    del _API_KEYS[_API_KEY_INDEX]
+    # 如果删除后索引越界，表示没有更多 key
+    if _API_KEY_INDEX >= len(_API_KEYS):
+        return False
+    return True
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return key[:4] + "..."
+    return key[:6] + "..." + key[-4:]
 
 
 def _strip_optional_quotes(value: str) -> str:
@@ -87,8 +154,79 @@ def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str
         _load_dotenv_file(default_dotenv)
 
 
+_PRUNED_ON_STARTUP: bool = False
+
+
+def _prune_rate_limited_keys_on_startup(api_settings: Dict[str, Any], env_keys: list[str]) -> list[str]:
+    """在进程启动时逐个检查 env_keys，若某个 key 已经处于限流（429）状态，则从可用列表中移除。
+
+    注意：该函数仅在启动时运行一次（通过 _PRUNED_ON_STARTUP 控制），且不会修改 .env 文件。
+    只在检测到明确的限流错误时移除 key；其他错误（例如网络错误或认证失败）不会在启动时移除，
+    以免误判。
+    """
+    try:
+        import openai  # type: ignore
+    except Exception:
+        logger.debug("openai client not installed; skipping startup key probe")
+        return env_keys
+
+    kept: list[str] = []
+    base_url = api_settings.get("base_url") or api_settings.get("api_base")
+    model = api_settings.get("model") or "gpt-3.5-turbo"
+
+    for key in env_keys:
+        try:
+            # 为了避免污染全局状态，直接构造临时客户端或使用模块级调用
+            if hasattr(openai, "OpenAI"):
+                client = openai.OpenAI(api_key=key, base_url=base_url)  # type: ignore[attr-defined]
+            else:
+                # 旧版 openai: 直接设置并使用模块
+                openai.api_key = key  # type: ignore[attr-defined]
+                client = openai
+
+            # 优先使用 models.list() 作为轻量探针（同时支持属性或可调用返回对象的形式）
+            models_attr = getattr(client, "models", None)
+            probed = False
+            if models_attr is not None:
+                try:
+                    models_obj = models_attr() if callable(models_attr) else models_attr
+                    if hasattr(models_obj, "list"):
+                        models_obj.list()  # type: ignore[attr-defined]
+                        probed = True
+                except Exception as exc:
+                    raise
+
+            if not probed:
+                if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+                    # 退回到发送一个非常小的聊天请求
+                    client.chat.completions.create(model=model, messages=[{"role": "system", "content": "ping"}], max_tokens=1)  # type: ignore[attr-defined]
+                elif hasattr(client, "ChatCompletion"):
+                    client.ChatCompletion.create(model=model, messages=[{"role": "system", "content": "ping"}], max_tokens=1)  # type: ignore[attr-defined]
+                else:
+                    # 无法探测的客户端，保守起见保留该 key
+                    kept.append(key)
+                    continue
+
+            # 如果探针没有抛出异常，则保留 key
+            kept.append(key)
+        except Exception as exc:
+            if _is_rate_limit_error(exc):
+                logger.info("API key %s appears to be rate-limited at startup; skipping it", _mask_key(key))
+                # 跳过此 key（不加入 kept）
+                continue
+            # 对于其他错误，保守保留 key，让运行时再决定
+            logger.debug("Probe for API key %s failed (non-rate-limit): %s", _mask_key(key), exc)
+            kept.append(key)
+
+    return kept
+
+
 def require_openai(api_settings: Dict[str, Any]) -> Any:
-    """延迟导入 openai 并返回一个兼容 openai>=1.0.0 的 client。"""
+    """延迟导入 openai 并返回一个兼容 openai>=1.0.0 的 client。
+
+    支持在环境变量中通过逗号分隔提供多个 API_KEY；当某个 key 遭遇限流（rate limit）时，
+    会尝试切换到下一个 key 并重新构建客户端。
+    """
     api_key_env = str(
         api_settings.get("api_key_env")
         or api_settings.get("key_env_var")
@@ -103,17 +241,51 @@ def require_openai(api_settings: Dict[str, Any]) -> Any:
     except Exception:
         raise RuntimeError("未安装 openai 库，请先执行：pip install openai")
 
-    api_key = os.getenv(api_key_env)
-    if not api_key:
-        raise RuntimeError(
-            f"环境变量 {api_key_env} 未设置，无法调用 OpenAI LLM。"
-            "（可选：在 tools/Semantics_Alignment/.env 中设置同名变量）"
-        )
+    # 解析环境变量中所有的 key，支持逗号分隔
+    env_keys = _parse_api_keys_from_env(api_key_env)
+    if not env_keys:
+        api_key_single = os.getenv(api_key_env)
+        if not api_key_single:
+            raise RuntimeError(
+                f"环境变量 {api_key_env} 未设置，无法调用 OpenAI LLM。"
+                "（可选：在 tools/Semantics_Alignment/.env 中设置同名变量）"
+            )
+        env_keys = [api_key_single]
 
+    env_keys_snapshot = tuple(env_keys)
+
+    # 在首次调用时探测并移除已被限流的 keys（不修改 .env）
+    global _API_KEYS, _API_KEY_INDEX, _PRUNED_ON_STARTUP, _LAST_PARSED_ENV_KEYS
+    if not _PRUNED_ON_STARTUP:
+        try:
+            pruned = _prune_rate_limited_keys_on_startup(api_settings, env_keys)
+            # 记录并替换 env_keys 中的内容为探测后的结果
+            if pruned != env_keys:
+                logger.info("Startup key probe: %d -> %d usable keys", len(env_keys), len(pruned))
+            env_keys = pruned
+        finally:
+            _PRUNED_ON_STARTUP = True
+
+    # 如果首次加载或 env 内容变更，则初始化 keys 列表与索引；否则保留当前索引（便于切换后重试）
+    if not _API_KEYS or _LAST_PARSED_ENV_KEYS != env_keys_snapshot:
+        _API_KEYS = env_keys
+        _API_KEY_INDEX = 0
+        _LAST_PARSED_ENV_KEYS = env_keys_snapshot
+
+    current_key = _get_current_api_key()
+    if not current_key:
+        raise RuntimeError("无法获取有效的 OpenAI API Key")
+
+    logger.debug(
+        "Using OpenAI API key: %s (index %d/%d)",
+        _mask_key(current_key),
+        _API_KEY_INDEX + 1,
+        len(_API_KEYS),
+    )
     # 新版 openai (>=1.0.0): 使用 OpenAI 客户端
     if hasattr(openai, "OpenAI"):
         client_kwargs: Dict[str, Any] = {
-            "api_key": api_key,
+            "api_key": current_key,
         }
         base_url = api_settings.get("base_url") or api_settings.get("api_base")
         if base_url:
@@ -127,7 +299,7 @@ def require_openai(api_settings: Dict[str, Any]) -> Any:
         return openai.OpenAI(**client_kwargs)  # type: ignore[attr-defined]
 
     # 旧版 openai (<1.0.0): 模块级配置
-    openai.api_key = api_key  # type: ignore[attr-defined]
+    openai.api_key = current_key  # type: ignore[attr-defined]
 
     # 旧版 openai 采用模块级全局配置，尽量兼容老字段命名
     attr_map: Dict[str, str] = {
@@ -158,6 +330,24 @@ def _is_quota_exhausted_error(exc: Exception) -> bool:
             "billing",
             "余额",
             "欠费",
+        )
+    )
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """检查是否为限流/请求过多的错误（包含英文与中文变体）。"""
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in (
+            "rate limit",
+            "rate_limit",
+            "too_many_requests",
+            "too many requests",
+            "429",
+            "达到使用量上限",
+            "请求过多",
+            "请求频繁",
         )
     )
 
@@ -258,6 +448,15 @@ def call_llm_analyze_function(
     for attempt in range(1, max_attempts + 1):
         text_str = ""
         attempt_start = time.time()
+        # 在每个新 attempt 开始时重新获取 client（特别是在 key 被切换时）
+        try:
+            client = require_openai(api_settings)
+        except Exception as exc:
+            # 如果客户端初始化失败（例如没有可用 key），立即失败
+            if "无法获取有效的 OpenAI API Key" in str(exc):
+                logger.error("所有 API keys 均不可用，无法继续")
+                return [] if expect_array else {}
+            raise
         while True:
             try:
                 if hasattr(client, "chat") and hasattr(client.chat, "completions"):
@@ -278,6 +477,35 @@ def call_llm_analyze_function(
                     print(exit_msg)
                     logger.error("%s", exit_msg)
                     sys.exit(1)
+
+                # 限流错误（Rate limit）：将当前 key 标记为不可用并切换到下一个可用 key（不会再回到已被限流的 key）。
+                if _is_rate_limit_error(exc):
+                    logger.warning(
+                        "检测到限流(429)错误，将等待30秒后尝试切换API key。错误信息: %s",
+                        str(exc)[:200]  # 避免日志过长
+                    )
+                    print("[LLM] 检测到限流，等待30秒...")
+                    try:
+                        time.sleep(30)
+                    except KeyboardInterrupt:
+                        logger.warning("用户打断了等待流程")
+                        raise
+
+                    has_next = _discard_current_key()
+                    if has_next:
+                        logger.warning(
+                            "已将当前 API key 标记为不可用并切换到下一个 key（key=%s, index=%d/%d）",
+                            _mask_key(_get_current_api_key()),
+                            _API_KEY_INDEX + 1,
+                            len(_API_KEYS),
+                        )
+                        # 注意：这里 break 而不是 continue，以便进入下一个 attempt
+                        # 新的 attempt 会在顶部重新调用 require_openai 构建新客户端
+                        break
+                    else:
+                        last_error = f"所有 API keys 均被限流或已耗尽({exc})"
+                        logger.error(last_error)
+                        break
 
                 last_error = f"LLM 调用失败({attempt}/{max_attempts}): {exc}"
                 logger.warning("%s", last_error)

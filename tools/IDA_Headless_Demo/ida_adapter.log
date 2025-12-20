@@ -1205,3 +1205,80 @@
 2025-12-20 21:11:04,108 - ida_adapter - INFO - 所有脚本执行完成
 2025-12-20 21:11:04,108 - ida_adapter - INFO - 处理输出文件...
 2025-12-20 21:11:04,109 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_idademo
+2025-12-20 21:43:01,042 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:43:01,043 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 21:43:01,051 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 21:43:05,047 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 21:43:05,047 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 21:43:08,199 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 21:43:08,199 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 21:43:20,808 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 21:43:20,808 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 21:43:20,809 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 21:43:20,812 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 21:56:12,548 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:56:12,550 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 21:56:12,560 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 21:56:16,096 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 21:56:16,096 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 21:56:19,302 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 21:56:19,302 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 21:56:32,171 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 21:56:32,171 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 21:56:32,172 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 21:56:32,174 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 21:58:48,534 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:58:48,535 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 21:58:48,543 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 21:58:52,246 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 21:58:52,247 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 21:58:55,609 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 21:58:55,609 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 21:59:08,705 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 21:59:08,705 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 21:59:08,707 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 21:59:08,709 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 22:04:44,841 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 22:04:44,842 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 22:04:44,850 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 22:04:48,029 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 22:04:48,029 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 22:04:51,080 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 22:04:51,080 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 22:05:02,574 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 22:05:02,574 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 22:05:02,574 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 22:05:02,577 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 22:37:10,030 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 22:37:10,030 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 22:37:10,038 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 22:37:13,590 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 22:37:13,590 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 22:37:16,718 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 22:37:16,719 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 22:37:29,708 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 22:37:29,708 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 22:37:29,709 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 22:37:29,710 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 23:34:21,078 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 23:34:21,079 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 23:34:21,084 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 23:34:24,022 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 23:34:24,022 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 23:34:26,546 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 23:34:26,546 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 23:34:36,157 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 23:34:36,157 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 23:34:36,157 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 23:34:36,159 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 23:43:23,168 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 23:43:23,169 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2025-12-20 23:43:23,175 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2025-12-20 23:43:25,939 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2025-12-20 23:43:25,939 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2025-12-20 23:43:28,416 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2025-12-20 23:43:28,416 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2025-12-20 23:43:37,820 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2025-12-20 23:43:37,820 - ida_adapter - INFO - 所有脚本执行完成
+2025-12-20 23:43:37,821 - ida_adapter - INFO - 处理输出文件...
+2025-12-20 23:43:37,822 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo

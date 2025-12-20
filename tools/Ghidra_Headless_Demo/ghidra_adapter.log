@@ -2611,3 +2611,68 @@
 2025-12-20 21:10:53,869 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
 2025-12-20 21:10:53,869 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
 2025-12-20 21:10:53,870 - ghidra_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/liblogxlate_so_ghidemo
+2025-12-20 21:42:31,579 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:42:31,580 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:42:31,605 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 21:43:01,037 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 21:43:01,038 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 21:43:01,038 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_disassembly
+2025-12-20 21:43:01,039 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
+2025-12-20 21:43:01,039 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
+2025-12-20 21:43:01,042 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:54:24,497 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:54:24,497 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:54:24,506 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 21:55:38,571 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:55:38,572 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:55:38,587 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 21:56:12,544 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 21:56:12,544 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 21:56:12,545 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_disassembly
+2025-12-20 21:56:12,545 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
+2025-12-20 21:56:12,545 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
+2025-12-20 21:56:12,548 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:56:59,167 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:56:59,168 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:56:59,178 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 21:57:32,224 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 21:57:32,224 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 21:57:32,224 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_disassembly
+2025-12-20 21:57:32,225 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
+2025-12-20 21:57:32,225 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
+2025-12-20 21:58:18,567 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 21:58:18,568 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 21:58:18,578 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 21:58:48,530 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 21:58:48,531 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 21:58:48,531 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_disassembly
+2025-12-20 21:58:48,532 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
+2025-12-20 21:58:48,532 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
+2025-12-20 21:58:48,534 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 22:04:14,912 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 22:04:14,913 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 22:04:14,940 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 22:04:44,835 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 22:04:44,837 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 22:04:44,837 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_disassembly
+2025-12-20 22:04:44,837 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_binaryinfo
+2025-12-20 22:04:44,838 - ghidra_adapter - WARNING - 输出目录不存在: liblogxlate_so_pseudocode
+2025-12-20 22:04:44,841 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 22:36:38,593 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 22:36:38,594 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 22:36:38,606 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 22:37:10,026 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 22:37:10,026 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 22:37:10,030 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 23:33:55,528 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 23:33:55,530 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 23:33:55,540 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 23:34:21,075 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 23:34:21,075 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 23:34:21,077 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 23:42:58,924 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate.so
+2025-12-20 23:42:58,924 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2025-12-20 23:42:58,934 - ghidra_adapter - INFO - 执行Ghidra命令...
+2025-12-20 23:43:23,166 - ghidra_adapter - INFO - Ghidra分析完成
+2025-12-20 23:43:23,166 - ghidra_adapter - INFO - 处理输出文件...
+2025-12-20 23:43:23,168 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo

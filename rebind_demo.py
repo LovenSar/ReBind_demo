@@ -244,6 +244,34 @@ def _expected_output_dir(sample_path: Path, dir_suffix: str) -> Path:
     return sample_path.parent / f"{base_name}{dir_suffix}"
 
 
+def _probe_openai_keys() -> None:
+    """在执行 Ghidra/IDA 之前，进行 OpenAI API Key 的启动检查。
+    
+    如果某个 key 已处于限流（429）状态，会在启动时移除该 key（不修改 .env）。
+    """
+    try:
+        # 动态导入 kp_llm 以获取启动检查函数
+        kp_llm_path = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "kp"
+        sys.path.insert(0, str(kp_llm_path.parent))
+        
+        from kp.kp_llm import require_openai
+        
+        print("[ReBindDemo] 开始检查 OpenAI API Keys...")
+        try:
+            # 调用 require_openai 会自动执行启动探测并移除已限流的 keys
+            require_openai({})
+            print("[ReBindDemo] OpenAI API Keys 检查完毕。")
+        except SystemExit:
+            # 如果全部 key 都不可用，require_openai 可能会调用 sys.exit
+            raise
+        except Exception as e:
+            # 其他错误（如未配置 key）不应该阻挡 Ghidra/IDA 执行，仅发出警告
+            print(f"[ReBindDemo] OpenAI API Keys 检查警告: {e}", file=sys.stderr)
+    except Exception as e:
+        # 如果无法导入或执行探测，仅发出警告（可能 kp_llm 不可用或配置缺失）
+        print(f"[ReBindDemo] 跳过 OpenAI API Keys 启动检查: {e}", file=sys.stderr)
+
+
 def run_semantic_align(
     sample_paths: List[Path],
     *,
@@ -569,6 +597,10 @@ def main():
         # 创建综合分析工具
         demo = ReBindDemo(args.config, args.global_config, args.platform)
         print(f"[ReBindDemo] 平台检测: {demo.platform_key} (system={platform.system()}, release={platform.release()})")
+        
+        # 在执行 Ghidra/IDA 之前，进行 OpenAI API Key 启动检查
+        _probe_openai_keys()
+        
         if demo.ghidra_adapter:
             _warn_if_missing_executable(
                 "Ghidra cmd_path",
