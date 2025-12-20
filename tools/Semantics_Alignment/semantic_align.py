@@ -50,6 +50,7 @@ from phases.phase2_validation import run_validation_phase as phase2_run_validati
 from phases.phase3_globals import run_global_var_phase as phase3_run_global_var_phase
 from phases.phase4_lvar import run_local_var_phase as phase4_run_local_var_phase
 from phases.phase5_annotation import run_annotation_phase as phase5_run_annotation_phase
+from alignment_loader import inspect_sqlite_database
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -157,12 +158,13 @@ def derive_tmp_layout(sample_path: Path) -> dict:
 
     sanitized = re.sub(r"[^A-Za-z]", "_", sample_path.name)
     sample_name = sample_path.name
+    dump_basename = f"{sample_name}_dump"
 
     defaults = {
         "tmp_root": tmp_root,
         "db_path": tmp_root / f"{sample_name}.db",
-        "dump_txt": tmp_root / "db_sample_dump.txt",
-        "dump_xlsx": tmp_root / "db_sample_dump.xlsx",
+        "dump_txt": tmp_root / f"{dump_basename}.txt",
+        "dump_xlsx": tmp_root / f"{dump_basename}.xlsx",
         "ida_log": tmp_root / "idat_log.txt",
         "ghidra_dir": tmp_root / f"{sanitized}_ghidemo",
         "ida_dir": tmp_root / f"{sanitized}_idademo",
@@ -341,8 +343,10 @@ def run_semantic_pipeline(
     semantics_config_path: Optional[str] = None,
     phases: Optional[Iterable[int]] = None,
     phase5_force_all: bool = False,
+    dump_txt: Optional[Path] = None,
+    dump_xlsx: Optional[Path] = None,
 ) -> None:
-    """Run selected phases in-process (no subprocess)."""
+    """Run selected phases in-process (no subprocess) and optionally dump DB snapshots."""
 
     logger = logging.getLogger(__name__)
 
@@ -562,6 +566,8 @@ def run_semantic_pipeline(
         else:
             print("[SemanticAlign] 跳过 Phase 4（未选中）。")
 
+        phase5_ran = False
+
         # ---------------------
         # Phase 5: Annotation
         # ---------------------
@@ -579,8 +585,25 @@ def run_semantic_pipeline(
                 min_pseudo_lines=6,
                 force_all=bool(phase5_force_all),
             )
+            phase5_ran = True
         else:
             print("[SemanticAlign] 跳过 Phase 5（未选中）。")
+
+        if phase5_ran and (dump_txt or dump_xlsx):
+            export_txt_path = dump_txt or (
+                db_path.with_suffix(".txt") if db_path.suffix else db_path.with_name(db_path.name + ".txt")
+            )
+            workbook_path = dump_xlsx or (
+                db_path.with_suffix(".xlsx") if db_path.suffix else db_path.with_name(db_path.name + ".xlsx")
+            )
+            print(
+                f"[SemanticAlign] Phase 5 完成，正在导出数据库快照 -> txt: {export_txt_path}, xlsx: {workbook_path}"
+            )
+            inspect_sqlite_database(
+                db_path=db_path,
+                export_path=export_txt_path,
+                workbook_path=workbook_path,
+            )
 
     finally:
         conn.close()
@@ -663,6 +686,11 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="Phase5-only 进阶：忽略“是否已注释”状态，强制对所有可用伪代码的物理函数跑一次 Phase 5（不改变 min_pseudo_lines 过滤）。",
     )
     parser.add_argument(
+        "--dump-db-only",
+        action="store_true",
+        help="仅根据现有数据库导出 TXT/XLSX 快照（跳过 alignment_loader、IDA、Phase 流程）。",
+    )
+    parser.add_argument(
         "--ida-start-delay",
         type=float,
         default=3.0,
@@ -700,6 +728,21 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     idat_exe = args.idat_exe
     ida_url = args.ida_url
 
+    if args.dump_db_only:
+        if not db_path.exists():
+            raise SystemExit(
+                f"[SemanticAlign] --dump-db-only 指定的数据库不存在: {db_path}"
+            )
+        print(
+            f"[SemanticAlign] 仅导出数据库快照 -> txt: {dump_txt}, xlsx: {dump_xlsx}"
+        )
+        inspect_sqlite_database(
+            db_path=db_path,
+            export_path=dump_txt,
+            workbook_path=dump_xlsx,
+        )
+        return
+
     if not args.no_align:
         run_alignment_loader(
             db_path=db_path,
@@ -722,6 +765,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             semantics_config_path=args.config,
             phases=selected_phases,
             phase5_force_all=bool(args.phase5_only_force_all),
+            dump_txt=dump_txt,
+            dump_xlsx=dump_xlsx,
         )
         return
 
@@ -753,6 +798,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             semantics_config_path=args.config,
             phases=selected_phases,
             phase5_force_all=bool(args.phase5_only_force_all),
+            dump_txt=dump_txt,
+            dump_xlsx=dump_xlsx,
         )
     except Exception:
         print("[SemanticAlign] 语义流水线异常终止，正在请求 IDA(save_and_exit)...")

@@ -281,26 +281,39 @@ def run_semantic_align(
     semantics_runtime: Optional[Dict[str, Any]] = None,
     phase5_only: bool = False,
     phase5_only_force_all: bool = False,
+    db_path_override: Optional[Path] = None,
+    dump_db_only: bool = False,
 ) -> None:
     """Call semantic_align.py for each sample after both headless tools finish."""
 
     if not sample_paths:
         return
 
-    for sample_path in sample_paths:
-        semantics_runtime = semantics_runtime or {}
-        cmd = [sys.executable, str(SEMANTIC_ALIGN_SCRIPT), "--sample", str(sample_path)]
+    runtime = semantics_runtime or {}
 
-        if phase5_only or phase5_only_force_all:
-            # semantic_align.py 默认 db_path 为 "<sample_dir>/<sample_name>.db"
-            expected_db = sample_path.parent / f"{sample_path.name}.db"
-            if not expected_db.exists():
+    for sample_path in sample_paths:
+        cmd = [sys.executable, str(SEMANTIC_ALIGN_SCRIPT), "--sample", str(sample_path)]
+        db_for_sample = db_path_override
+        default_db_path = sample_path.parent / f"{sample_path.name}.db"
+
+        if dump_db_only:
+            target_db = db_for_sample or default_db_path
+            if not target_db.exists():
+                raise SystemExit(
+                    "[ReBindDemo] 未找到数据库，无法导出：\n"
+                    f"  - db={target_db}\n"
+                    "请使用 --db 指定已有 DB，或先运行完整流水线生成 DB。"
+                )
+            cmd.extend(["--db", str(target_db), "--dump-db-only"])
+        elif phase5_only or phase5_only_force_all:
+            target_db = db_for_sample or default_db_path
+            if not target_db.exists():
                 raise SystemExit(
                     "[ReBindDemo] 未找到对齐数据库，无法仅运行 Phase 5：\n"
-                    f"  - expected_db={expected_db}\n"
+                    f"  - db={target_db}\n"
                     "请先完整运行一次（生成 DB），或手动将 DB 放到上述路径。"
                 )
-            cmd.extend(["--db", str(expected_db), "--no-align"])
+            cmd.extend(["--db", str(target_db), "--no-align"])
             if phase5_only_force_all:
                 cmd.append("--phase5-only-force-all")
             else:
@@ -317,29 +330,31 @@ def run_semantic_align(
                 )
                 continue
             cmd.extend(["--ghidra-dir", str(ghidra_dir), "--ida-dir", str(ida_dir)])
+            if db_for_sample:
+                cmd.extend(["--db", str(db_for_sample)])
 
         if semantics_config_path:
             cmd.extend(["--config", str(semantics_config_path)])
 
-        idat_exe = semantics_runtime.get("idat_exe")
+        idat_exe = runtime.get("idat_exe")
         if idat_exe:
             cmd.extend(["--idat-exe", str(idat_exe)])
 
-        ida_url = semantics_runtime.get("ida_url")
+        ida_url = runtime.get("ida_url")
         if ida_url:
             cmd.extend(["--ida-url", str(ida_url)])
 
-        ida_script = semantics_runtime.get("ida_script")
+        ida_script = runtime.get("ida_script")
         if ida_script:
             cmd.extend(["--ida-script", str(ida_script)])
 
-        ida_start_delay = semantics_runtime.get("ida_start_delay")
+        ida_start_delay = runtime.get("ida_start_delay")
         if ida_start_delay is not None:
             cmd.extend(["--ida-start-delay", str(ida_start_delay)])
 
-        if semantics_runtime.get("no_ida") is True:
+        if runtime.get("no_ida") is True:
             cmd.append("--no-ida")
-        if semantics_runtime.get("no_align") is True:
+        if runtime.get("no_align") is True:
             cmd.append("--no-align")
 
         print("\n[ReBindDemo] 执行 semantic_align.py 以推进语义对齐...")
@@ -581,6 +596,15 @@ def main():
         action="store_true",
         help="Phase5-only 进阶：强制对所有可用伪代码的物理函数跑一次 Phase 5（要求已存在 <sample>.db）。",
     )
+    parser.add_argument(
+        "--db",
+        help="已有 SQLite 对齐数据库路径。可与 --phase5-only / --phase5-only-force-all / --dump-db-only 配合使用。",
+    )
+    parser.add_argument(
+        "--dump-db-only",
+        action="store_true",
+        help="仅基于已有 DB 导出 TXT/XLSX 快照（不会运行 Ghidra/IDA/Phase1-5）。",
+    )
     
     args = parser.parse_args()
     
@@ -598,8 +622,9 @@ def main():
         demo = ReBindDemo(args.config, args.global_config, args.platform)
         print(f"[ReBindDemo] 平台检测: {demo.platform_key} (system={platform.system()}, release={platform.release()})")
         
-        # 在执行 Ghidra/IDA 之前，进行 OpenAI API Key 启动检查
-        _probe_openai_keys()
+        # 在执行 Ghidra/IDA 之前，进行 OpenAI API Key 启动检查；纯导出时跳过
+        if not args.dump_db_only:
+            _probe_openai_keys()
         
         if demo.ghidra_adapter:
             _warn_if_missing_executable(
@@ -616,12 +641,32 @@ def main():
             (demo.semantics_runtime or {}).get("idat_exe"),
         )
 
+        if args.db and len(sample_paths) != 1:
+            print("错误: 当前 --db 仅支持单个输入样本。", file=sys.stderr)
+            sys.exit(1)
+        db_override = Path(args.db).expanduser().resolve() if args.db else None
+
+        if args.dump_db_only and (args.phase5_only or args.phase5_only_force_all):
+            print("错误: --dump-db-only 不可与 --phase5-only/--phase5-only-force-all 同时使用。", file=sys.stderr)
+            sys.exit(1)
+
+        if args.dump_db_only:
+            run_semantic_align(
+                sample_paths,
+                semantics_config_path=demo.semantics_config_path,
+                semantics_runtime=demo.semantics_runtime,
+                db_path_override=db_override,
+                dump_db_only=True,
+            )
+            return
+
         if args.phase5_only_force_all:
             run_semantic_align(
                 sample_paths,
                 semantics_config_path=demo.semantics_config_path,
                 semantics_runtime=demo.semantics_runtime,
                 phase5_only_force_all=True,
+                db_path_override=db_override,
             )
             return
         if args.phase5_only:
@@ -630,6 +675,7 @@ def main():
                 semantics_config_path=demo.semantics_config_path,
                 semantics_runtime=demo.semantics_runtime,
                 phase5_only=True,
+                db_path_override=db_override,
             )
             return
         
@@ -709,6 +755,7 @@ def main():
                     ghidra_dir_suffix=str(ghidra_suffix),
                     ida_dir_suffix=str(ida_suffix),
                     semantics_runtime=demo.semantics_runtime,
+                    db_path_override=db_override,
                 )
         
     except Exception as e:
