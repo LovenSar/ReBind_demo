@@ -70,6 +70,9 @@ pipeline:
     # 从 IDA 获取的 disassembly（给 LLM 的“最新反汇编”段）最多保留多少行（原默认 400）
     ida_snapshot_max_disasm_lines: 400
 
+    # Phase 5 每次 Prompt 附带的“最新反汇编”窗口大小（避免诱导模型输出过多 ea_comments / 超出 token）
+    annotation_ida_disasm_lines_per_prompt: 120
+
   phase5_annotation:
     # 只要有效伪代码行数 >= N 就注释（按你要求默认 6，即 >5 行）
     min_pseudo_lines: 6

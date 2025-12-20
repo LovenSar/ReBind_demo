@@ -251,6 +251,8 @@ def run_semantic_align(
     ghidra_dir_suffix: str = "_ghidemo",
     ida_dir_suffix: str = "_idademo",
     semantics_runtime: Optional[Dict[str, Any]] = None,
+    phase5_only: bool = False,
+    phase5_only_force_all: bool = False,
 ) -> None:
     """Call semantic_align.py for each sample after both headless tools finish."""
 
@@ -259,27 +261,35 @@ def run_semantic_align(
 
     for sample_path in sample_paths:
         semantics_runtime = semantics_runtime or {}
-        ghidra_dir = _expected_output_dir(sample_path, ghidra_dir_suffix)
-        ida_dir = _expected_output_dir(sample_path, ida_dir_suffix)
-        if not ghidra_dir.exists() or not ida_dir.exists():
-            print(
-                "[ReBindDemo] 跳过语义对齐：未找到输出目录：\n"
-                f"  - ghidra_dir={ghidra_dir} (exists={ghidra_dir.exists()})\n"
-                f"  - ida_dir={ida_dir} (exists={ida_dir.exists()})",
-                file=sys.stderr,
-            )
-            continue
+        cmd = [sys.executable, str(SEMANTIC_ALIGN_SCRIPT), "--sample", str(sample_path)]
 
-        cmd = [
-            sys.executable,
-            str(SEMANTIC_ALIGN_SCRIPT),
-            "--sample",
-            str(sample_path),
-            "--ghidra-dir",
-            str(ghidra_dir),
-            "--ida-dir",
-            str(ida_dir),
-        ]
+        if phase5_only or phase5_only_force_all:
+            # semantic_align.py 默认 db_path 为 "<sample_dir>/<sample_name>.db"
+            expected_db = sample_path.parent / f"{sample_path.name}.db"
+            if not expected_db.exists():
+                raise SystemExit(
+                    "[ReBindDemo] 未找到对齐数据库，无法仅运行 Phase 5：\n"
+                    f"  - expected_db={expected_db}\n"
+                    "请先完整运行一次（生成 DB），或手动将 DB 放到上述路径。"
+                )
+            cmd.extend(["--db", str(expected_db), "--no-align"])
+            if phase5_only_force_all:
+                cmd.append("--phase5-only-force-all")
+            else:
+                cmd.append("--phase5-only")
+        else:
+            ghidra_dir = _expected_output_dir(sample_path, ghidra_dir_suffix)
+            ida_dir = _expected_output_dir(sample_path, ida_dir_suffix)
+            if not ghidra_dir.exists() or not ida_dir.exists():
+                print(
+                    "[ReBindDemo] 跳过语义对齐：未找到输出目录：\n"
+                    f"  - ghidra_dir={ghidra_dir} (exists={ghidra_dir.exists()})\n"
+                    f"  - ida_dir={ida_dir} (exists={ida_dir.exists()})",
+                    file=sys.stderr,
+                )
+                continue
+            cmd.extend(["--ghidra-dir", str(ghidra_dir), "--ida-dir", str(ida_dir)])
+
         if semantics_config_path:
             cmd.extend(["--config", str(semantics_config_path)])
 
@@ -533,6 +543,16 @@ def main():
         action="store_true",
         help="启用详细输出"
     )
+    parser.add_argument(
+        "--phase5-only",
+        action="store_true",
+        help="跳过 Ghidra/IDA headless 分析，直接运行语义对齐 Phase 5（要求已存在 <sample>.db）。",
+    )
+    parser.add_argument(
+        "--phase5-only-force-all",
+        action="store_true",
+        help="Phase5-only 进阶：强制对所有可用伪代码的物理函数跑一次 Phase 5（要求已存在 <sample>.db）。",
+    )
     
     args = parser.parse_args()
     
@@ -563,6 +583,23 @@ def main():
             "Semantics runtime.idat_exe",
             (demo.semantics_runtime or {}).get("idat_exe"),
         )
+
+        if args.phase5_only_force_all:
+            run_semantic_align(
+                sample_paths,
+                semantics_config_path=demo.semantics_config_path,
+                semantics_runtime=demo.semantics_runtime,
+                phase5_only_force_all=True,
+            )
+            return
+        if args.phase5_only:
+            run_semantic_align(
+                sample_paths,
+                semantics_config_path=demo.semantics_config_path,
+                semantics_runtime=demo.semantics_runtime,
+                phase5_only=True,
+            )
+            return
         
         # 设置详细输出
         if args.verbose:

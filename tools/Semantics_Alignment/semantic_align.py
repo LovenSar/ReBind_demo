@@ -353,10 +353,18 @@ def run_semantic_pipeline(
     ida_url: str,
     ida_sync: bool,
     semantics_config_path: Optional[str] = None,
+    phases: Optional[Iterable[int]] = None,
+    phase5_force_all: bool = False,
 ) -> None:
-    """Run Phase1-5 in-process (no subprocess)."""
+    """Run selected phases in-process (no subprocess)."""
 
     logger = logging.getLogger(__name__)
+
+    phases_to_run = {1, 2, 3, 4, 5}
+    if phases is not None:
+        phases_to_run = {int(x) for x in phases if int(x) in (1, 2, 3, 4, 5)}
+        if not phases_to_run:
+            raise ValueError("phases 为空或无效，允许值为 1..5。")
 
     # 统一日志输出，便于回溯（沿用 knowledge_propagation 的日志格式）
     setup_logging(TOOLS_DIR / "log.log", input_db=db_path)
@@ -397,169 +405,185 @@ def run_semantic_pipeline(
         # ---------------------
         # Phase 1: Knowledge Propagation (unified analysis)
         # ---------------------
-        print("[SemanticAlign] Phase 1: Knowledge Propagation")
-        processed = 0
+        if 1 in phases_to_run:
+            print("[SemanticAlign] Phase 1: Knowledge Propagation")
+            processed = 0
 
-        initial_analysis_info = load_analysis_info(conn)
-        phase1_targets = _phase1_pending_nodes(unified_graph, initial_analysis_info)
-        phase1_total_targets = len(phase1_targets)
-        phase1_progress: Optional[tqdm] = None
-        if phase1_total_targets:
-            print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数：")
-            for node in sorted(phase1_targets, key=lambda n: n.entry_va):
-                if node.names:
-                    name_repr = ", ".join(sorted(node.names))
-                else:
-                    name_repr = "(当前无语义命名)"
-                print(f"  - entry_va=0x{int(node.entry_va):08X}, 原始名称={name_repr}")
-            phase1_progress = tqdm(
-                total=phase1_total_targets,
-                desc="[SemanticAlign] Phase 1",
-                unit="func",
-                leave=True,
-            )
-        else:
-            print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
-
-        while True:
-            analysis_info = load_analysis_info(conn)
-            candidates = _phase1_pending_nodes(unified_graph, analysis_info)
-            if not candidates:
-                break
-
-            # 对候选集计算分数，并取 Top-N
-            scores = {}
-            try:
-                scores = compute_unified_scores(unified_graph, analysis_info)
-            except Exception:
-                scores = {}
-
-            candidates.sort(key=lambda n: int(scores.get(n.entry_va, 0)), reverse=True)
-
-            requested_nodes = candidates[: min(50, len(candidates))]
-
-            def _phase1_builder(nodes):
-                if len(nodes) == 1:
-                    return build_unified_prompt(conn, unified_graph, nodes[0], analysis_info)
-                return build_unified_batch_prompt(conn, unified_graph, nodes, analysis_info)
-
-            try:
-                batch = next(
-                    yield_dynamic_batch(
-                        requested_nodes,
-                        prompt_builder=_phase1_builder,
-                        max_prompt_tokens=llm_settings.max_tokens,
-                        token_estimator=estimate_token_usage,
-                        initial_batch_size=len(requested_nodes),
-                        min_batch_size=1,
-                    )
+            initial_analysis_info = load_analysis_info(conn)
+            phase1_targets = _phase1_pending_nodes(unified_graph, initial_analysis_info)
+            phase1_total_targets = len(phase1_targets)
+            phase1_progress: Optional[tqdm] = None
+            if phase1_total_targets:
+                print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数：")
+                for node in sorted(phase1_targets, key=lambda n: n.entry_va):
+                    if node.names:
+                        name_repr = ", ".join(sorted(node.names))
+                    else:
+                        name_repr = "(当前无语义命名)"
+                    print(f"  - entry_va=0x{int(node.entry_va):08X}, 原始名称={name_repr}")
+                phase1_progress = tqdm(
+                    total=phase1_total_targets,
+                    desc="[SemanticAlign] Phase 1",
+                    unit="func",
+                    leave=True,
                 )
-            except StopIteration:
-                break
-
-            selected_nodes = batch.items
-            if not selected_nodes:
-                break
-
-            if len(selected_nodes) > 1:
-                phase1_analyze_unified_batch(
-                    conn=conn,
-                    graph=unified_graph,
-                    nodes=selected_nodes,
-                    analysis_info=analysis_info,
-                    llm_settings=llm_settings,
-                    prompt=batch.prompt,
-                    estimated_tokens=batch.estimated_tokens,
-                    dry_run=False,
-                    ida_sync=ida_sync,
-                    ida_url=ida_url,
-                )
-                processed += len(selected_nodes)
-                if phase1_progress:
-                    phase1_progress.update(len(selected_nodes))
             else:
-                node = selected_nodes[0]
-                phase1_analyze_one_unified_function(
-                    conn=conn,
-                    graph=unified_graph,
-                    entry_va=node.entry_va,
-                    analysis_info=analysis_info,
-                    llm_settings=llm_settings,
-                    dry_run=False,
-                    ida_sync=ida_sync,
-                    ida_url=ida_url,
-                )
-                processed += 1
-                if phase1_progress:
-                    phase1_progress.update(1)
+                print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
 
-        if phase1_progress:
-            phase1_progress.close()
-        print(f"[SemanticAlign] Phase 1 完成，处理物理函数数量：{processed}")
+            while True:
+                analysis_info = load_analysis_info(conn)
+                candidates = _phase1_pending_nodes(unified_graph, analysis_info)
+                if not candidates:
+                    break
+
+                # 对候选集计算分数，并取 Top-N
+                scores = {}
+                try:
+                    scores = compute_unified_scores(unified_graph, analysis_info)
+                except Exception:
+                    scores = {}
+
+                candidates.sort(key=lambda n: int(scores.get(n.entry_va, 0)), reverse=True)
+
+                requested_nodes = candidates[: min(50, len(candidates))]
+
+                def _phase1_builder(nodes):
+                    if len(nodes) == 1:
+                        return build_unified_prompt(conn, unified_graph, nodes[0], analysis_info)
+                    return build_unified_batch_prompt(conn, unified_graph, nodes, analysis_info)
+
+                try:
+                    batch = next(
+                        yield_dynamic_batch(
+                            requested_nodes,
+                            prompt_builder=_phase1_builder,
+                            max_prompt_tokens=llm_settings.max_tokens,
+                            token_estimator=estimate_token_usage,
+                            initial_batch_size=len(requested_nodes),
+                            min_batch_size=1,
+                        )
+                    )
+                except StopIteration:
+                    break
+
+                selected_nodes = batch.items
+                if not selected_nodes:
+                    break
+
+                if len(selected_nodes) > 1:
+                    phase1_analyze_unified_batch(
+                        conn=conn,
+                        graph=unified_graph,
+                        nodes=selected_nodes,
+                        analysis_info=analysis_info,
+                        llm_settings=llm_settings,
+                        prompt=batch.prompt,
+                        estimated_tokens=batch.estimated_tokens,
+                        dry_run=False,
+                        ida_sync=ida_sync,
+                        ida_url=ida_url,
+                    )
+                    processed += len(selected_nodes)
+                    if phase1_progress:
+                        phase1_progress.update(len(selected_nodes))
+                else:
+                    node = selected_nodes[0]
+                    phase1_analyze_one_unified_function(
+                        conn=conn,
+                        graph=unified_graph,
+                        entry_va=node.entry_va,
+                        analysis_info=analysis_info,
+                        llm_settings=llm_settings,
+                        dry_run=False,
+                        ida_sync=ida_sync,
+                        ida_url=ida_url,
+                    )
+                    processed += 1
+                    if phase1_progress:
+                        phase1_progress.update(1)
+
+            if phase1_progress:
+                phase1_progress.close()
+            print(f"[SemanticAlign] Phase 1 完成，处理物理函数数量：{processed}")
+        else:
+            print("[SemanticAlign] 跳过 Phase 1（未选中）。")
 
         # ---------------------
         # Phase 2: Top-down validation
         # ---------------------
-        print("[SemanticAlign] Phase 2: Validation")
-        phase2_run_validation_phase(
-            conn=conn,
-            graph=unified_graph,
-            llm_settings=llm_settings,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            dry_run=False,
-            batch_size=10,
-        )
+        if 2 in phases_to_run:
+            print("[SemanticAlign] Phase 2: Validation")
+            phase2_run_validation_phase(
+                conn=conn,
+                graph=unified_graph,
+                llm_settings=llm_settings,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                dry_run=False,
+                batch_size=10,
+            )
+        else:
+            print("[SemanticAlign] 跳过 Phase 2（未选中）。")
 
         # ---------------------
         # Phase 3: Globals
         # ---------------------
-        print("[SemanticAlign] Phase 3: Globals")
-        phase3_run_global_var_phase(
-            conn=conn,
-            graph=unified_graph,
-            llm_settings=llm_settings,
-            max_globals=None,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            dry_run=False,
-            batch_size=10,
-        )
+        if 3 in phases_to_run:
+            print("[SemanticAlign] Phase 3: Globals")
+            phase3_run_global_var_phase(
+                conn=conn,
+                graph=unified_graph,
+                llm_settings=llm_settings,
+                max_globals=None,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                dry_run=False,
+                batch_size=10,
+            )
+        else:
+            print("[SemanticAlign] 跳过 Phase 3（未选中）。")
 
         # ---------------------
         # Phase 4: Local vars
         # ---------------------
-        print("[SemanticAlign] Phase 4: Local Vars")
-        phase4_run_local_var_phase(
-            conn=conn,
-            graph=unified_graph,
-            llm_settings=llm_settings,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            semantics_config=semantics_config,
-            dry_run=False,
-            batch_size=3,
-            only_sub=False,
-            ida_only=ida_sync,
-            min_pseudo_lines=6,
-            exclude_import_export=True,
-        )
+        if 4 in phases_to_run:
+            print("[SemanticAlign] Phase 4: Local Vars")
+            phase4_run_local_var_phase(
+                conn=conn,
+                graph=unified_graph,
+                llm_settings=llm_settings,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                semantics_config=semantics_config,
+                dry_run=False,
+                batch_size=3,
+                only_sub=False,
+                ida_only=ida_sync,
+                min_pseudo_lines=6,
+                exclude_import_export=True,
+            )
+        else:
+            print("[SemanticAlign] 跳过 Phase 4（未选中）。")
 
         # ---------------------
         # Phase 5: Annotation
         # ---------------------
-        print("[SemanticAlign] Phase 5: Annotation")
-        phase5_run_annotation_phase(
-            conn=conn,
-            graph=unified_graph,
-            llm_settings=llm_settings,
-            ida_sync=ida_sync,
-            ida_url=ida_url,
-            semantics_config=semantics_config,
-            dry_run=False,
-            batch_size=5,
-            min_pseudo_lines=6,
-        )
+        if 5 in phases_to_run:
+            print("[SemanticAlign] Phase 5: Annotation")
+            phase5_run_annotation_phase(
+                conn=conn,
+                graph=unified_graph,
+                llm_settings=llm_settings,
+                ida_sync=ida_sync,
+                ida_url=ida_url,
+                semantics_config=semantics_config,
+                dry_run=False,
+                batch_size=5,
+                min_pseudo_lines=6,
+                force_all=bool(phase5_force_all),
+            )
+        else:
+            print("[SemanticAlign] 跳过 Phase 5（未选中）。")
 
     finally:
         conn.close()
@@ -576,7 +600,7 @@ def run_semantic_pipeline(
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="一键执行 alignment_loader + IDA(idat_server) + Phase1-5(语义传播) 的语义对齐流水线。",
+        description="一键执行 alignment_loader + IDA(idat_server) + Phase(默认 1-5，可选仅跑 Phase5) 的语义对齐流水线。",
     )
     parser.add_argument(
         "--db",
@@ -624,20 +648,36 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--no-align",
         action="store_true",
-        help="跳过 alignment_loader 阶段，仅执行 IDA + Phase1-5。",
+        help="跳过 alignment_loader 阶段，仅执行 IDA + 语义阶段（默认 Phase1-5；可配合 --phase5-only）。",
     )
     parser.add_argument(
         "--no-ida",
         action="store_true",
-        help="不启动 IDA / idat_server，仅离线运行 Phase1-5（不会做 IDA 同步）。",
+        help="不启动 IDA / idat_server，仅离线运行语义阶段（默认 Phase1-5；可配合 --phase5-only；不会做 IDA 同步）。",
+    )
+    parser.add_argument(
+        "--phase5-only",
+        action="store_true",
+        help="仅运行 Phase 5（逐行注释注入），跳过 Phase 1-4。",
+    )
+    parser.add_argument(
+        "--phase5-only-force-all",
+        action="store_true",
+        help="Phase5-only 进阶：忽略“是否已注释”状态，强制对所有可用伪代码的物理函数跑一次 Phase 5（不改变 min_pseudo_lines 过滤）。",
     )
     parser.add_argument(
         "--ida-start-delay",
         type=float,
         default=3.0,
-        help="启动 idat 后在本地等待的秒数，再启动 Phase1-5（默认 3 秒）。",
+        help="启动 idat 后在本地等待的秒数，再启动语义阶段（默认 3 秒）。",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    selected_phases = [5] if (args.phase5_only or args.phase5_only_force_all) else None
+    if args.phase5_only_force_all:
+        print("[SemanticAlign] 仅运行 Phase 5（--phase5-only-force-all），并强制覆盖候选集。")
+    elif args.phase5_only:
+        print("[SemanticAlign] 仅运行 Phase 5（--phase5-only），跳过 Phase 1-4。")
 
     sample_path = Path(args.sample).expanduser().resolve()
     tmp_defaults = derive_tmp_layout(sample_path)
@@ -683,6 +723,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             ida_url=ida_url,
             ida_sync=False,
             semantics_config_path=args.config,
+            phases=selected_phases,
+            phase5_force_all=bool(args.phase5_only_force_all),
         )
         return
 
@@ -712,6 +754,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             ida_url=ida_url,
             ida_sync=True,
             semantics_config_path=args.config,
+            phases=selected_phases,
+            phase5_force_all=bool(args.phase5_only_force_all),
         )
     except Exception:
         print("[SemanticAlign] 语义流水线异常终止，正在请求 IDA(save_and_exit)...")

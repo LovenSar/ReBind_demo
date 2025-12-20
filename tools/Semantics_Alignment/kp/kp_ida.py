@@ -8,10 +8,10 @@ IDA(idat_server) 交互层：封装 HTTP 调用、在线探测与常用操作。
 from __future__ import annotations
 
 import logging
+import os
 import sys
-import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 try:
     import requests  # type: ignore
@@ -20,6 +20,35 @@ except Exception:  # pragma: no cover
 
 
 logger = logging.getLogger(__name__)
+
+
+def _enter_pressed_nonblocking() -> bool:
+    """Best-effort non-blocking Enter detection to avoid daemon input threads."""
+
+    if not (sys.stdin and getattr(sys.stdin, "isatty", lambda: False)()):
+        return False
+
+    try:
+        if os.name == "nt":
+            import msvcrt  # type: ignore
+
+            # Drain pending keypresses; trigger only when Enter is hit.
+            while msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\r", "\n"):
+                    return True
+            return False
+
+        import select
+
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+        if not readable:
+            return False
+        # Any completed line counts as "pressed Enter".
+        sys.stdin.readline()
+        return True
+    except Exception:
+        return False
 
 
 def wait_for_ida_server(
@@ -76,22 +105,10 @@ def wait_for_ida_server(
             print(msg)
             logger.warning("%s", msg)
 
-            user_triggered: List[Optional[bool]] = [None]
-
-            def _wait_input() -> None:
-                try:
-                    input()
-                    user_triggered[0] = True
-                except EOFError:
-                    user_triggered[0] = False
-
-            if interactive:
-                threading.Thread(target=_wait_input, daemon=True).start()
-
             # 等待到：用户触发 / 到达 retry_interval / 达到 max_wait
             per_round_start = time.time()
             while True:
-                if user_triggered[0] is not None:
+                if interactive and _enter_pressed_nonblocking():
                     break
 
                 now = time.time()

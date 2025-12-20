@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from kp.kp_config import _get_cfg_int, _get_cfg_section
 from kp.kp_ida import wait_for_ida_server
-from kp.kp_llm import build_chat_request, call_llm_analyze_function
+from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
 from kp.kp_types import UnifiedFunctionNode, UnifiedGraph, _count_effective_pseudocode_lines
 from kp.kp_unified_prompt import _build_unified_prompt_body
@@ -63,6 +63,129 @@ def _normalize_line_comments_map(obj: Any) -> Dict[str, str]:
             continue
         out[str(idx)] = c
     return out
+
+
+def _normalize_ea_comments_map(
+    obj: Any,
+    *,
+    allowed_eas: Optional[set[int]] = None,
+) -> Dict[int, str]:
+    if not isinstance(obj, dict) or not obj:
+        return {}
+
+    out: Dict[int, str] = {}
+    for k, v in obj.items():
+        try:
+            s = str(k).strip()
+            ea = int(s, 16) if s.lower().startswith("0x") else int(s)
+        except Exception:
+            continue
+        if ea <= 0:
+            continue
+        if allowed_eas is not None and ea not in allowed_eas:
+            continue
+
+        c = _sanitize_line_comment(v)
+        if not c:
+            continue
+
+        prev = out.get(int(ea))
+        if prev and c != prev:
+            out[int(ea)] = prev + " | " + c
+        else:
+            out[int(ea)] = c
+
+    return out
+
+
+def _ea_comments_to_line_comments(
+    ea_comments: Dict[int, str],
+    line_eas: Dict[str, int],
+    *,
+    prefer_first_occurrence: bool = True,
+) -> Dict[str, str]:
+    if not ea_comments or not line_eas:
+        return {}
+
+    ea_to_lines: Dict[int, List[int]] = {}
+    for k, v in line_eas.items():
+        try:
+            ln = int(str(k).strip())
+            ea = int(v)
+        except Exception:
+            continue
+        if ln <= 0 or ea <= 0:
+            continue
+        ea_to_lines.setdefault(int(ea), []).append(int(ln))
+
+    out: Dict[str, str] = {}
+    for ea, text in ea_comments.items():
+        lns = sorted(ea_to_lines.get(int(ea), []) or [])
+        if not lns:
+            continue
+        if prefer_first_occurrence:
+            out[str(lns[0])] = text
+        else:
+            for ln in lns:
+                out[str(ln)] = text
+    return out
+
+
+def _build_line_ea_mapping_section(line_eas: Dict[str, int], start_no: int, end_no: int) -> str:
+    parts: List[str] = []
+    for ln in range(int(start_no), int(end_no) + 1):
+        ea = int(line_eas.get(str(ln)) or 0)
+        if ea > 0:
+            parts.append(f"{ln:03d} -> 0x{ea:X}")
+    if not parts:
+        return ""
+    return "\n\n[伪代码行号 -> 代表性地址(来自 IDA)]\n" + "\n".join(parts)
+
+
+def _line_comments_to_ea_comments(
+    line_comments: Dict[str, str],
+    line_eas: Dict[str, int],
+) -> Dict[int, str]:
+    if not line_comments or not line_eas:
+        return {}
+
+    out: Dict[int, str] = {}
+    for k, v in (line_comments or {}).items():
+        try:
+            ln = int(str(k).strip())
+        except Exception:
+            continue
+        if ln <= 0:
+            continue
+        ea = int(line_eas.get(str(ln)) or 0)
+        if ea <= 0:
+            continue
+        txt = _sanitize_line_comment(v)
+        if not txt:
+            continue
+        prev = out.get(int(ea))
+        if prev and txt != prev:
+            out[int(ea)] = prev + " | " + txt
+        else:
+            out[int(ea)] = txt
+
+    return out
+
+
+_DISASM_EA_RE = re.compile(r"^\s*(0x[0-9A-Fa-f]+)\s*:")
+
+
+def _extract_disasm_eas(disasm_lines: List[str]) -> set[int]:
+    eas: set[int] = set()
+    for ln in disasm_lines:
+        m = _DISASM_EA_RE.match(str(ln or ""))
+        if not m:
+            continue
+        try:
+            eas.add(int(m.group(1), 16))
+        except Exception:
+            continue
+    return eas
 
 
 def _fetch_ida_function_snapshot(
@@ -205,6 +328,7 @@ def run_annotation_phase(
     batch_size: int = 5,
     min_pseudo_lines: int = 6,
     max_code_chars: int = 8000,
+    force_all: bool = False,
 ) -> None:
     """Run Phase 5.
 
@@ -297,14 +421,15 @@ def run_annotation_phase(
         if min_pseudo_lines and eff_lines < int(min_pseudo_lines):
             continue
 
-        any_pending = False
-        for fid in node.function_ids:
-            info = analysis_info.get(int(fid)) or {}
-            if int(info.get("annotation_status", 0) or 0) == 0:
-                any_pending = True
-                break
-        if not any_pending:
-            continue
+        if not force_all:
+            any_pending = False
+            for fid in node.function_ids:
+                info = analysis_info.get(int(fid)) or {}
+                if int(info.get("annotation_status", 0) or 0) == 0:
+                    any_pending = True
+                    break
+            if not any_pending:
+                continue
 
         entry_candidates.append((int(entry_va), int(eff_lines)))
 
@@ -327,10 +452,13 @@ def run_annotation_phase(
             continue
 
         pending_fids: List[int] = []
-        for fid in sorted(int(x) for x in node.function_ids):
-            info = analysis_info.get(int(fid)) or {}
-            if int(info.get("annotation_status", 0) or 0) == 0:
-                pending_fids.append(int(fid))
+        if force_all:
+            pending_fids = [int(x) for x in sorted(int(x) for x in node.function_ids)]
+        else:
+            for fid in sorted(int(x) for x in node.function_ids):
+                info = analysis_info.get(int(fid)) or {}
+                if int(info.get("annotation_status", 0) or 0) == 0:
+                    pending_fids.append(int(fid))
 
         if not pending_fids:
             pbar.update(1)
@@ -365,7 +493,7 @@ def run_annotation_phase(
         ida_snapshot: Optional[Dict[str, Any]] = None
         ida_numbered_code = code
         ida_disasm_text = ""
-        ida_line_eas_text = ""
+        ida_disasm_lines: List[str] = []
         ida_line_eas_payload: Dict[str, int] = {}
 
         if ida_sync and ida_url:
@@ -389,21 +517,6 @@ def run_annotation_phase(
                         ida_line_eas_payload[str(no)] = int(pea)
                 ida_numbered_code = "\n".join(lines_for_prompt).strip() or code
 
-            line_eas_obj = ida_snapshot.get("line_eas")
-            if isinstance(line_eas_obj, dict) and line_eas_obj:
-                parts: List[str] = []
-                for k, v in line_eas_obj.items():
-                    try:
-                        idx = int(str(k).strip())
-                        vea = int(v)
-                    except Exception:
-                        continue
-                    if idx <= 0 or vea <= 0:
-                        continue
-                    parts.append(f"{idx:03d}: 0x{vea:X}")
-                if parts:
-                    ida_line_eas_text = "\n".join(parts)
-
             disasm_obj = ida_snapshot.get("disassembly")
             if isinstance(disasm_obj, list) and disasm_obj:
                 dparts: List[str] = []
@@ -425,6 +538,7 @@ def run_annotation_phase(
                     else:
                         dparts.append(txt)
                 if dparts:
+                    ida_disasm_lines = list(dparts)
                     ida_disasm_text = "\n".join(dparts)
 
         all_lines = (ida_numbered_code or "").splitlines()
@@ -435,107 +549,285 @@ def run_annotation_phase(
             chunk_size = max(1, int(llm_medium_chunk_size or 120))
 
         merged_line_comments: Dict[str, str] = {}
+        merged_ea_comments: Dict[int, str] = {}
         metadata_obj: Dict[str, Any] = {}
 
-        def _make_prompt(chunk_lines: List[str], start_line_no: int, include_extras: bool) -> str:
+        max_total_tokens = int(getattr(llm_settings, "max_tokens", 0) or 0)
+        if max_total_tokens <= 0:
+            max_total_tokens = 6000
+        # 某些 OpenAI 兼容实现会把 max_tokens 当作“总 token”（prompt+completion）上限；
+        # Phase5 输出较大，因此给 prompt 留出余量，避免返回被截断导致 JSON 不完整。
+        prompt_token_budget = max(512, int(max_total_tokens * 0.55))
+
+        def _make_prompt(
+            chunk_lines: List[str],
+            start_line_no: int,
+            include_extras: bool,
+            ctx_summary: str,
+        ) -> str:
             base = int(start_line_no) if start_line_no > 0 else 1
             numbered = "\n".join(f"{(base + i - 1):03d}: {ln}" for i, ln in enumerate(chunk_lines, 1))
 
             extra_sections = ""
-            if include_extras and ida_line_eas_text.strip():
-                extra_sections += "\n\n[伪代码行号 -> 代表性地址(来自 IDA)]\n" + ida_line_eas_text.strip()
-            if include_extras and ida_disasm_text.strip():
-                extra_sections += "\n\n[最新反汇编(来自 IDA)]\n" + ida_disasm_text.strip()
+            if ida_line_eas_payload:
+                extra_sections += _build_line_ea_mapping_section(
+                    ida_line_eas_payload,
+                    start_no=base,
+                    end_no=base + len(chunk_lines) - 1,
+                )
+            if include_extras and ida_disasm_lines:
+                # 仅携带部分反汇编，避免 prompt 过长/诱导模型输出过多 ea_comments。
+                disasm_cap = _get_cfg_int(
+                    semantics_config,
+                    ("pipeline", "prompt_limits", "annotation_ida_disasm_lines_per_prompt"),
+                    120,
+                )
+                cap = max(0, int(disasm_cap or 0))
+                if cap <= 0:
+                    cap = 120
+
+                # 以伪代码片段起点做一个简单的比例映射，滑动覆盖整个函数的反汇编范围。
+                total_pseudo = max(1, len(all_lines))
+                total_disasm = len(ida_disasm_lines)
+                ds_start = 0
+                if total_disasm > 0:
+                    ds_start = int((max(0, base - 1) / total_pseudo) * total_disasm)
+                    ds_start = max(0, min(total_disasm - 1, ds_start))
+                ds_end = min(total_disasm, ds_start + cap)
+                window = ida_disasm_lines[ds_start:ds_end]
+                if window:
+                    extra_sections += "\n\n[最新反汇编(来自 IDA)]\n" + "\n".join(window).strip()
+
+            if ida_line_eas_payload or ida_disasm_text.strip():
+                return pmt_prompts.ea_annotation_prompt(
+                    node_name=f"{display_name} ({tool_name})",
+                    context_summary=ctx_summary,
+                    numbered_code=numbered,
+                    extra_sections=extra_sections,
+                )
 
             return pmt_prompts.line_annotation_prompt(
                 node_name=f"{display_name} ({tool_name})",
-                context_summary=context_summary,
+                context_summary=ctx_summary,
                 numbered_code=numbered,
                 extra_sections=extra_sections,
             )
 
-        if chunk_size == 0:
-            prompt = _make_prompt(all_lines, 1, True)
-            conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+        def _align_chunk_comments(raw_obj: Any, start_no: int, end_no: int) -> Dict[str, str]:
+            norm = _normalize_line_comments_map(raw_obj)
+            if not norm:
+                return {}
 
-            if dry_run:
-                print("=" * 80)
-                print(f"[Phase 5][DRY-RUN] entry_va=0x{entry_va:08X} name={display_name}")
-                print(prompt)
-                pbar.update(1)
+            in_range: Dict[str, str] = {}
+            for k, v in norm.items():
+                try:
+                    idx = int(str(k).strip())
+                except Exception:
+                    continue
+                if start_no <= idx <= end_no:
+                    in_range[str(idx)] = v
+            if in_range:
+                return in_range
+
+            if start_no > 1:
+                keys: List[int] = []
+                for k in norm.keys():
+                    try:
+                        keys.append(int(str(k).strip()))
+                    except Exception:
+                        pass
+                if keys:
+                    min_idx = min(keys)
+                    max_idx = max(keys)
+                    span = end_no - start_no + 1
+                    if min_idx == 1 and max_idx <= max(1, span):
+                        remapped: Dict[str, str] = {}
+                        for k, v in norm.items():
+                            try:
+                                idx = int(str(k).strip())
+                            except Exception:
+                                continue
+                            new_idx = idx + start_no - 1
+                            if start_no <= new_idx <= end_no:
+                                remapped[str(new_idx)] = v
+                        return remapped
+
+            return {}
+
+        initial_ranges: List[Tuple[int, int, bool]] = []
+        if chunk_size == 0:
+            initial_ranges = [(0, len(all_lines), True)]
+        else:
+            total = (len(all_lines) + chunk_size - 1) // chunk_size
+            needs_disasm_for_ea = bool(ida_disasm_lines) and not bool(ida_line_eas_payload)
+            for cidx in range(total):
+                s = cidx * chunk_size
+                e = min(len(all_lines), s + chunk_size)
+                # 若没有“伪代码行号->EA”映射，则必须在每个分块里带一点反汇编以提供可用 EA。
+                initial_ranges.append((s, e, True if needs_disasm_for_ea else (cidx == 0)))
+
+        planned: List[Tuple[int, int, bool, str, int]] = []
+        queue: List[Tuple[int, int, bool]] = list(initial_ranges)
+        while queue:
+            s, e, inc_extras = queue.pop(0)
+            chunk_lines = all_lines[s:e]
+            if not chunk_lines:
                 continue
 
+            start_no = s + 1
+            end_no = e
+            ctx = context_summary
+            prompt = _make_prompt(chunk_lines, start_no, inc_extras, ctx)
+            est = int(estimate_token_usage(prompt))
+
+            if est > prompt_token_budget and inc_extras:
+                prompt_no_extras = _make_prompt(chunk_lines, start_no, False, ctx)
+                est_no_extras = int(estimate_token_usage(prompt_no_extras))
+                if est_no_extras <= prompt_token_budget:
+                    planned.append((s, e, False, prompt_no_extras, est_no_extras))
+                    continue
+                prompt = prompt_no_extras
+                est = est_no_extras
+                inc_extras = False
+
+            if est > prompt_token_budget:
+                if (e - s) <= 1:
+                    short_ctx = ctx
+                    if len(short_ctx) > 1500:
+                        short_ctx = short_ctx[:1500] + "..."
+                    prompt = _make_prompt(chunk_lines, start_no, False, short_ctx)
+                    est = int(estimate_token_usage(prompt))
+                    planned.append((s, e, False, prompt, est))
+                    continue
+
+                mid = s + (e - s) // 2
+                queue = [(s, mid, inc_extras), (mid, e, False)] + queue
+                continue
+
+            planned.append((s, e, inc_extras, prompt, est))
+
+        if dry_run:
+            for idx, (s, e, _inc, prompt, est) in enumerate(planned, 1):
+                print("=" * 80)
+                if len(planned) == 1:
+                    print(
+                        f"[Phase 5][DRY-RUN] entry_va=0x{entry_va:08X} name={display_name} "
+                        f"tokens≈{est}"
+                    )
+                else:
+                    print(
+                        f"[Phase 5][DRY-RUN] entry_va=0x{entry_va:08X} name={display_name} "
+                        f"chunk={idx}/{len(planned)} lines={s+1}-{e} tokens≈{est}"
+                    )
+                print(prompt)
+            pbar.update(1)
+            continue
+
+        # 执行分块（带“解析失败则继续分裂”的缓解策略）
+        work_q: List[Tuple[int, int, bool, int]] = [(s, e, inc, 0) for (s, e, inc, _p, _t) in planned]
+        processed_chunks = 0
+        while work_q:
+            s, e, inc_extras, depth = work_q.pop(0)
+            chunk_lines = all_lines[s:e]
+            if not chunk_lines:
+                continue
+
+            start_no = s + 1
+            end_no = e
+
+            ctx = context_summary
+            if depth > 0 and len(ctx) > 1500:
+                ctx = ctx[:1500] + "..."
+
+            prompt = _make_prompt(chunk_lines, start_no, inc_extras, ctx)
+            conversation, request_kwargs = build_chat_request(prompt, llm_settings)
             try:
-                result = call_llm_analyze_function(
+                chunk_result = call_llm_analyze_function(
                     conversation=conversation,
                     request_kwargs=request_kwargs,
                     api_settings=llm_settings.api_settings,
                     return_raw_on_error=True,
                 )
             except Exception as exc:
-                logger.warning("[Phase 5] LLM 调用异常 entry_va=0x%08X: %s", entry_va, exc)
-                result = {}
+                logger.warning(
+                    "[Phase 5] LLM 调用异常 entry_va=0x%08X chunk=%d/%d: %s",
+                    entry_va,
+                    processed_chunks + 1,
+                    len(planned),
+                    exc,
+                )
+                chunk_result = {}
 
-            if isinstance(result, dict) and "_raw_text" not in result:
-                merged_line_comments = _normalize_line_comments_map(result.get("line_comments"))
-                meta = result.get("metadata")
-                if isinstance(meta, dict):
-                    metadata_obj = meta
-        else:
-            total_chunks = (len(all_lines) + chunk_size - 1) // chunk_size
-            for cidx in range(total_chunks):
-                start = cidx * chunk_size
-                end = min(len(all_lines), start + chunk_size)
-                chunk_lines = all_lines[start:end]
-                start_no = start + 1
-
-                chunk_prompt = _make_prompt(chunk_lines, start_no, include_extras=(cidx == 0))
-                conversation, request_kwargs = build_chat_request(chunk_prompt, llm_settings)
-
-                if dry_run:
-                    print("=" * 80)
-                    print(
-                        f"[Phase 5][DRY-RUN] entry_va=0x{entry_va:08X} name={display_name} "
-                        f"chunk={cidx+1}/{total_chunks} lines={start_no}-{end}"
-                    )
-                    print(chunk_prompt)
+            if not isinstance(chunk_result, dict) or "_raw_text" in chunk_result:
+                # 常见原因：输出过长被截断导致 JSON 不完整 -> 先去掉反汇编，再递归分裂伪代码片段。
+                if inc_extras:
+                    work_q.insert(0, (s, e, False, depth + 1))
                     continue
+                if (e - s) > 1:
+                    mid = s + (e - s) // 2
+                    work_q = [(s, mid, False, depth + 1), (mid, e, False, depth + 1)] + work_q
+                    continue
+                continue
 
-                try:
-                    chunk_result = call_llm_analyze_function(
-                        conversation=conversation,
-                        request_kwargs=request_kwargs,
-                        api_settings=llm_settings.api_settings,
-                        return_raw_on_error=True,
+            ea_mode = bool(ida_line_eas_payload or ida_disasm_lines)
+            if ea_mode:
+                allowed_eas: set[int] = set()
+                if ida_line_eas_payload:
+                    for ln in range(int(start_no), int(end_no) + 1):
+                        ea = int(ida_line_eas_payload.get(str(ln)) or 0)
+                        if ea > 0:
+                            allowed_eas.add(int(ea))
+                elif inc_extras and ida_disasm_lines:
+                    # 没有行号->EA 映射时，限制为“本次 prompt 附带的反汇编片段”里出现的 EA。
+                    disasm_cap = _get_cfg_int(
+                        semantics_config,
+                        ("pipeline", "prompt_limits", "annotation_ida_disasm_lines_per_prompt"),
+                        120,
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "[Phase 5] LLM 调用异常 entry_va=0x%08X chunk=%d/%d: %s",
-                        entry_va,
-                        cidx + 1,
-                        total_chunks,
-                        exc,
-                    )
-                    chunk_result = {}
+                    cap = max(1, int(disasm_cap or 120))
+                    total_pseudo = max(1, len(all_lines))
+                    total_disasm = len(ida_disasm_lines)
+                    ds_start = int((max(0, start_no - 1) / total_pseudo) * max(1, total_disasm))
+                    ds_start = max(0, min(max(0, total_disasm - 1), ds_start))
+                    ds_end = min(total_disasm, ds_start + cap)
+                    allowed_eas = _extract_disasm_eas(ida_disasm_lines[ds_start:ds_end])
 
-                if not isinstance(chunk_result, dict) or "_raw_text" in chunk_result:
-                    merged_line_comments = {}
-                    break
+                ec = _normalize_ea_comments_map(
+                    chunk_result.get("ea_comments"),
+                    allowed_eas=allowed_eas or None,
+                )
+                if ec:
+                    for ea, text in ec.items():
+                        prev = merged_ea_comments.get(int(ea))
+                        if prev and text and text != prev:
+                            merged_ea_comments[int(ea)] = prev + " | " + text
+                        else:
+                            merged_ea_comments[int(ea)] = text
 
-                cmts = _normalize_line_comments_map(chunk_result.get("line_comments"))
+                cmts = _align_chunk_comments(chunk_result.get("line_comments"), start_no, end_no)
+                if cmts:
+                    merged_line_comments.update(cmts)
+                    if ida_line_eas_payload:
+                        conv = _line_comments_to_ea_comments(cmts, ida_line_eas_payload)
+                        for ea, text in conv.items():
+                            prev = merged_ea_comments.get(int(ea))
+                            if prev and text and text != prev:
+                                merged_ea_comments[int(ea)] = prev + " | " + text
+                            else:
+                                merged_ea_comments[int(ea)] = text
+            else:
+                cmts = _align_chunk_comments(chunk_result.get("line_comments"), start_no, end_no)
                 if cmts:
                     merged_line_comments.update(cmts)
 
-                if not metadata_obj:
-                    meta = chunk_result.get("metadata")
-                    if isinstance(meta, dict):
-                        metadata_obj = meta
+            if not metadata_obj:
+                meta = chunk_result.get("metadata")
+                if isinstance(meta, dict):
+                    metadata_obj = meta
 
-            if dry_run:
-                pbar.update(1)
-                continue
+            processed_chunks += 1
 
-        if not merged_line_comments:
+        if not (merged_line_comments or merged_ea_comments):
             try:
                 placeholders = ",".join("?" for _ in pending_fids)
                 if placeholders:
@@ -553,6 +845,11 @@ def run_annotation_phase(
 
         try:
             updated_any = False
+            effective_line_comments = dict(merged_line_comments or {})
+            if ida_line_eas_payload and merged_ea_comments:
+                mapped = _ea_comments_to_line_comments(merged_ea_comments, ida_line_eas_payload)
+                if mapped:
+                    effective_line_comments.update(mapped)
             for fid in pending_fids:
                 cur.execute("SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;", (int(fid),))
                 row = cur.fetchone()
@@ -566,7 +863,7 @@ def run_annotation_phase(
                     updated_any = True
                     continue
 
-                new_body = apply_line_comments_to_code(body, merged_line_comments)
+                new_body = apply_line_comments_to_code(body, effective_line_comments)
                 cur.execute("UPDATE pseudo_functions SET body = ? WHERE function_id = ?;", (new_body, int(fid)))
                 updated_any = True
 
@@ -610,49 +907,81 @@ def run_annotation_phase(
 
         if ida_sync and ida_url and requests is not None:
             try:
-                items: List[Tuple[int, str]] = []
-                for k, v in (merged_line_comments or {}).items():
-                    try:
-                        ln = int(str(k).strip())
-                    except Exception:
-                        continue
-                    if ln <= 0:
-                        continue
-                    txt = _sanitize_line_comment(v)
-                    if not txt:
-                        continue
-                    items.append((ln, txt))
-                items.sort(key=lambda x: x[0])
-
-                if items:
-                    chunk_n = max(1, int(ida_sync_chunk_size or 120))
-                    total_chunks = (len(items) + chunk_n - 1) // chunk_n
-                    for cidx in range(total_chunks):
-                        part = items[cidx * chunk_n : (cidx + 1) * chunk_n]
-                        if not part:
+                ea_mode = bool(ida_line_eas_payload or ida_disasm_text.strip())
+                if ea_mode and merged_ea_comments:
+                    items_ea: List[Tuple[int, str]] = []
+                    for ea, v in sorted((merged_ea_comments or {}).items(), key=lambda kv: int(kv[0])):
+                        txt = _sanitize_line_comment(v)
+                        if not txt:
                             continue
-                        part_comments: Dict[str, str] = {str(ln): txt for ln, txt in part}
-                        part_line_eas: Dict[str, int] = {}
-                        for ln, _txt in part:
-                            ea_val = ida_line_eas_payload.get(str(ln))
-                            if ea_val:
-                                part_line_eas[str(ln)] = int(ea_val)
+                        items_ea.append((int(ea), txt))
 
-                        payload = {
-                            "action": "set_pseudocode_line_comments",
-                            "ea": int(entry_va),
-                            "line_comments": part_comments,
-                            "line_eas": part_line_eas,
-                        }
-                        resp = requests.post(ida_url, json=payload, timeout=10.0)
-                        if resp.status_code != 200:
-                            logger.info(
-                                "[Phase 5] IDA 行注释同步 chunk=%d/%d HTTP %s: %s",
-                                cidx + 1,
-                                total_chunks,
-                                resp.status_code,
-                                (resp.text or "")[:200],
-                            )
+                    if items_ea:
+                        chunk_n = max(1, int(ida_sync_chunk_size or 120))
+                        total_chunks = (len(items_ea) + chunk_n - 1) // chunk_n
+                        for cidx in range(total_chunks):
+                            part = items_ea[cidx * chunk_n : (cidx + 1) * chunk_n]
+                            if not part:
+                                continue
+                            part_comments: Dict[str, str] = {f"0x{ea:X}": txt for ea, txt in part}
+                            payload = {
+                                "action": "set_pseudocode_ea_comments",
+                                "ea": int(entry_va),
+                                "ea_comments": part_comments,
+                            }
+                            resp = requests.post(ida_url, json=payload, timeout=10.0)
+                            if resp.status_code != 200:
+                                logger.info(
+                                    "[Phase 5] IDA EA 注释同步 chunk=%d/%d HTTP %s: %s",
+                                    cidx + 1,
+                                    total_chunks,
+                                    resp.status_code,
+                                    (resp.text or "")[:200],
+                                )
+                else:
+                    items: List[Tuple[int, str]] = []
+                    for k, v in (merged_line_comments or {}).items():
+                        try:
+                            ln = int(str(k).strip())
+                        except Exception:
+                            continue
+                        if ln <= 0:
+                            continue
+                        txt = _sanitize_line_comment(v)
+                        if not txt:
+                            continue
+                        items.append((ln, txt))
+                    items.sort(key=lambda x: x[0])
+
+                    if items:
+                        chunk_n = max(1, int(ida_sync_chunk_size or 120))
+                        total_chunks = (len(items) + chunk_n - 1) // chunk_n
+                        for cidx in range(total_chunks):
+                            part = items[cidx * chunk_n : (cidx + 1) * chunk_n]
+                            if not part:
+                                continue
+                            part_comments: Dict[str, str] = {str(ln): txt for ln, txt in part}
+                            part_line_eas: Dict[str, int] = {}
+                            for ln, _txt in part:
+                                ea_val = ida_line_eas_payload.get(str(ln))
+                                if ea_val:
+                                    part_line_eas[str(ln)] = int(ea_val)
+
+                            payload = {
+                                "action": "set_pseudocode_line_comments",
+                                "ea": int(entry_va),
+                                "line_comments": part_comments,
+                                "line_eas": part_line_eas,
+                            }
+                            resp = requests.post(ida_url, json=payload, timeout=10.0)
+                            if resp.status_code != 200:
+                                logger.info(
+                                    "[Phase 5] IDA 行注释同步 chunk=%d/%d HTTP %s: %s",
+                                    cidx + 1,
+                                    total_chunks,
+                                    resp.status_code,
+                                    (resp.text or "")[:200],
+                                )
             except Exception as exc:
                 logger.info(
                     "[Phase 5] IDA 行注释同步失败（可忽略） entry_va=0x%08X: %s",

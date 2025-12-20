@@ -169,6 +169,63 @@ def _repair_json_string(text: str) -> str:
     return clean_text
 
 
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _try_parse_json_value(text: str) -> Optional[Any]:
+    """Best-effort parse a JSON value from an LLM response.
+
+    Supports:
+    - clean JSON
+    - JSON with trailing text (via raw_decode)
+    - JSON embedded in surrounding text (first '{'/'[')
+    """
+
+    if not text:
+        return None
+
+    raw = text.strip()
+    if not raw:
+        return None
+
+    candidates: List[str] = [raw]
+    if "\n" in raw:
+        candidates.append(raw.replace("\n", " "))
+
+    for cand in candidates:
+        try:
+            return json.loads(cand)
+        except Exception:
+            pass
+
+        try:
+            obj, _idx = _JSON_DECODER.raw_decode(cand.lstrip())
+            return obj
+        except Exception:
+            pass
+
+        m = re.search(r"[\[{]", cand)
+        if not m:
+            continue
+
+        sub = cand[m.start() :].lstrip()
+        try:
+            obj, _idx = _JSON_DECODER.raw_decode(sub)
+            return obj
+        except Exception:
+            pass
+
+        last_close = max(sub.rfind("}"), sub.rfind("]"))
+        if last_close != -1:
+            sub2 = sub[: last_close + 1]
+            try:
+                return json.loads(sub2)
+            except Exception:
+                pass
+
+    return None
+
+
 def call_llm_analyze_function(
     *,
     conversation: List[Dict[str, str]],
@@ -238,26 +295,19 @@ def call_llm_analyze_function(
             if "\n" in text_str:
                 candidates.append(text_str.replace("\n", " "))
 
-            parse_ok = False
-            data: Any = None
-            for cand in candidates:
-                try:
-                    data = json.loads(cand)
-                    parse_ok = True
-                    break
-                except Exception:
-                    continue
-
-            if not parse_ok:
+            data = _try_parse_json_value(text_str)
+            if data is None:
                 repaired = _repair_json_string(text_str)
-                try:
-                    data = json.loads(repaired)
-                    parse_ok = True
-                except Exception:
-                    parse_ok = False
+                data = _try_parse_json_value(repaired)
 
-            if not parse_ok:
-                last_error = f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{candidates[0]!r}"
+            if data is None:
+                hint = ""
+                s = (text_str or "").strip()
+                if s.startswith("{") and not s.endswith("}"):
+                    hint = "（疑似被 max_tokens 截断，可尝试减小单次 prompt/分段查询）"
+                last_error = (
+                    f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{candidates[0]!r}{hint}"
+                )
                 if return_raw_on_error and attempt == max_attempts:
                     logger.warning("%s\n完整的 LLM 回复：%s", last_error, text_str)
                     return {"_raw_error": last_error, "_raw_text": text_str}
