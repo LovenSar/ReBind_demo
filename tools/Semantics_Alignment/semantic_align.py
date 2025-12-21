@@ -691,6 +691,16 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         help="仅根据现有数据库导出 TXT/XLSX 快照（跳过 alignment_loader、IDA、Phase 流程）。",
     )
     parser.add_argument(
+        "--sync-ida-before-dump",
+        action="store_true",
+        help="导出前先从 IDA 同步函数名到 DB（需配合 --dump-db-only 使用，会启动 IDA）。",
+    )
+    parser.add_argument(
+        "--unlock-locked-on-sync",
+        action="store_true",
+        help="同步 IDA 时解锁所有 LOCKED 状态（配合 --sync-ida-before-dump 使用）。",
+    )
+    parser.add_argument(
         "--ida-start-delay",
         type=float,
         default=3.0,
@@ -733,8 +743,48 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             raise SystemExit(
                 f"[SemanticAlign] --dump-db-only 指定的数据库不存在: {db_path}"
             )
+        
+        # 可选：从 IDA 同步函数名
+        if args.sync_ida_before_dump:
+            print("[SemanticAlign] 启动 IDA 以同步函数名到 DB...")
+            
+            # 启动 IDA
+            ida_log = tmp_defaults["ida_log"]
+            ida_proc = launch_idat_server(
+                idat_exe=idat_exe,
+                ida_script=ida_script,
+                sample_path=sample_path,
+                log_path=ida_log,
+            )
+            
+            if args.ida_start_delay > 0:
+                print(f"[SemanticAlign] 等待 {args.ida_start_delay:.1f} 秒以便 IDA 启动...")
+                time.sleep(args.ida_start_delay)
+            
+            _exit_if_library_init_failed(ida_log, ida_proc)
+            
+            # 调用同步脚本
+            sync_cmd = [
+                sys.executable,
+                str(TOOLS_DIR / "sync_ida_to_db.py"),
+                str(db_path),
+                "--ida-url", ida_url,
+                "--wait",
+            ]
+            if args.unlock_locked_on_sync:
+                sync_cmd.append("--unlock-locked")
+            
+            print("[SemanticAlign] 同步 IDA 函数名到 DB...")
+            result = subprocess.run(sync_cmd, cwd=str(REPO_ROOT))
+            if result.returncode != 0:
+                print("[SemanticAlign] 同步失败，但继续导出...", file=sys.stderr)
+            
+            # 请求 IDA 退出
+            _send_ida_save_and_exit()
+            _wait_for_ida_process_exit(ida_proc, timeout=30.0)
+        
         print(
-            f"[SemanticAlign] 仅导出数据库快照 -> txt: {dump_txt}, xlsx: {dump_xlsx}"
+            f"[SemanticAlign] 导出数据库快照 -> txt: {dump_txt}, xlsx: {dump_xlsx}"
         )
         inspect_sqlite_database(
             db_path=db_path,

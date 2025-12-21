@@ -277,6 +277,10 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 result = self._execute_in_main_thread(self._handle_get_sub_functions, payload)
                 resp = result or {"status": "error", "msg": "no result"}
                 status_code = 200
+            elif action == "get_functions":
+                result = self._execute_in_main_thread(self._handle_get_functions, payload)
+                resp = result or {"status": "error", "msg": "no result"}
+                status_code = 200
             elif action == "ping":
                 resp = {"status": "ok", "msg": "pong"}
                 status_code = 200
@@ -1202,6 +1206,32 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             return {"status": "error", "msg": str(exc)}
 
         return {"status": "ok", "sub_functions": result}
+
+    def _handle_get_functions(self, payload: dict) -> dict:
+        """
+        返回当前 IDB 中所有函数的列表（包括地址和名称）。
+        结果格式:
+            {
+                "status": "success",
+                "functions": { ea(int): name(str), ... }
+            }
+        """
+        result: dict[int, str] = {}
+
+        try:
+            for ea in idautils.Functions():
+                try:
+                    name = idc.get_func_name(ea) or ""
+                except Exception:
+                    name = ""
+                name = name.strip()
+                if name:
+                    result[int(ea)] = name
+        except Exception as exc:
+            print(f"[IDAT-Server] get_functions failed: {exc}")
+            return {"status": "error", "message": str(exc)}
+
+        return {"status": "success", "functions": result}
 
     def _handle_set_pseudocode_line_comments(self, payload: dict) -> dict:
         """为指定函数设置“伪代码行注释”。

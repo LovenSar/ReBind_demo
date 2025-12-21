@@ -283,6 +283,8 @@ def run_semantic_align(
     phase5_only_force_all: bool = False,
     db_path_override: Optional[Path] = None,
     dump_db_only: bool = False,
+    sync_ida_before_dump: bool = False,
+    unlock_locked_on_sync: bool = False,
 ) -> None:
     """Call semantic_align.py for each sample after both headless tools finish."""
 
@@ -305,6 +307,10 @@ def run_semantic_align(
                     "请使用 --db 指定已有 DB，或先运行完整流水线生成 DB。"
                 )
             cmd.extend(["--db", str(target_db), "--dump-db-only"])
+            if sync_ida_before_dump:
+                cmd.append("--sync-ida-before-dump")
+            if unlock_locked_on_sync:
+                cmd.append("--unlock-locked-on-sync")
         elif phase5_only or phase5_only_force_all:
             target_db = db_for_sample or default_db_path
             if not target_db.exists():
@@ -605,6 +611,16 @@ def main():
         action="store_true",
         help="仅基于已有 DB 导出 TXT/XLSX 快照（不会运行 Ghidra/IDA/Phase1-5）。",
     )
+    parser.add_argument(
+        "--sync-ida-before-dump",
+        action="store_true",
+        help="导出前先从 IDA 同步函数名到 DB（需配合 --dump-db-only 使用，会启动 IDA）。",
+    )
+    parser.add_argument(
+        "--unlock-locked-on-sync",
+        action="store_true",
+        help="同步 IDA 时解锁所有 LOCKED 状态（配合 --sync-ida-before-dump 使用）。",
+    )
     
     args = parser.parse_args()
     
@@ -657,6 +673,8 @@ def main():
                 semantics_runtime=demo.semantics_runtime,
                 db_path_override=db_override,
                 dump_db_only=True,
+                sync_ida_before_dump=args.sync_ida_before_dump,
+                unlock_locked_on_sync=args.unlock_locked_on_sync,
             )
             return
 
