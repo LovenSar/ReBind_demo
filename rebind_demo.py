@@ -100,9 +100,15 @@ def _overrides_change_base(base: Dict[str, Any], override: Dict[str, Any]) -> bo
         if key not in base:
             return True
         base_value = base[key]
+        if value is None:
+            if base_value is not None:
+                return True
+            continue
         if isinstance(base_value, dict) and isinstance(value, dict):
             if _overrides_change_base(base_value, value):
                 return True
+        elif isinstance(base_value, dict) or isinstance(value, dict):
+            return True
         elif base_value != value:
             return True
     return False
