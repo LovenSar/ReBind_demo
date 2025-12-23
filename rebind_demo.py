@@ -93,6 +93,21 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return merged
 
 
+def _overrides_change_base(base: Dict[str, Any], override: Dict[str, Any]) -> bool:
+    """Check whether override introduces any changes compared to base."""
+
+    for key, value in override.items():
+        if key not in base:
+            return True
+        base_value = base[key]
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            if _overrides_change_base(base_value, value):
+                return True
+        elif base_value != value:
+            return True
+    return False
+
+
 def _detect_platform_key(explicit: Optional[str] = None) -> str:
     if explicit:
         key = explicit.strip().lower()
@@ -480,11 +495,9 @@ class ReBindDemo:
         normalized_common = _normalize_module_overrides(section_key, overrides_common_dict)
         normalized_platform = _normalize_module_overrides(section_key, overrides_platform_dict)
         merged_overrides = _deep_merge_dicts(normalized_common, normalized_platform)
-        if not merged_overrides:
+        if not merged_overrides or not _overrides_change_base(base_config, merged_overrides):
             return base_path
         merged_config = _deep_merge_dicts(base_config, merged_overrides)
-        if merged_config == base_config:
-            return base_path
         prefix = f"{module_dir_name.lower()}_config_"
         return _write_temp_config(merged_config, prefix=prefix)
     
