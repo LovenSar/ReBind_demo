@@ -480,8 +480,10 @@ class ReBindDemo:
         normalized_common = _normalize_module_overrides(section_key, overrides_common_dict)
         normalized_platform = _normalize_module_overrides(section_key, overrides_platform_dict)
         merged_overrides = _deep_merge_dicts(normalized_common, normalized_platform)
+        if not merged_overrides:
+            return base_path
         merged_config = _deep_merge_dicts(base_config, merged_overrides)
-        if not merged_overrides or merged_config == base_config:
+        if merged_config == base_config:
             return base_path
         prefix = f"{module_dir_name.lower()}_config_"
         return _write_temp_config(merged_config, prefix=prefix)
