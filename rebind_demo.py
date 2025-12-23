@@ -104,15 +104,18 @@ def _overrides_change_base(base: Dict[str, Any], override: Dict[str, Any]) -> bo
         if key not in base:
             return True
         base_value = base[key]
+        if value is None and base_value is not None:
+            return True
         if value is None:
-            if base_value is not None:
-                return True
             continue
         if isinstance(base_value, dict) and isinstance(value, dict):
             if _overrides_change_base(base_value, value):
                 return True
-        elif isinstance(base_value, dict) or isinstance(value, dict):
-            # Structural change: dict replaced with non-dict (or vice versa).
+        elif isinstance(base_value, dict) and not isinstance(value, dict):
+            # Structural change: dict replaced with non-dict.
+            return True
+        elif not isinstance(base_value, dict) and isinstance(value, dict):
+            # Structural change: non-dict replaced with dict.
             return True
         elif base_value != value:
             return True
@@ -507,7 +510,9 @@ class ReBindDemo:
         normalized_platform = _normalize_module_overrides(section_key, overrides_platform_dict)
         merged_overrides = _deep_merge_dicts(normalized_common, normalized_platform)
         # No overrides to apply; reuse the existing module config file directly.
-        if not merged_overrides or not _overrides_change_base(base_config, merged_overrides):
+        if not merged_overrides:
+            return base_path
+        if not _overrides_change_base(base_config, merged_overrides):
             return base_path
         merged_config = _deep_merge_dicts(base_config, merged_overrides)
         prefix = f"{module_dir_name.lower()}_config_"
