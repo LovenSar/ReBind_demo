@@ -94,7 +94,11 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
 
 
 def _overrides_change_base(base: Dict[str, Any], override: Dict[str, Any]) -> bool:
-    """Check whether override introduces any changes compared to base."""
+    """Check whether override introduces any changes compared to base.
+
+    Only keys that appear in override are inspected (base-only keys are ignored).
+    Setting a value to None is treated as a change unless the base value is also None.
+    """
 
     for key, value in override.items():
         if key not in base:
