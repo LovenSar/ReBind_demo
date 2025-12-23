@@ -104,18 +104,15 @@ def _overrides_change_base(base: Dict[str, Any], override: Dict[str, Any]) -> bo
         if key not in base:
             return True
         base_value = base[key]
-        if value is None and base_value is not None:
-            return True
         if value is None:
-            continue
+            if base_value is None:
+                continue
+            return True
         if isinstance(base_value, dict) and isinstance(value, dict):
             if _overrides_change_base(base_value, value):
                 return True
-        elif isinstance(base_value, dict) and not isinstance(value, dict):
-            # Structural change: dict replaced with non-dict.
-            return True
-        elif not isinstance(base_value, dict) and isinstance(value, dict):
-            # Structural change: non-dict replaced with dict.
+        elif isinstance(base_value, dict) != isinstance(value, dict):
+            # Structural change: dict swapped with non-dict (or vice versa).
             return True
         elif base_value != value:
             return True
