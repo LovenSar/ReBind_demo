@@ -9,7 +9,7 @@ without importing the legacy entrypoint.
 from __future__ import annotations
 
 import logging
-from typing import Dict, Set
+from typing import Dict, Iterable, Optional, Set
 
 from .kp_types import UnifiedGraph
 
@@ -20,20 +20,39 @@ logger = logging.getLogger(__name__)
 def compute_unified_scores(
     graph: UnifiedGraph,
     analysis_info: Dict[int, dict],
+    *,
+    only_entry_vas: Optional[Iterable[int]] = None,
+    analyzed_entry_vas: Optional[Set[int]] = None,
 ) -> Dict[int, int]:
     """Compute heuristic scores for each unified function node (keyed by entry_va)."""
 
-    analyzed_entry_vas: Set[int] = set()
-    for entry_va, node in graph.nodes.items():
-        for fid in node.function_ids:
-            info = analysis_info.get(int(fid))
-            if info and info.get("analysis_state") in ("ANALYZED", "LOCKED"):
-                analyzed_entry_vas.add(int(entry_va))
-                break
+    if analyzed_entry_vas is None:
+        analyzed_entry_vas = set()
+        fid_to_entry = getattr(graph, "function_id_to_entry_va", None)
+        if isinstance(fid_to_entry, dict) and fid_to_entry:
+            for fid, info in analysis_info.items():
+                if not info:
+                    continue
+                if info.get("analysis_state") in ("ANALYZED", "LOCKED"):
+                    entry_va = fid_to_entry.get(int(fid))
+                    if entry_va is not None:
+                        analyzed_entry_vas.add(int(entry_va))
+        else:
+            for entry_va, node in graph.nodes.items():
+                for fid in node.function_ids:
+                    info = analysis_info.get(int(fid))
+                    if info and info.get("analysis_state") in ("ANALYZED", "LOCKED"):
+                        analyzed_entry_vas.add(int(entry_va))
+                        break
 
     scores: Dict[int, int] = {}
 
-    for entry_va, node in graph.nodes.items():
+    entry_vas = list(only_entry_vas) if only_entry_vas is not None else list(graph.nodes.keys())
+
+    for entry_va in entry_vas:
+        node = graph.nodes.get(int(entry_va))
+        if node is None:
+            continue
         n_ext_apis = len(node.external_callee_names)
         n_strings = len(node.string_refs)
         n_internal = len(node.internal_callee_vas)

@@ -2676,3 +2676,6 @@
 2025-12-20 23:43:23,166 - ghidra_adapter - INFO - Ghidra分析完成
 2025-12-20 23:43:23,166 - ghidra_adapter - INFO - 处理输出文件...
 2025-12-20 23:43:23,168 - ghidra_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_ghidemo
+2026-02-05 13:01:24,937 - ghidra_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\CSAgent.sys
+2026-02-05 13:01:24,938 - ghidra_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_ghidemo
+2026-02-05 13:01:24,966 - ghidra_adapter - INFO - 执行Ghidra命令...

@@ -25,8 +25,10 @@ alignment_loader.py
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import hashlib
+import json
 import re
 import sqlite3
 import textwrap
@@ -35,9 +37,10 @@ import inspect
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Tuple, List, Set, Dict
+from typing import Any, Iterable, Optional, Tuple, List, Set, Dict
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 
 def _install_print_with_location() -> None:
@@ -199,6 +202,9 @@ def init_db(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_strings_view_addr ON strings(view_id, address_va);"
+    )
 
     # 函数表（统一视图）
     conn.execute(
@@ -261,6 +267,18 @@ def init_db(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(view_id) REFERENCES binary_views(id)
         );
         """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_xrefs_view_src ON xrefs(view_id, src_va);"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_xrefs_view_dst ON xrefs(view_id, dst_va);"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_xrefs_view_ref ON xrefs(view_id, ref_type_raw);"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_instructions_view_func ON instructions(view_id, function_id);"
     )
 
     # 伪代码函数（函数级语义视图）
@@ -1495,6 +1513,37 @@ def export_sqlite_to_workbook(
 ) -> None:
     """导出所有表数据到 Excel 工作簿。"""
 
+    def _excel_safe_cell_value(value: Any) -> Any:
+        if value is None:
+            return None
+
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            raw = bytes(value)
+            if not raw:
+                return ""
+            encoded = base64.b64encode(raw).decode("ascii")
+            return f"base64:{encoded}"
+
+        if isinstance(value, (int, float, bool)):
+            return value
+
+        if isinstance(value, str):
+            if ILLEGAL_CHARACTERS_RE.search(value):
+                value = ILLEGAL_CHARACTERS_RE.sub("", value)
+            if len(value) > 32767:
+                value = value[:32767]
+            return value
+
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+        if ILLEGAL_CHARACTERS_RE.search(text):
+            text = ILLEGAL_CHARACTERS_RE.sub("", text)
+        if len(text) > 32767:
+            text = text[:32767]
+        return text
+
     conn = sqlite3.connect(str(db_path))
     try:
         cur = conn.cursor()
@@ -1521,7 +1570,7 @@ def export_sqlite_to_workbook(
             if colnames:
                 sheet.append(colnames)
             for row in cur:
-                sheet.append([None if v is None else v for v in row])
+                sheet.append([_excel_safe_cell_value(v) for v in row])
 
         if not created_sheet:
             fallback = _unique_sheet_title("sqlite_meta", used_titles)

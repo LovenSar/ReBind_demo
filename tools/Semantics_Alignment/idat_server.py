@@ -616,6 +616,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         ea = payload.get("ea")
         name = payload.get("name") or ""
         comment = payload.get("comment") or ""
+        emit_pseudocode = bool(payload.get("emit_pseudocode", True))
 
         if ea is None:
             return {"status": "error", "msg": "missing 'ea'"}
@@ -660,7 +661,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 cfunc = ida_hexrays.decompile(ea)
-                if cfunc:
+                if emit_pseudocode and cfunc:
                     lines = []
                     for pline in cfunc.get_pseudocode():
                         try:

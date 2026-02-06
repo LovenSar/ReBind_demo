@@ -7,6 +7,8 @@ Goal: allow semantic_align + phases to run without importing knowledge_propagati
 
 from __future__ import annotations
 
+import copy
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -27,6 +29,31 @@ class LLMSettings:
     max_tokens: int
     api_settings: Dict[str, Any]
     chat_completion_kwargs: Dict[str, Any]
+
+
+def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _detect_platform_key() -> str:
+    sys_name = platform.system().strip().lower()
+    if sys_name.startswith(("win", "msys", "cygwin", "mingw")):
+        return "windows"
+    if sys_name.startswith("darwin") or sys_name.startswith("mac"):
+        return "macos"
+    if sys_name.startswith("linux"):
+        return "linux"
+    return sys_name or "unknown"
 
 
 def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Optional[Path] = None) -> Dict[str, Any]:
@@ -57,6 +84,34 @@ def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Option
         return {}
     if not isinstance(data, dict):
         raise RuntimeError(f"配置文件 {path} 必须是一个字典结构。")
+
+    # Support being pointed at the repo's global config.yaml (with `semantics:` + `platforms:`).
+    # Merge order: module defaults < semantics common overrides < platform overrides.
+    if "semantics" in data or "platforms" in data:
+        base_root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parents[1]
+        base_config_path = base_root / "config.yaml"
+        base_config: Dict[str, Any] = {}
+        if base_config_path.exists():
+            try:
+                with base_config_path.open("r", encoding="utf-8") as fp:
+                    loaded_base = yaml.safe_load(fp) or {}
+                if isinstance(loaded_base, dict):
+                    base_config = loaded_base
+            except yaml.YAMLError as exc:
+                raise RuntimeError(f"无法解析配置文件 {base_config_path}：{exc}") from exc
+
+        semantics_common = data.get("semantics") if isinstance(data.get("semantics"), dict) else {}
+        platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
+        platform_key = _detect_platform_key()
+        platform_semantics: Dict[str, Any] = {}
+        by_os = platforms.get(platform_key) if isinstance(platforms.get(platform_key), dict) else {}
+        if isinstance(by_os, dict):
+            platform_semantics = by_os.get("semantics") if isinstance(by_os.get("semantics"), dict) else {}
+
+        merged = _deep_merge_dicts(base_config, semantics_common)
+        merged = _deep_merge_dicts(merged, platform_semantics)
+        return merged
+
     return data
 
 
@@ -107,6 +162,10 @@ def build_llm_settings(
 
     api_settings: Dict[str, Any] = {k: v for k, v in api_section.items() if v is not None}
     api_settings.setdefault("key_env_var", DEFAULT_API_KEY_ENV)
+    # kp_llm.require_openai() 会在启动时进行 key 探针（用于剔除已被 429 限流的 keys）。
+    # 部分 OpenAI 兼容网关不支持 /models，因此探针会优先走一个极小的 chat 请求；
+    # 这里把最终模型名放进 api_settings，方便探针使用正确的 model。
+    api_settings.setdefault("model", str(final_model))
 
     raw_chat_kwargs = llm_section.get("chat_completion_kwargs") or {}
     chat_kwargs: Dict[str, Any] = dict(raw_chat_kwargs) if isinstance(raw_chat_kwargs, dict) else {}

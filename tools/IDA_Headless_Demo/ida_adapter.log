@@ -1282,3 +1282,20 @@
 2025-12-20 23:43:37,820 - ida_adapter - INFO - 所有脚本执行完成
 2025-12-20 23:43:37,821 - ida_adapter - INFO - 处理输出文件...
 2025-12-20 23:43:37,822 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\firebox_re\liblogxlate_so_idademo
+2026-02-05 14:02:49,569 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\CSAgent.sys
+2026-02-05 14:02:49,570 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_idademo
+2026-02-05 14:02:49,577 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2026-02-05 14:04:57,387 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2026-02-05 14:04:57,387 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2026-02-05 14:07:41,919 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2026-02-05 14:07:41,919 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2026-02-05 14:24:31,384 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2026-02-05 14:24:31,385 - ida_adapter - INFO - 所有脚本执行完成
+2026-02-05 14:24:31,386 - ida_adapter - INFO - 处理输出文件...
+2026-02-05 14:24:31,389 - ida_adapter - INFO - 分析完成，输出目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_idademo
+2026-02-05 14:34:57,112 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\CSAgent.sys
+2026-02-05 14:34:57,113 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_idademo
+2026-02-05 14:34:57,120 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2026-02-05 14:35:48,269 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\CSAgent.sys
+2026-02-05 14:35:48,270 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_idademo
+2026-02-05 14:35:48,275 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py

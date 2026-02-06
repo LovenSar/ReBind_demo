@@ -11,6 +11,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from kp.kp_ida import wait_for_ida_server
+from kp.kp_graph import hydrate_unified_xrefs_for_nodes
 from kp.kp_llm import build_chat_request, call_llm_analyze_function
 from kp.kp_sync import _extract_name_from_signature, _make_name_unique, _sync_with_ida_and_update_db
 from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedGraph
@@ -157,6 +158,21 @@ def analyze_one_unified_function(
 
     node = graph.nodes[entry_va]
 
+    # Large-DB fast-path: if the unified graph was built without full xref scans,
+    # hydrate strings/call edges only for the current target.
+    try:
+        hydrate_unified_xrefs_for_nodes(
+            conn,
+            graph,
+            [node],
+            include_strings=True,
+            include_calls=True,
+            max_strings_per_node=int(max_strings or 0),
+        )
+    except Exception:
+        # Hydration is best-effort; prompt can still be built without these fields.
+        pass
+
     # 标记：该函数进入 Phase1-Pending 序列（供 Phase2 后续筛选）
     try:
         cur = conn.cursor()
@@ -232,6 +248,18 @@ def analyze_unified_batch(
         pass
 
     if prompt is None:
+        # Large-DB fast-path: hydrate strings/call edges only for this batch.
+        try:
+            hydrate_unified_xrefs_for_nodes(
+                conn,
+                graph,
+                nodes,
+                include_strings=True,
+                include_calls=True,
+                max_strings_per_node=20,
+            )
+        except Exception:
+            pass
         prompt = build_unified_batch_prompt(conn, graph, nodes, analysis_info)
 
     conversation, request_kwargs = build_chat_request(prompt, llm_settings)

@@ -184,28 +184,38 @@ def _prune_rate_limited_keys_on_startup(api_settings: Dict[str, Any], env_keys: 
                 openai.api_key = key  # type: ignore[attr-defined]
                 client = openai
 
-            # 优先使用 models.list() 作为轻量探针（同时支持属性或可调用返回对象的形式）
-            models_attr = getattr(client, "models", None)
             probed = False
-            if models_attr is not None:
-                try:
+            # 说明：
+            # - 许多 OpenAI 兼容网关并不实现 /models，因此 models.list() 可能返回 404 并产生噪声日志。
+            # - 这里改为优先发送一个极小的 chat 请求作为探针（max_tokens=1），以便更通用地探测 429 限流。
+            if hasattr(client, "chat") and hasattr(client.chat, "completions"):
+                client.chat.completions.create(  # type: ignore[attr-defined]
+                    model=model,
+                    messages=[{"role": "system", "content": "ping"}],
+                    max_tokens=1,
+                )
+                probed = True
+            elif hasattr(client, "ChatCompletion"):
+                client.ChatCompletion.create(  # type: ignore[attr-defined]
+                    model=model,
+                    messages=[{"role": "system", "content": "ping"}],
+                    max_tokens=1,
+                )
+                probed = True
+
+            # 兼容极少数缺少 chat 接口的客户端：退回到 models.list()
+            if not probed:
+                models_attr = getattr(client, "models", None)
+                if models_attr is not None:
                     models_obj = models_attr() if callable(models_attr) else models_attr
                     if hasattr(models_obj, "list"):
                         models_obj.list()  # type: ignore[attr-defined]
                         probed = True
-                except Exception as exc:
-                    raise
 
             if not probed:
-                if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-                    # 退回到发送一个非常小的聊天请求
-                    client.chat.completions.create(model=model, messages=[{"role": "system", "content": "ping"}], max_tokens=1)  # type: ignore[attr-defined]
-                elif hasattr(client, "ChatCompletion"):
-                    client.ChatCompletion.create(model=model, messages=[{"role": "system", "content": "ping"}], max_tokens=1)  # type: ignore[attr-defined]
-                else:
-                    # 无法探测的客户端，保守起见保留该 key
-                    kept.append(key)
-                    continue
+                # 无法探测的客户端，保守起见保留该 key
+                kept.append(key)
+                continue
 
             # 如果探针没有抛出异常，则保留 key
             kept.append(key)

@@ -123,6 +123,9 @@ class UnifiedGraph:
     nodes: Dict[int, UnifiedFunctionNode]
     tool_map: Dict[int, str]
     func_tool: Dict[int, str]
+    # Performance helpers (built once in kp_graph, reused by scoring/hydration)
+    function_id_to_entry_va: Dict[int, int] = field(default_factory=dict)
+    function_id_to_view_id: Dict[int, int] = field(default_factory=dict)
 
 
 @dataclass

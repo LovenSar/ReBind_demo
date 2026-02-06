@@ -101,7 +101,7 @@ def _detect_platform_key(explicit: Optional[str] = None) -> str:
         raise ValueError(f"不支持的 --platform={explicit!r}，仅支持 windows/macos/linux")
 
     sys_name = platform.system().strip().lower()
-    if sys_name.startswith("win"):
+    if sys_name.startswith(("win", "msys", "cygwin", "mingw")):
         return "windows"
     if sys_name.startswith("darwin") or sys_name.startswith("mac"):
         return "macos"
