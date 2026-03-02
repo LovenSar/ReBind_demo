@@ -6,3 +6,6 @@ tmp/*
 
 tools/IDA_Headless_Demo/*.log
 *.bat
+.DS_Store
+tools/Ghidra_Headless_Demo/*
+tools/IDA_Headless_Demo/*

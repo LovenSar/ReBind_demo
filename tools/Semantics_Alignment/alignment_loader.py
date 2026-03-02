@@ -1474,8 +1474,6 @@ def load_ida_view(
 
 
 _INVALID_SHEET_TITLE_RE = re.compile(r"[:\\/?*\[\]]")
-
-
 def _sanitize_sheet_title(name: str) -> str:
     """生成兼容 Excel 的 sheet 名称。"""
 
