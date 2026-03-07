@@ -84,6 +84,16 @@ def init_db(conn: sqlite3.Connection) -> None:
     """
     # 开启外键约束（SQLite 默认关闭）
     conn.execute("PRAGMA foreign_keys = ON;")
+    # 本地离线流水线默认启用更高吞吐的 SQLite 参数。
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+        # Negative means KiB; 128 MiB page cache for large imports.
+        conn.execute("PRAGMA cache_size = -131072;")
+    except Exception:
+        pass
 
     # 工具表：记录 Ghidra / IDA 等工具
     conn.execute(

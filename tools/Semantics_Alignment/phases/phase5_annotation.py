@@ -8,6 +8,7 @@ This module is extracted from knowledge_propagation.py to keep the entrypoint th
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -376,6 +377,245 @@ def _pseudo_body_already_annotated(body: str) -> bool:
     return head.count("//") >= 3
 
 
+def _run_offline_annotation_llm(
+    *,
+    entry_va: int,
+    display_name: str,
+    tool_name: str,
+    code: str,
+    context_summary: str,
+    llm_settings: Any,
+    llm_single_max_lines: int,
+    llm_medium_max_lines: int,
+    llm_medium_chunk_size: int,
+    llm_large_chunk_size: int,
+    max_comments_per_prompt: int,
+    max_comments_ratio: float,
+    max_duplicate_comment_occurrences: int,
+    log_llm_response: bool,
+    log_llm_response_max_chars: int,
+) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Offline-only LLM runner for one Phase5 entry (no IDA snapshot/sync)."""
+    all_lines = (code or "").splitlines()
+    if not all_lines:
+        return {}, {}
+
+    chunk_size = 0
+    if len(all_lines) > int(llm_medium_max_lines or 160):
+        chunk_size = max(1, int(llm_large_chunk_size or 80))
+    elif len(all_lines) > int(llm_single_max_lines or 80):
+        chunk_size = max(1, int(llm_medium_chunk_size or 120))
+
+    max_total_tokens = int(getattr(llm_settings, "max_tokens", 0) or 0)
+    if max_total_tokens <= 0:
+        max_total_tokens = 6000
+    prompt_token_budget = max(512, int(max_total_tokens * 0.55))
+
+    def _make_prompt(chunk_lines: List[str], start_line_no: int, ctx_summary: str) -> str:
+        base = int(start_line_no) if start_line_no > 0 else 1
+        numbered = "\n".join(f"{(base + i - 1):03d}: {ln}" for i, ln in enumerate(chunk_lines, 1))
+        comment_cap = _compute_comment_cap(
+            len(chunk_lines),
+            max_comments_per_prompt,
+            max_comments_ratio,
+        )
+        return pmt_prompts.line_annotation_prompt(
+            node_name=f"{display_name} ({tool_name})",
+            context_summary=ctx_summary,
+            numbered_code=numbered,
+            extra_sections="",
+            max_comment_count=comment_cap,
+        )
+
+    def _align_chunk_comments(raw_obj: Any, start_no: int, end_no: int) -> Dict[str, str]:
+        norm = _normalize_line_comments_map(raw_obj)
+        if not norm:
+            return {}
+        in_range: Dict[str, str] = {}
+        for k, v in norm.items():
+            try:
+                idx = int(str(k).strip())
+            except Exception:
+                continue
+            if start_no <= idx <= end_no:
+                in_range[str(idx)] = v
+        if in_range:
+            return in_range
+        if start_no > 1:
+            keys: List[int] = []
+            for k in norm.keys():
+                try:
+                    keys.append(int(str(k).strip()))
+                except Exception:
+                    pass
+            if keys:
+                min_idx = min(keys)
+                max_idx = max(keys)
+                span = end_no - start_no + 1
+                if min_idx == 1 and max_idx <= max(1, span):
+                    remapped: Dict[str, str] = {}
+                    for k, v in norm.items():
+                        try:
+                            idx = int(str(k).strip())
+                        except Exception:
+                            continue
+                        new_idx = idx + start_no - 1
+                        if start_no <= new_idx <= end_no:
+                            remapped[str(new_idx)] = v
+                    return remapped
+        return {}
+
+    initial_ranges: List[Tuple[int, int]] = []
+    if chunk_size == 0:
+        initial_ranges = [(0, len(all_lines))]
+    else:
+        total = (len(all_lines) + chunk_size - 1) // chunk_size
+        for cidx in range(total):
+            s = cidx * chunk_size
+            e = min(len(all_lines), s + chunk_size)
+            initial_ranges.append((s, e))
+
+    planned: List[Tuple[int, int, str, int]] = []
+    queue: List[Tuple[int, int]] = list(initial_ranges)
+    while queue:
+        s, e = queue.pop(0)
+        chunk_lines = all_lines[s:e]
+        if not chunk_lines:
+            continue
+        start_no = s + 1
+        end_no = e
+        ctx = context_summary
+        prompt = _make_prompt(chunk_lines, start_no, ctx)
+        est = int(estimate_token_usage(prompt))
+        if est > prompt_token_budget:
+            if (e - s) <= 1:
+                short_ctx = ctx
+                if len(short_ctx) > 1500:
+                    short_ctx = short_ctx[:1500] + "..."
+                prompt = _make_prompt(chunk_lines, start_no, short_ctx)
+                est = int(estimate_token_usage(prompt))
+                planned.append((s, e, prompt, est))
+                continue
+            mid = s + (e - s) // 2
+            queue = [(s, mid), (mid, e)] + queue
+            continue
+        planned.append((s, e, prompt, est))
+
+    merged_line_comments: Dict[str, str] = {}
+    metadata_obj: Dict[str, Any] = {}
+    work_q: List[Tuple[int, int, int]] = [(s, e, 0) for (s, e, _p, _t) in planned]
+    processed_chunks = 0
+    while work_q:
+        s, e, depth = work_q.pop(0)
+        chunk_lines = all_lines[s:e]
+        if not chunk_lines:
+            continue
+        start_no = s + 1
+        end_no = e
+        ctx = context_summary
+        if depth > 0 and len(ctx) > 1500:
+            ctx = ctx[:1500] + "..."
+        prompt = _make_prompt(chunk_lines, start_no, ctx)
+        conversation, request_kwargs = build_chat_request(prompt, llm_settings)
+
+        raw_logger = None
+        if log_llm_response:
+            chunk_seq = processed_chunks + 1
+
+            def _log_raw_response(
+                text: str,
+                *,
+                seq=chunk_seq,
+                start=start_no,
+                end=end_no,
+                d=depth,
+                eva=entry_va,
+            ) -> None:
+                formatted = _format_llm_response_for_log(text or "", log_llm_response_max_chars)
+                logger.info(
+                    "[Phase 5] LLM 响应 entry_va=0x%08X chunk=%d lines=%d-%d depth=%d:\n%s",
+                    eva,
+                    seq,
+                    start,
+                    end,
+                    d,
+                    formatted,
+                )
+
+            raw_logger = _log_raw_response
+
+        try:
+            chunk_result = call_llm_analyze_function(
+                conversation=conversation,
+                request_kwargs=request_kwargs,
+                api_settings=llm_settings.api_settings,
+                return_raw_on_error=True,
+                on_raw_text=raw_logger,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[Phase 5] LLM 调用异常 entry_va=0x%08X chunk=%d/%d: %s",
+                entry_va,
+                processed_chunks + 1,
+                len(planned),
+                exc,
+            )
+            chunk_result = {}
+
+        if not isinstance(chunk_result, dict) or "_raw_text" in chunk_result:
+            if (e - s) > 1:
+                mid = s + (e - s) // 2
+                work_q = [(s, mid, depth + 1), (mid, e, depth + 1)] + work_q
+                continue
+            continue
+
+        comment_cap = _compute_comment_cap(
+            len(chunk_lines),
+            max_comments_per_prompt,
+            max_comments_ratio,
+        )
+        cmts = _align_chunk_comments(chunk_result.get("line_comments"), start_no, end_no)
+        if cmts and (comment_cap > 0 or max_duplicate_comment_occurrences > 0):
+            pruned = _prune_comment_map(
+                cmts,
+                max_total=comment_cap,
+                max_dup=max_duplicate_comment_occurrences,
+            )
+            if len(pruned) < len(cmts):
+                logger.debug(
+                    "[Phase 5] 裁剪行注释 entry_va=0x%08X: %d -> %d",
+                    entry_va,
+                    len(cmts),
+                    len(pruned),
+                )
+            cmts = pruned
+        if cmts:
+            merged_line_comments.update(cmts)
+
+        if not metadata_obj:
+            meta = chunk_result.get("metadata")
+            if isinstance(meta, dict):
+                metadata_obj = meta
+        processed_chunks += 1
+
+    if merged_line_comments and max_duplicate_comment_occurrences > 0:
+        pruned = _prune_comment_map(
+            merged_line_comments,
+            max_total=0,
+            max_dup=max_duplicate_comment_occurrences,
+        )
+        if len(pruned) < len(merged_line_comments):
+            logger.debug(
+                "[Phase 5] 归并后裁剪行注释 entry_va=0x%08X: %d -> %d",
+                entry_va,
+                len(merged_line_comments),
+                len(pruned),
+            )
+            merged_line_comments = pruned
+
+    return merged_line_comments, metadata_obj
+
+
 def run_annotation_phase(
     *,
     conn: sqlite3.Connection,
@@ -547,6 +787,191 @@ def run_annotation_phase(
     )
 
     pbar = tqdm(total=len(entry_candidates), desc="Phase 5: Annotation", unit="func")
+
+    offline_workers = 1
+    if (not ida_sync_active) and (not dry_run):
+        offline_workers = max(1, int(batch_size or 1))
+    if offline_workers > 1:
+        print(f"[Phase 5] 离线并发注释已启用: workers={offline_workers}")
+
+        cur = conn.cursor()
+
+        def _commit_offline_result(
+            *,
+            entry_va: int,
+            pending_fids: List[int],
+            merged_line_comments: Dict[str, str],
+            metadata_obj: Dict[str, Any],
+        ) -> None:
+            if not merged_line_comments:
+                try:
+                    placeholders = ",".join("?" for _ in pending_fids)
+                    if placeholders:
+                        cur.execute(
+                            f"UPDATE analysis_status SET annotation_status = 2 WHERE function_id IN ({placeholders});",
+                            tuple(pending_fids),
+                        )
+                        conn.commit()
+                except Exception:
+                    pass
+                return
+
+            structured_json = json.dumps(metadata_obj, ensure_ascii=False)
+            try:
+                updated_any = False
+                for fid in pending_fids:
+                    cur.execute("SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;", (int(fid),))
+                    row = cur.fetchone()
+                    if not row:
+                        continue
+                    body = row[0] or ""
+                    if min_pseudo_lines and _count_effective_pseudocode_lines(body) < int(min_pseudo_lines):
+                        continue
+                    if _pseudo_body_already_annotated(body):
+                        updated_any = True
+                        continue
+                    new_body = apply_line_comments_to_code(body, merged_line_comments)
+                    cur.execute("UPDATE pseudo_functions SET body = ? WHERE function_id = ?;", (new_body, int(fid)))
+                    updated_any = True
+
+                placeholders = ",".join("?" for _ in pending_fids)
+                if placeholders:
+                    cur.execute(
+                        f"""
+                        UPDATE analysis_status
+                        SET annotation_status = 1,
+                            structured_analysis = ?
+                        WHERE function_id IN ({placeholders});
+                        """,
+                        (structured_json, *tuple(pending_fids)),
+                    )
+                conn.commit()
+
+                for fid in pending_fids:
+                    if int(fid) in analysis_info:
+                        analysis_info[int(fid)]["annotation_status"] = 1
+
+                if not updated_any:
+                    logger.info(
+                        "[Phase 5] entry_va=0x%08X 没有可更新的 pseudo_functions 记录，已仅写入 analysis_status。",
+                        entry_va,
+                    )
+            except Exception as exc:
+                logger.warning("[Phase 5] 写库失败 entry_va=0x%08X: %s", entry_va, exc)
+                try:
+                    placeholders = ",".join("?" for _ in pending_fids)
+                    if placeholders:
+                        cur.execute(
+                            f"UPDATE analysis_status SET annotation_status = 2 WHERE function_id IN ({placeholders});",
+                            tuple(pending_fids),
+                        )
+                        conn.commit()
+                except Exception:
+                    pass
+
+        future_meta: Dict[concurrent.futures.Future[Tuple[Dict[str, str], Dict[str, Any]]], Tuple[int, List[int]]] = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=offline_workers) as executor:
+            for entry_va, eff_lines in entry_candidates:
+                node = graph.nodes.get(int(entry_va))
+                if not node:
+                    pbar.update(1)
+                    continue
+
+                pending_fids: List[int] = []
+                if force_all:
+                    pending_fids = [int(x) for x in sorted(int(x) for x in node.function_ids)]
+                else:
+                    for fid in sorted(int(x) for x in node.function_ids):
+                        info = analysis_info.get(int(fid)) or {}
+                        if int(info.get("annotation_status", 0) or 0) == 0:
+                            pending_fids.append(int(fid))
+                if not pending_fids:
+                    pbar.update(1)
+                    continue
+
+                tool_name, code = _pick_preferred_pseudocode(node)
+                code = (code or "").strip()
+                if not code:
+                    pbar.update(1)
+                    continue
+                if min_pseudo_lines and _count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
+                    pbar.update(1)
+                    continue
+                if max_code_chars and len(code) > int(max_code_chars):
+                    code = code[: int(max_code_chars) - 3] + "..."
+
+                display_name = "/".join(sorted(node.names)) if node.names else f"sub_{entry_va:08X}"
+                pbar.set_description(f"Phase 5: 0x{entry_va:08X} (lines={eff_lines})")
+                context_summary = _build_annotation_context_summary(
+                    conn=conn,
+                    graph=graph,
+                    node=node,
+                    analysis_info=analysis_info,
+                    max_disasm_lines=ann_ctx_max_disasm_lines,
+                    max_pseudo_chars_per_tool=ann_ctx_max_pseudo_chars,
+                    max_strings=ann_ctx_max_strings,
+                )
+
+                fut = executor.submit(
+                    _run_offline_annotation_llm,
+                    entry_va=int(entry_va),
+                    display_name=display_name,
+                    tool_name=tool_name,
+                    code=code,
+                    context_summary=context_summary,
+                    llm_settings=llm_settings,
+                    llm_single_max_lines=llm_single_max_lines,
+                    llm_medium_max_lines=llm_medium_max_lines,
+                    llm_medium_chunk_size=llm_medium_chunk_size,
+                    llm_large_chunk_size=llm_large_chunk_size,
+                    max_comments_per_prompt=max_comments_per_prompt,
+                    max_comments_ratio=max_comments_ratio,
+                    max_duplicate_comment_occurrences=max_duplicate_comment_occurrences,
+                    log_llm_response=log_llm_response,
+                    log_llm_response_max_chars=log_llm_response_max_chars,
+                )
+                future_meta[fut] = (int(entry_va), list(pending_fids))
+
+                # Keep a small buffer to avoid queuing too many large prompts in memory.
+                while len(future_meta) >= max(offline_workers * 2, 2):
+                    done, _pending = concurrent.futures.wait(
+                        list(future_meta.keys()),
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    for completed in done:
+                        c_entry_va, c_pending_fids = future_meta.pop(completed)
+                        try:
+                            merged_line_comments, metadata_obj = completed.result()
+                        except Exception as exc:
+                            logger.warning("[Phase 5] 离线并发任务失败 entry_va=0x%08X: %s", c_entry_va, exc)
+                            merged_line_comments, metadata_obj = {}, {}
+                        _commit_offline_result(
+                            entry_va=c_entry_va,
+                            pending_fids=c_pending_fids,
+                            merged_line_comments=merged_line_comments,
+                            metadata_obj=metadata_obj,
+                        )
+                        pbar.update(1)
+
+            for completed in concurrent.futures.as_completed(list(future_meta.keys())):
+                c_entry_va, c_pending_fids = future_meta.pop(completed)
+                try:
+                    merged_line_comments, metadata_obj = completed.result()
+                except Exception as exc:
+                    logger.warning("[Phase 5] 离线并发任务失败 entry_va=0x%08X: %s", c_entry_va, exc)
+                    merged_line_comments, metadata_obj = {}, {}
+                _commit_offline_result(
+                    entry_va=c_entry_va,
+                    pending_fids=c_pending_fids,
+                    merged_line_comments=merged_line_comments,
+                    metadata_obj=metadata_obj,
+                )
+                pbar.update(1)
+
+        pbar.close()
+        print("[Phase 5] 注释阶段完成。")
+        return
 
     for entry_va, eff_lines in entry_candidates:
         node = graph.nodes.get(int(entry_va))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Sequence, Tuple
 
 
@@ -119,6 +120,75 @@ def validation_batch_prompt(items: Sequence[Tuple[int, str]]) -> str:
         lines.append(f"\n[Item {idx}/{len(items)}] entry_va=0x{va:08X}\n{ctx}")
 
     return "\n".join(lines)
+
+
+def deep_path_step_prompt(
+    *,
+    step_index: int,
+    total_steps: int,
+    path_names: Sequence[str],
+    path_vas: Sequence[str],
+    from_name: str,
+    from_va: str,
+    to_name: str,
+    to_va: str,
+    edge: Dict[str, Any],
+    edge_block: str,
+    caller_code: str,
+    callee_code: str,
+    previous_steps: Sequence[Dict[str, Any]],
+) -> str:
+    prev_json = json.dumps(list(previous_steps), ensure_ascii=False, indent=2) if previous_steps else "[]"
+    path_text = " -> ".join(f"{n}({v})" for n, v in zip(path_names, path_vas))
+
+    prompt = f"""
+你是逆向工程分析员。现在要对一条“最深调用路径”做逐层条件推断。
+
+[目标]
+推断：
+1) 程序最开始可能需要什么输入（参数/环境/文件/网络/系统状态）；
+2) 在当前这一步 from -> to，最可能的进入条件是什么；
+3) 该条件与前序条件如何衔接（通常是 AND，也可能 UNKNOWN）。
+
+[整条路径]
+{path_text}
+
+[当前层]
+step_index={step_index}/{total_steps}
+from={from_name} ({from_va})
+to={to_name} ({to_va})
+
+[当前边证据]
+status={edge.get("status", "")}
+aggregated_env_signals={edge.get("aggregated_env_signals", [])}
+gating_strength={edge.get("gating_strength", 0)}
+{edge_block}
+
+[caller伪代码截断]
+{caller_code or "(empty)"}
+
+[callee伪代码截断]
+{callee_code or "(empty)"}
+
+[前序层已推断结果]
+{prev_json}
+
+[输出要求]
+只返回一个 JSON 对象，字段如下：
+{{
+  "step_index": {step_index},
+  "from": "{from_name}",
+  "to": "{to_name}",
+  "likely_initial_input": "从程序入口开始最可能触发这条路径的初始输入（可逐步修正）",
+  "required_state_now": "走到当前层时必须满足的状态/上下文",
+  "gate_condition": "当前 from->to 的关键分支条件（尽量可执行/可验证）",
+  "condition_relation_with_previous": "AND|OR|UNKNOWN",
+  "reasoning": "简要解释你为什么给出该条件（只写结论性理由，不要输出冗长过程）",
+  "evidence": ["证据1", "证据2"],
+  "confidence": 0.0
+}}
+"""
+    return prompt.strip()
 
 
 def global_var_single_prompt(

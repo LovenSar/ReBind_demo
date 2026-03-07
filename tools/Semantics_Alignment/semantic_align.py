@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import logging
 import os
 import platform
@@ -35,7 +36,7 @@ import sqlite3
 from urllib.parse import urlparse
 
 from dynamic_batching import yield_dynamic_batch
-from kp.kp_config import _get_cfg_int
+from kp.kp_config import _get_cfg_bool, _get_cfg_int
 from kp.kp_ida import IDAService
 from kp.kp_llm import estimate_token_usage
 from kp.kp_logging import install_stdout_tee, setup_logging
@@ -368,6 +369,54 @@ def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
     return int(row[0])
 
 
+def _configure_sqlite_runtime(conn: sqlite3.Connection, semantics_config: Optional[Dict[str, object]], logger: logging.Logger) -> None:
+    """Apply runtime SQLite tuning for long-running local pipelines."""
+    enable = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "enabled"), True)
+    if not enable:
+        return
+
+    busy_timeout_ms = max(0, _get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "busy_timeout_ms"), 5000))
+    cache_size_kib = max(0, _get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "cache_size_kib"), 131072))
+    use_wal = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "wal"), True)
+    use_temp_store_memory = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "temp_store_memory"), True)
+    use_sync_normal = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "synchronous_normal"), True)
+
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)};")
+    except Exception:
+        pass
+    if use_wal:
+        try:
+            conn.execute("PRAGMA journal_mode = WAL;")
+        except Exception:
+            pass
+    if use_sync_normal:
+        try:
+            conn.execute("PRAGMA synchronous = NORMAL;")
+        except Exception:
+            pass
+    if use_temp_store_memory:
+        try:
+            conn.execute("PRAGMA temp_store = MEMORY;")
+        except Exception:
+            pass
+    if cache_size_kib > 0:
+        try:
+            # Negative value means KiB for SQLite cache_size.
+            conn.execute(f"PRAGMA cache_size = {-int(cache_size_kib)};")
+        except Exception:
+            pass
+
+    logger.info(
+        "[SQLite] tuning applied: wal=%s sync_normal=%s temp_store_memory=%s cache_kib=%d busy_timeout_ms=%d",
+        use_wal,
+        use_sync_normal,
+        use_temp_store_memory,
+        cache_size_kib,
+        busy_timeout_ms,
+    )
+
+
 def _phase1_pending_nodes(
     graph: UnifiedGraph, analysis_info: Dict[int, dict]
 ) -> List[UnifiedFunctionNode]:
@@ -389,6 +438,14 @@ def _phase1_pending_nodes(
 
         targets.append(node)
     return targets
+
+
+def _phase1_node_pending(node: UnifiedFunctionNode, analysis_info: Dict[int, dict]) -> bool:
+    for fid in node.function_ids:
+        info = analysis_info.get(int(fid)) or {}
+        if (info.get("analysis_state") or "PENDING").upper() in ("ANALYZED", "LOCKED"):
+            return False
+    return True
 
 
 def _node_has_ida_subfunc_candidate(node: UnifiedFunctionNode, graph: UnifiedGraph) -> bool:
@@ -441,6 +498,7 @@ def run_semantic_pipeline(
 
     conn = sqlite3.connect(str(db_path))
     try:
+        _configure_sqlite_runtime(conn, semantics_config, logger)
         binary_id = _pick_single_binary_id(conn)
 
         # 若对齐库未正确加载视图，后续建图会失败；这里提前给出更明确的引导。
@@ -513,13 +571,24 @@ def run_semantic_pipeline(
             phase1_total_targets = len(phase1_targets)
             phase1_progress: Optional[tqdm] = None
             if phase1_total_targets:
-                print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数：")
-                for node in sorted(phase1_targets, key=lambda n: n.entry_va):
-                    if node.names:
-                        name_repr = ", ".join(sorted(node.names))
-                    else:
-                        name_repr = "(当前无语义命名)"
-                    print(f"  - entry_va=0x{int(node.entry_va):08X}, 原始名称={name_repr}")
+                preview_cap = max(0, _get_cfg_int(semantics_config, ("pipeline", "phase1", "target_preview_max"), 20))
+                sorted_targets = sorted(phase1_targets, key=lambda n: n.entry_va)
+                print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数。")
+                if preview_cap > 0:
+                    preview = sorted_targets[:preview_cap]
+                    for node in preview:
+                        if node.names:
+                            name_repr = ", ".join(sorted(node.names))
+                        else:
+                            name_repr = "(当前无语义命名)"
+                        print(f"  - entry_va=0x{int(node.entry_va):08X}, 原始名称={name_repr}")
+                    remain = len(sorted_targets) - len(preview)
+                    if remain > 0:
+                        print(f"  ... 其余 {remain} 个函数已省略（详见 debug 日志）。")
+                    logger.debug(
+                        "[Phase1] All targets: %s",
+                        ", ".join(f"0x{int(n.entry_va):08X}" for n in sorted_targets),
+                    )
                 phase1_progress = tqdm(
                     total=phase1_total_targets,
                     desc="[SemanticAlign] Phase 1",
@@ -529,29 +598,58 @@ def run_semantic_pipeline(
             else:
                 print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
 
-            while True:
-                candidates = [
-                    node
-                    for node in _phase1_pending_nodes(unified_graph, analysis_info)
-                    if int(node.entry_va) not in phase1_attempted
-                ]
-                if not candidates:
-                    break
+            phase1_nodes_by_va: Dict[int, UnifiedFunctionNode] = {int(n.entry_va): n for n in phase1_targets}
+            phase1_score_heap: List[tuple[int, int, int]] = []
+            phase1_heap_seq = 0
+            phase1_latest_seq: Dict[int, int] = {}
+            phase1_scores: Dict[int, int] = {}
 
-                # 对候选集计算分数，并取 Top-N
-                scores = {}
+            def _push_phase1_score(entry_va: int, score: int) -> None:
+                nonlocal phase1_heap_seq
+                phase1_heap_seq += 1
+                phase1_latest_seq[int(entry_va)] = phase1_heap_seq
+                phase1_scores[int(entry_va)] = int(score)
+                heapq.heappush(phase1_score_heap, (-int(score), phase1_heap_seq, int(entry_va)))
+
+            if phase1_nodes_by_va:
+                init_scores: Dict[int, int] = {}
                 try:
-                    scores = compute_unified_scores(
+                    init_scores = compute_unified_scores(
                         unified_graph,
                         analysis_info,
-                        only_entry_vas=[int(n.entry_va) for n in candidates],
+                        only_entry_vas=list(phase1_nodes_by_va.keys()),
                     )
                 except Exception:
-                    scores = {}
+                    init_scores = {}
+                for entry_va in phase1_nodes_by_va.keys():
+                    _push_phase1_score(int(entry_va), int(init_scores.get(int(entry_va), 0)))
 
-                candidates.sort(key=lambda n: int(scores.get(n.entry_va, 0)), reverse=True)
+            phase1_recompute_every_batches = max(
+                1,
+                _get_cfg_int(semantics_config, ("pipeline", "phase1", "score_recompute_every_batches"), 8),
+            )
+            phase1_batch_count = 0
+            phase1_scheduler_top_k = max(1, _get_cfg_int(semantics_config, ("pipeline", "phase1", "scheduler_top_k"), 50))
 
-                requested_nodes = candidates[: min(50, len(candidates))]
+            while phase1_score_heap:
+                requested_nodes: List[UnifiedFunctionNode] = []
+                requested_entry_vas: List[int] = []
+                while phase1_score_heap and len(requested_nodes) < phase1_scheduler_top_k:
+                    neg_score, seq, entry_va = heapq.heappop(phase1_score_heap)
+                    if phase1_latest_seq.get(int(entry_va)) != int(seq):
+                        continue
+                    node = phase1_nodes_by_va.get(int(entry_va))
+                    if node is None:
+                        continue
+                    if int(entry_va) in phase1_attempted:
+                        continue
+                    if not _phase1_node_pending(node, analysis_info):
+                        continue
+                    requested_nodes.append(node)
+                    requested_entry_vas.append(int(entry_va))
+
+                if not requested_nodes:
+                    break
 
                 def _phase1_builder(nodes):
                     # Large-DB fast-path: hydrate xref-derived context only for the current batch.
@@ -579,6 +677,14 @@ def run_semantic_pipeline(
                             token_estimator=estimate_token_usage,
                             initial_batch_size=len(requested_nodes),
                             min_batch_size=1,
+                            item_token_estimator=lambda n: (
+                                180
+                                + min(int(getattr(n, "instr_count", 0) or 0), 400)
+                                + min(len(getattr(n, "internal_callee_vas", set())), 60) * 12
+                                + min(len(getattr(n, "external_callee_names", set())), 40) * 8
+                                + min(len(getattr(n, "string_refs", set())), 40) * 6
+                            ),
+                            prompt_overhead_tokens=320,
                         )
                     )
                 except StopIteration:
@@ -587,6 +693,12 @@ def run_semantic_pipeline(
                 selected_nodes = batch.items
                 if not selected_nodes:
                     break
+                selected_entry_vas = {int(n.entry_va) for n in selected_nodes}
+                for entry_va in requested_entry_vas:
+                    if entry_va not in selected_entry_vas and entry_va not in phase1_attempted:
+                        node = phase1_nodes_by_va.get(int(entry_va))
+                        if node and _phase1_node_pending(node, analysis_info):
+                            _push_phase1_score(int(entry_va), int(phase1_scores.get(int(entry_va), 0)))
 
                 if len(selected_nodes) > 1:
                     phase1_analyze_unified_batch(
@@ -628,6 +740,51 @@ def run_semantic_pipeline(
                         phase1_progress.update(1)
 
                     analysis_info.update(load_analysis_info_for_fids(conn, {int(fid) for fid in node.function_ids}))
+
+                # 增量更新：优先刷新“受影响调用者”的分数；每 K 批做一次全量重算兜底。
+                impacted_entry_vas: Set[int] = set()
+                for node in selected_nodes:
+                    impacted_entry_vas.add(int(node.entry_va))
+                    for caller_va in getattr(node, "caller_vas", set()):
+                        impacted_entry_vas.add(int(caller_va))
+
+                impacted_candidates = [
+                    int(va)
+                    for va in impacted_entry_vas
+                    if int(va) in phase1_nodes_by_va
+                    and int(va) not in phase1_attempted
+                    and _phase1_node_pending(phase1_nodes_by_va[int(va)], analysis_info)
+                ]
+                if impacted_candidates:
+                    try:
+                        impacted_scores = compute_unified_scores(
+                            unified_graph,
+                            analysis_info,
+                            only_entry_vas=impacted_candidates,
+                        )
+                    except Exception:
+                        impacted_scores = {}
+                    for entry_va in impacted_candidates:
+                        _push_phase1_score(int(entry_va), int(impacted_scores.get(int(entry_va), 0)))
+
+                phase1_batch_count += 1
+                if phase1_batch_count % phase1_recompute_every_batches == 0:
+                    remaining = [
+                        int(va)
+                        for va, node in phase1_nodes_by_va.items()
+                        if int(va) not in phase1_attempted and _phase1_node_pending(node, analysis_info)
+                    ]
+                    if remaining:
+                        try:
+                            refreshed_scores = compute_unified_scores(
+                                unified_graph,
+                                analysis_info,
+                                only_entry_vas=remaining,
+                            )
+                        except Exception:
+                            refreshed_scores = {}
+                        for entry_va in remaining:
+                            _push_phase1_score(int(entry_va), int(refreshed_scores.get(int(entry_va), 0)))
 
             if phase1_progress:
                 phase1_progress.close()

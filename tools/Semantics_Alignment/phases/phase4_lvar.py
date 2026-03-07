@@ -116,8 +116,30 @@ def _prepare_lvar_candidate(
 
     preferred_tool = "ida" if ida_sync else None
     candidates: List[Dict[str, Any]] = []
+    candidate_fids = [int(fid) for fid in node.function_ids if (allowed_fids is None or int(fid) in allowed_fids)]
+    if not candidate_fids:
+        return None
 
     cur = conn.cursor()
+    code_by_fid: Dict[int, str] = {}
+    placeholders = ",".join("?" for _ in candidate_fids)
+    cur.execute(
+        f"""
+        SELECT function_id, body
+        FROM pseudo_functions
+        WHERE function_id IN ({placeholders})
+          AND body IS NOT NULL;
+        """,
+        tuple(candidate_fids),
+    )
+    for function_id, body in cur.fetchall():
+        fid = int(function_id)
+        code = str(body or "")
+        if not code:
+            continue
+        prev = code_by_fid.get(fid)
+        if prev is None or len(code) > len(prev):
+            code_by_fid[fid] = code
 
     for fid in node.function_ids:
         if allowed_fids is not None and fid not in allowed_fids:
@@ -134,11 +156,9 @@ def _prepare_lvar_candidate(
         score = int(info.get("confidence_score", 0) or 0)
         tool_name = (graph.func_tool.get(fid, "") or "").lower()
 
-        cur.execute("SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;", (int(fid),))
-        row = cur.fetchone()
-        if not row or not row[0]:
+        code = code_by_fid.get(int(fid), "")
+        if not code:
             continue
-        code = row[0]
         line_cnt = _count_effective_pseudocode_lines(code)
         if min_pseudo_lines and line_cnt < int(min_pseudo_lines):
             continue
@@ -292,6 +312,7 @@ def _verify_lvar_persistence(
     initial_code: Optional[str],
     max_retries: int = 3,
     wait_seconds: float = 1.0,
+    auto_commit: bool = True,
 ) -> Tuple[Optional[str], Set[str]]:
     """After sync, save IDB and refetch pseudocode to verify persistence."""
     latest_code = initial_code
@@ -307,7 +328,8 @@ def _verify_lvar_persistence(
         if refreshed:
             latest_code = refreshed
             cur.execute("UPDATE pseudo_functions SET body = ? WHERE function_id = ?;", (refreshed, function_id))
-            conn.commit()
+            if auto_commit:
+                conn.commit()
 
         remaining = _find_generic_lvar_names(latest_code or "")
         if not remaining:
@@ -328,6 +350,7 @@ def _apply_lvar_result_for_candidate(
     ida_url: str,
     verify_max_retries: int = 3,
     verify_wait_seconds: float = 1.0,
+    auto_commit: bool = True,
 ) -> bool:
     """Apply Phase4 rename map for a candidate (with optional IDA sync + verify)."""
 
@@ -348,7 +371,8 @@ def _apply_lvar_result_for_candidate(
         print(f"[LVAR] 0x{node.entry_va:08X} 应用重命名: {json.dumps(clean_map, ensure_ascii=False)}")
         new_code = apply_local_var_renames(original_code, clean_map)
         cur.execute("UPDATE pseudo_functions SET body = ? WHERE function_id = ?;", (new_code, best_fid))
-        conn.commit()
+        if auto_commit:
+            conn.commit()
         changed = True
         total_renamed = len(clean_map)
 
@@ -357,7 +381,8 @@ def _apply_lvar_result_for_candidate(
             if updated:
                 updated_code = updated
                 cur.execute("UPDATE pseudo_functions SET body = ? WHERE function_id = ?;", (updated, best_fid))
-                conn.commit()
+                if auto_commit:
+                    conn.commit()
 
     cur.execute("SELECT body FROM pseudo_functions WHERE function_id = ? LIMIT 1;", (best_fid,))
     row2 = cur.fetchone()
@@ -382,6 +407,7 @@ def _apply_lvar_result_for_candidate(
             initial_code=final_code,
             max_retries=max(1, int(verify_max_retries or 1)),
             wait_seconds=float(verify_wait_seconds or 0.0),
+            auto_commit=auto_commit,
         )
         if verified_code:
             final_code = verified_code
@@ -389,7 +415,8 @@ def _apply_lvar_result_for_candidate(
     mark_optimized = True
     try:
         cur.execute("UPDATE analysis_status SET lvar_optimized = ? WHERE function_id = ?;", (1 if mark_optimized else 0, best_fid))
-        conn.commit()
+        if auto_commit:
+            conn.commit()
     except Exception as exc:
         logger.warning("更新 lvar_optimized 状态失败 function_id=%s: %s", best_fid, exc)
 
@@ -426,7 +453,7 @@ def analyze_local_var_batch(
     """Analyze a batch and apply renames; returns number of changed functions."""
 
     if not items:
-        return 0
+        return 0, bool(ida_sync)
 
     if prompt is None:
         prompt = build_local_var_batch_prompt(items)
@@ -438,7 +465,7 @@ def analyze_local_var_batch(
     if dry_run:
         print("\n[LVAR-BATCH DRY-RUN] Prompt 预览：")
         print(prompt[:2000])
-        return 0
+        return 0, bool(ida_sync)
 
     result_list = call_llm_analyze_function(
         conversation=conversation,
@@ -463,43 +490,53 @@ def analyze_local_var_batch(
         return 0, bool(ida_sync)
 
     changed_count = 0
-
     ida_sync_active = bool(ida_sync)
+    wrote_db = False
 
-    for item, res in zip(items, result_list):
-        node: UnifiedFunctionNode = item["node"]
-        entry_va = int(item.get("entry_va", node.entry_va))
+    try:
+        for item, res in zip(items, result_list):
+            node: UnifiedFunctionNode = item["node"]
+            entry_va = int(item.get("entry_va", node.entry_va))
 
-        if not isinstance(res, dict):
-            print(f"[LVAR] 0x{entry_va:08X} 跳过：返回值不是 JSON 对象。")
-            continue
+            if not isinstance(res, dict):
+                print(f"[LVAR] 0x{entry_va:08X} 跳过：返回值不是 JSON 对象。")
+                continue
 
-        if "renames" in res and isinstance(res.get("renames"), dict):
-            renames_obj = res.get("renames")  # type: ignore[assignment]
-        else:
-            renames_obj = {k: v for k, v in res.items() if isinstance(k, str) and k != "entry_va"}
+            if "renames" in res and isinstance(res.get("renames"), dict):
+                renames_obj = res.get("renames")  # type: ignore[assignment]
+            else:
+                renames_obj = {k: v for k, v in res.items() if isinstance(k, str) and k != "entry_va"}
 
-        if ida_sync_active and ida_url:
-            ok = wait_for_ida_server(ida_url, max_wait_seconds=float(ida_connect_max_wait_seconds or 0.0) or None)
-            if not ok:
-                print(
-                    f"[IDA-Sync] IDA 服务器不可用，跳过本批次后续的 IDA 同步（仅更新 DB）。"
-                    f" ida_url={ida_url}, entry_va=0x{entry_va:08X}"
-                )
-                ida_sync_active = False
+            if ida_sync_active and ida_url:
+                ok = wait_for_ida_server(ida_url, max_wait_seconds=float(ida_connect_max_wait_seconds or 0.0) or None)
+                if not ok:
+                    print(
+                        f"[IDA-Sync] IDA 服务器不可用，跳过本批次后续的 IDA 同步（仅更新 DB）。"
+                        f" ida_url={ida_url}, entry_va=0x{entry_va:08X}"
+                    )
+                    ida_sync_active = False
 
-        changed = _apply_lvar_result_for_candidate(
-            conn=conn,
-            graph=graph,
-            item=item,
-            rename_map=renames_obj,
-            ida_sync=ida_sync_active,
-            ida_url=ida_url,
-            verify_max_retries=verify_max_retries,
-            verify_wait_seconds=verify_wait_seconds,
-        )
-        if changed:
-            changed_count += 1
+            changed = _apply_lvar_result_for_candidate(
+                conn=conn,
+                graph=graph,
+                item=item,
+                rename_map=renames_obj,
+                ida_sync=ida_sync_active,
+                ida_url=ida_url,
+                verify_max_retries=verify_max_retries,
+                verify_wait_seconds=verify_wait_seconds,
+                auto_commit=False,
+            )
+            wrote_db = True
+            if changed:
+                changed_count += 1
+    except Exception:
+        if wrote_db:
+            conn.rollback()
+        raise
+
+    if wrote_db:
+        conn.commit()
 
     return changed_count, ida_sync_active
 

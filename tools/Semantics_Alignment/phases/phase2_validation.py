@@ -99,7 +99,61 @@ def _get_entry_points_for_validation(conn: sqlite3.Connection, graph: UnifiedGra
     return sorted(entry_vas)
 
 
-def _get_call_site_snippet(conn: sqlite3.Connection, graph: UnifiedGraph, caller_va: int, callee_names: Set[str], max_snippets: int = 3) -> str:
+def _build_phase2_pseudocode_cache(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_vas: List[int],
+) -> Dict[int, str]:
+    """Preload caller pseudocode by function_id to avoid Phase2 N+1 SQL reads."""
+    caller_fids: Set[int] = set()
+    for entry_va in entry_vas:
+        node = graph.nodes.get(int(entry_va))
+        if not node:
+            continue
+        for caller_va in node.caller_vas:
+            fid = _get_any_function_id_for_va(graph, int(caller_va))
+            if fid is not None:
+                caller_fids.add(int(fid))
+
+    if not caller_fids:
+        return {}
+
+    cache: Dict[int, str] = {}
+    cur = conn.cursor()
+    fid_list = sorted(caller_fids)
+    chunk_size = 900
+    for idx in range(0, len(fid_list), chunk_size):
+        chunk = fid_list[idx : idx + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        cur.execute(
+            f"""
+            SELECT function_id, prototype, body
+            FROM pseudo_functions
+            WHERE function_id IN ({placeholders})
+            ORDER BY id;
+            """,
+            tuple(chunk),
+        )
+        for function_id, prototype, body in cur.fetchall():
+            code = ((prototype or "") + "\n" + (body or "")).strip()
+            if not code:
+                continue
+            fid = int(function_id)
+            prev = cache.get(fid)
+            if prev is None or len(code) > len(prev):
+                cache[fid] = code
+
+    return cache
+
+
+def _get_call_site_snippet(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    caller_va: int,
+    callee_names: Set[str],
+    max_snippets: int = 3,
+    pseudo_cache: Optional[Dict[int, str]] = None,
+) -> str:
     node = graph.nodes.get(caller_va)
     if not node:
         return ""
@@ -108,17 +162,22 @@ def _get_call_site_snippet(conn: sqlite3.Connection, graph: UnifiedGraph, caller
     if fid is None:
         return ""
 
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT prototype, body FROM pseudo_functions WHERE function_id = ? ORDER BY id LIMIT 1;",
-        (fid,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return ""
+    code = ""
+    if pseudo_cache is not None:
+        code = str(pseudo_cache.get(int(fid)) or "").strip()
 
-    proto, body = row
-    code = ((proto or "") + "\n" + (body or "")).strip()
+    if not code:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT prototype, body FROM pseudo_functions WHERE function_id = ? ORDER BY id LIMIT 1;",
+            (fid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return ""
+        proto, body = row
+        code = ((proto or "") + "\n" + (body or "")).strip()
+
     if not code:
         return ""
 
@@ -140,7 +199,12 @@ def _get_call_site_snippet(conn: sqlite3.Connection, graph: UnifiedGraph, caller
     return "\n...\n".join(snippets)
 
 
-def build_validation_context(conn: sqlite3.Connection, graph: UnifiedGraph, entry_va: int) -> str:
+def build_validation_context(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_va: int,
+    pseudo_cache: Optional[Dict[int, str]] = None,
+) -> str:
     node = graph.nodes[entry_va]
 
     fid = _get_any_function_id_for_va(graph, entry_va)
@@ -165,7 +229,13 @@ def build_validation_context(conn: sqlite3.Connection, graph: UnifiedGraph, entr
 
     caller_snippets: List[str] = []
     for caller_va in sorted(node.caller_vas):
-        snippet = _get_call_site_snippet(conn, graph, caller_va, node.names)
+        snippet = _get_call_site_snippet(
+            conn,
+            graph,
+            caller_va,
+            node.names,
+            pseudo_cache=pseudo_cache,
+        )
         caller_name = (
             next(iter(sorted(graph.nodes[caller_va].names)), f"sub_{caller_va:08X}")
             if caller_va in graph.nodes
@@ -200,8 +270,20 @@ def build_validation_context(conn: sqlite3.Connection, graph: UnifiedGraph, entr
     ).strip()
 
 
-def build_validation_prompt(conn: sqlite3.Connection, graph: UnifiedGraph, entry_va: int) -> str:
-    context = build_validation_context(conn, graph, entry_va)
+def build_validation_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_va: int,
+    pseudo_cache: Optional[Dict[int, str]] = None,
+    context_cache: Optional[Dict[int, str]] = None,
+) -> str:
+    context = ""
+    if context_cache is not None:
+        context = str(context_cache.get(int(entry_va)) or "")
+    if not context:
+        context = build_validation_context(conn, graph, entry_va, pseudo_cache=pseudo_cache)
+        if context_cache is not None:
+            context_cache[int(entry_va)] = context
     prompt = f"""
 你是一名进行“第二阶段 Top-down 校验”的逆向工程专家。
 
@@ -223,7 +305,13 @@ def build_validation_prompt(conn: sqlite3.Connection, graph: UnifiedGraph, entry
     return prompt.strip()
 
 
-def build_validation_batch_prompt(conn: sqlite3.Connection, graph: UnifiedGraph, entry_vas: List[int]) -> str:
+def build_validation_batch_prompt(
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    entry_vas: List[int],
+    pseudo_cache: Optional[Dict[int, str]] = None,
+    context_cache: Optional[Dict[int, str]] = None,
+) -> str:
     lines: List[str] = []
     lines.append("你是一名进行‘第二阶段 Top-down 校验’的逆向工程专家。")
     lines.append("请对以下多个函数的命名/签名进行校验。返回一个 JSON 数组，长度必须等于条目数量，顺序完全一致。")
@@ -231,7 +319,14 @@ def build_validation_batch_prompt(conn: sqlite3.Connection, graph: UnifiedGraph,
     lines.append("仅当当前名称为默认风格(sub_/fun_/loc_)且你有更好建议时选择 RENAME。")
 
     for idx, va in enumerate(entry_vas, 1):
-        ctx = build_validation_context(conn, graph, va)
+        cached_ctx = ""
+        if context_cache is not None:
+            cached_ctx = str(context_cache.get(int(va)) or "")
+        if not cached_ctx:
+            cached_ctx = build_validation_context(conn, graph, va, pseudo_cache=pseudo_cache)
+            if context_cache is not None:
+                context_cache[int(va)] = cached_ctx
+        ctx = cached_ctx
         lines.append(f"\n[Item {idx}/{len(entry_vas)}] entry_va=0x{va:08X}\n{ctx}")
 
     return "\n".join(lines)
@@ -360,6 +455,8 @@ def validate_one_function(
     ida_url: str,
     dry_run: bool = False,
     max_attempts: int = 3,
+    pseudo_cache: Optional[Dict[int, str]] = None,
+    context_cache: Optional[Dict[int, str]] = None,
 ) -> Optional[float]:
     if ida_sync and ida_url:
         wait_for_ida_server(ida_url)
@@ -367,7 +464,13 @@ def validate_one_function(
     node = graph.nodes[entry_va]
     display_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
 
-    prompt = build_validation_prompt(conn, graph, entry_va)
+    prompt = build_validation_prompt(
+        conn,
+        graph,
+        entry_va,
+        pseudo_cache=pseudo_cache,
+        context_cache=context_cache,
+    )
     conversation, request_kwargs = build_chat_request(prompt, llm_settings)
 
     print("=" * 80)
@@ -425,6 +528,16 @@ def run_validation_phase(
         print(f"[Validation] Phase2 正在校验的入口函数: {summary}")
     logger.info("[Validation] Phase2 entry candidates (%d): %s", len(entry_vas), summary or "<none>")
     pending_set: Set[int] = set(entry_vas)
+    t_cache = time.perf_counter()
+    pseudo_cache = _build_phase2_pseudocode_cache(conn, graph, entry_vas)
+    context_cache: Dict[int, str] = {}
+    if pseudo_cache:
+        print(f"[Validation] 已预加载调用者伪代码缓存: {len(pseudo_cache)} 条")
+    logger.info(
+        "[Validation] caller pseudocode cache size=%d built in %.2fs",
+        len(pseudo_cache),
+        time.perf_counter() - t_cache,
+    )
 
     queue: List[ValidationTask] = []
     visited: Set[int] = set()
@@ -503,7 +616,13 @@ def run_validation_phase(
             continue
 
         def _builder(vs: List[int]) -> str:
-            return build_validation_batch_prompt(conn, graph, vs)
+            return build_validation_batch_prompt(
+                conn,
+                graph,
+                vs,
+                pseudo_cache=pseudo_cache,
+                context_cache=context_cache,
+            )
 
         for batch in yield_dynamic_batch(
             to_validate,
@@ -595,6 +714,8 @@ def run_validation_phase(
                 ida_url=ida_url,
                 dry_run=dry_run,
                 max_attempts=7,
+                pseudo_cache=pseudo_cache,
+                context_cache=context_cache,
             )
             if posterior_conf is None:
                 still_failed.append(entry_va)

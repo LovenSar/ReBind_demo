@@ -11,10 +11,12 @@ import http.client
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -40,6 +42,7 @@ except ImportError as e:
 
 
 SEMANTIC_ALIGN_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "semantic_align.py"
+DEEP_PATH_DFS_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "deep_path_dfs.py"
 IDAT_EXIT_PORT = 12345
 _IDAT_EXIT_TIMEOUT = 2.0
 GLOBAL_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
@@ -374,6 +377,127 @@ def run_semantic_align(
             )
 
 
+def run_deep_path_analysis(
+    input_paths: List[Path],
+    *,
+    semantics_config_path: Optional[Path] = None,
+    db_path_override: Optional[Path] = None,
+    max_depth: Optional[int] = None,
+    max_paths: Optional[int] = None,
+    llm_mode: Optional[str] = None,
+    llm_dry_run: bool = False,
+    llm_verbose: bool = False,
+    llm_prompt_preview_chars: Optional[int] = None,
+    llm_raw_preview_chars: Optional[int] = None,
+    llm_log_file: Optional[Path] = None,
+    top: Optional[int] = None,
+    entries: Optional[List[str]] = None,
+    output_path: Optional[Path] = None,
+) -> None:
+    """Call deep_path_dfs.py from the unified project entry."""
+
+    if not input_paths:
+        raise SystemExit("[ReBindDemo] deep-path 模式需要至少一个输入路径（exe/idb/i64/db）。")
+
+    if db_path_override and len(input_paths) != 1:
+        raise SystemExit("[ReBindDemo] deep-path 模式下使用 --db 时仅支持单个输入。")
+    if output_path and len(input_paths) != 1:
+        raise SystemExit("[ReBindDemo] deep-path 模式下使用 --deep-output 时仅支持单个输入。")
+
+    def _safe_name(text: str) -> str:
+        raw = str(text or "").strip()
+        sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
+        return sanitized or "sample"
+
+    for idx, input_path in enumerate(input_paths, 1):
+        cmd = [sys.executable, str(DEEP_PATH_DFS_SCRIPT), str(input_path)]
+        llm_mode_norm = str(llm_mode or "").lower()
+        deep_llm_enabled = llm_mode_norm in {"auto", "on"}
+        run_dir: Optional[Path] = None
+
+        if db_path_override:
+            cmd.extend(["--db", str(db_path_override)])
+        if semantics_config_path:
+            cmd.extend(["--llm-config", str(semantics_config_path)])
+        if max_depth is not None:
+            cmd.extend(["--max-depth", str(int(max_depth))])
+        if max_paths is not None:
+            cmd.extend(["--max-paths", str(int(max_paths))])
+        if top is not None:
+            cmd.extend(["--top", str(int(top))])
+        if llm_mode:
+            cmd.extend(["--llm-mode", str(llm_mode)])
+            if str(llm_mode).lower() in {"auto", "on"}:
+                print(
+                    "[ReBindDemo] 提示: deep-path 已启用 LLM 轮询，可能因网络/限流等待较久；"
+                    "如需快速仅看路径请使用 --deep-llm-mode off。"
+                )
+        if llm_dry_run:
+            cmd.append("--llm-dry-run")
+        if llm_verbose:
+            cmd.append("--llm-verbose")
+        if llm_prompt_preview_chars is not None:
+            cmd.extend(["--llm-prompt-preview-chars", str(int(llm_prompt_preview_chars))])
+        if llm_raw_preview_chars is not None:
+            cmd.extend(["--llm-raw-preview-chars", str(int(llm_raw_preview_chars))])
+        if entries:
+            for entry in entries:
+                if str(entry or "").strip():
+                    cmd.extend(["--entry", str(entry).strip()])
+
+        if deep_llm_enabled:
+            runs_root = Path.cwd() / "deep_llm_runs"
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base = f"{stamp}_{idx:02d}_{_safe_name(input_path.stem)}"
+            run_dir = runs_root / base
+            suffix = 1
+            while run_dir.exists():
+                run_dir = runs_root / f"{base}_{suffix:02d}"
+                suffix += 1
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            auto_out = run_dir / "deep_dfs_output.json"
+            effective_out = output_path or auto_out
+            cmd.extend(["--output", str(effective_out)])
+
+            auto_log = run_dir / "deep_llm_log.jsonl"
+            effective_log = auto_log
+            if llm_log_file:
+                # 自定义日志路径：单输入直连；多输入自动加序号避免覆盖。
+                if len(input_paths) > 1:
+                    stem = llm_log_file.stem or "deep_llm_log"
+                    suffix = llm_log_file.suffix or ".jsonl"
+                    indexed_name = f"{stem}_{idx:02d}{suffix}"
+                    if llm_log_file.is_absolute():
+                        effective_log = llm_log_file.parent / indexed_name
+                    else:
+                        effective_log = run_dir / indexed_name
+                else:
+                    effective_log = (
+                        llm_log_file
+                        if llm_log_file.is_absolute()
+                        else run_dir / llm_log_file
+                    )
+            cmd.extend(["--llm-log-file", str(effective_log)])
+        else:
+            if output_path:
+                cmd.extend(["--output", str(output_path)])
+            elif len(input_paths) > 1:
+                auto_out = input_path.parent / f"{input_path.name}.deep_dfs.json"
+                cmd.extend(["--output", str(auto_out)])
+
+        print("\n[ReBindDemo] 执行 deep_path_dfs.py 深路径分析...")
+        print(f"  输入[{idx}/{len(input_paths)}]: {input_path}")
+        if run_dir is not None:
+            print(f"  deep-llm 工作目录: {run_dir}")
+        print("  命令:", " ".join(cmd))
+        result = subprocess.run(cmd, cwd=str(Path(__file__).resolve().parent))
+        if result.returncode != 0:
+            raise SystemExit(
+                f"[ReBindDemo] deep_path_dfs.py 返回非零退出码：{result.returncode}"
+            )
+
+
 def _warn_if_missing_executable(label: str, value: Optional[str]) -> None:
     if not value:
         return
@@ -621,6 +745,76 @@ def main():
         action="store_true",
         help="同步 IDA 时解锁所有 LOCKED 状态（配合 --sync-ida-before-dump 使用）。",
     )
+    parser.add_argument(
+        "--deep-path",
+        action="store_true",
+        help="直接执行深路径分析（支持输入 exe/idb/i64/db），跳过 Ghidra/IDA headless。",
+    )
+    parser.add_argument(
+        "--deep-max-depth",
+        type=int,
+        default=None,
+        help="深路径 DFS 深度上限（默认不传，交由 deep_path_dfs 自动取全局最深）。",
+    )
+    parser.add_argument(
+        "--deep-max-paths",
+        type=int,
+        default=None,
+        help="深路径最多保留多少条叶子路径（默认使用 deep_path_dfs 内置值）。",
+    )
+    parser.add_argument(
+        "--deep-llm-mode",
+        choices=["auto", "on", "off"],
+        default="off",
+        help="深路径 LLM 模式：auto/on/off（默认 off，避免长时间网络等待）。",
+    )
+    parser.add_argument(
+        "--deep-llm-dry-run",
+        action="store_true",
+        help="深路径逐层 LLM 仅生成 prompt 预览，不实际请求模型。",
+    )
+    parser.add_argument(
+        "--deep-llm-verbose",
+        action="store_true",
+        help="深路径 LLM 轮询时打印每一步发送内容和回复预览。",
+    )
+    parser.add_argument(
+        "--deep-llm-prompt-preview-chars",
+        type=int,
+        default=None,
+        help="deep-llm-verbose 时每步 prompt 预览最大字符数。",
+    )
+    parser.add_argument(
+        "--deep-llm-raw-preview-chars",
+        type=int,
+        default=None,
+        help="deep-llm-verbose 时每步原始回复预览最大字符数。",
+    )
+    parser.add_argument(
+        "--deep-llm-log-file",
+        default=None,
+        help=(
+            "深路径 LLM 逐层日志 JSONL 路径。"
+            "不传时，deep-llm 会自动写入 ./deep_llm_runs/<run>/deep_llm_log.jsonl。"
+        ),
+    )
+    parser.add_argument(
+        "--deep-top",
+        type=int,
+        default=None,
+        help="深路径终端打印前 N 条路径（默认使用 deep_path_dfs 内置值）。",
+    )
+    parser.add_argument(
+        "--deep-entry",
+        action="append",
+        default=[],
+        help="深路径入口点（可重复），支持地址或名称关键词；不传则自动选入口。",
+    )
+    parser.add_argument(
+        "--deep-output",
+        default=None,
+        help="深路径输出 JSON 路径（仅单输入时有效）。",
+    )
     
     args = parser.parse_args()
     
@@ -638,8 +832,9 @@ def main():
         demo = ReBindDemo(args.config, args.global_config, args.platform)
         print(f"[ReBindDemo] 平台检测: {demo.platform_key} (system={platform.system()}, release={platform.release()})")
         
-        # 在执行 Ghidra/IDA 之前，进行 OpenAI API Key 启动检查；纯导出时跳过
-        if not args.dump_db_only:
+        # 在执行分析之前，进行 OpenAI API Key 启动检查；纯导出或 deep-path+llm-off 时跳过
+        deep_llm_mode = str(args.deep_llm_mode or "auto").lower()
+        if not args.dump_db_only and not (args.deep_path and deep_llm_mode == "off"):
             _probe_openai_keys()
         
         if demo.ghidra_adapter:
@@ -665,6 +860,16 @@ def main():
         if args.dump_db_only and (args.phase5_only or args.phase5_only_force_all):
             print("错误: --dump-db-only 不可与 --phase5-only/--phase5-only-force-all 同时使用。", file=sys.stderr)
             sys.exit(1)
+        if args.deep_path and (args.dump_db_only or args.phase5_only or args.phase5_only_force_all):
+            print("错误: --deep-path 不可与 --dump-db-only/--phase5-only/--phase5-only-force-all 同时使用。", file=sys.stderr)
+            sys.exit(1)
+        if args.deep_llm_log_file and not args.deep_path:
+            print("错误: --deep-llm-log-file 仅在 --deep-path 模式下可用。", file=sys.stderr)
+            sys.exit(1)
+
+        if args.deep_output and len(sample_paths) != 1:
+            print("错误: --deep-output 仅支持单个输入。", file=sys.stderr)
+            sys.exit(1)
 
         if args.dump_db_only:
             run_semantic_align(
@@ -675,6 +880,27 @@ def main():
                 dump_db_only=True,
                 sync_ida_before_dump=args.sync_ida_before_dump,
                 unlock_locked_on_sync=args.unlock_locked_on_sync,
+            )
+            return
+
+        if args.deep_path:
+            deep_output = Path(args.deep_output).expanduser().resolve() if args.deep_output else None
+            deep_llm_log_file = Path(args.deep_llm_log_file).expanduser() if args.deep_llm_log_file else None
+            run_deep_path_analysis(
+                sample_paths,
+                semantics_config_path=demo.semantics_config_path,
+                db_path_override=db_override,
+                max_depth=args.deep_max_depth,
+                max_paths=args.deep_max_paths,
+                llm_mode=args.deep_llm_mode,
+                llm_dry_run=bool(args.deep_llm_dry_run),
+                llm_verbose=bool(args.deep_llm_verbose),
+                llm_prompt_preview_chars=args.deep_llm_prompt_preview_chars,
+                llm_raw_preview_chars=args.deep_llm_raw_preview_chars,
+                llm_log_file=deep_llm_log_file,
+                top=args.deep_top,
+                entries=list(args.deep_entry or []),
+                output_path=deep_output,
             )
             return
 

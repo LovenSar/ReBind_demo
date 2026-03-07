@@ -42,6 +42,12 @@ pipeline:
   phase1:
     # Phase 1 默认批处理大小（原 argparse 默认 25；如命令行传 --batch 则优先命令行）
     batch_size_default: 25
+    # 启动时最多打印多少个待重命名函数（避免超大样本日志爆炸）
+    target_preview_max: 20
+    # 调度器每轮最多取多少个候选进入 dynamic_batching
+    scheduler_top_k: 50
+    # 每处理多少个 batch 做一次 Phase1 候选全量重算（其余时间走增量更新）
+    score_recompute_every_batches: 8
 
   phase4_lvar:
     # Phase 4 默认仅处理有效伪代码行数 >= N（原默认 6；如命令行传 --lvar-min-lines 则优先命令行）
@@ -102,3 +108,17 @@ pipeline:
     log_llm_response: true
     # LLM 回复日志最多保留多少字符（<=0 表示不截断）
     log_llm_response_max_chars: 0
+
+  sqlite_tuning:
+    # 是否启用运行期 SQLite 性能参数（推荐本地离线任务开启）
+    enabled: true
+    # 使用 WAL 提升并发读写与长任务稳定性
+    wal: true
+    # 在 WAL 下使用 NORMAL 通常能明显提升写入吞吐
+    synchronous_normal: true
+    # 临时表/排序放内存
+    temp_store_memory: true
+    # 连接 busy timeout（毫秒）
+    busy_timeout_ms: 5000
+    # 页面缓存大小（KiB）
+    cache_size_kib: 131072

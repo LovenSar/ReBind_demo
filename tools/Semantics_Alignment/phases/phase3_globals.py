@@ -188,44 +188,27 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
         node.names = names
         globals_by_addr[addr] = node
 
-    addr_to_func: Dict[Tuple[int, int], int] = {}
     cur.execute(
         f"""
-        SELECT view_id, function_id, address_va
-        FROM instructions
-        WHERE view_id IN ({placeholders}) AND address_va IS NOT NULL;
+        SELECT x.dst_va, x.ref_type_raw, f.entry_va
+        FROM xrefs AS x
+        JOIN instructions AS i
+          ON i.view_id = x.view_id
+         AND i.address_va = x.src_va
+        JOIN functions AS f
+          ON f.id = i.function_id
+        WHERE x.view_id IN ({placeholders})
+          AND x.dst_va IS NOT NULL
+          AND f.entry_va IS NOT NULL;
         """,
         view_ids,
     )
-    for view_id, fid, addr_va in cur.fetchall():
-        addr_to_func[(int(view_id), int(addr_va))] = int(fid)
-
-    func_to_entry: Dict[int, int] = {}
-    cur.execute(f"SELECT id, entry_va FROM functions WHERE view_id IN ({placeholders});", view_ids)
-    for fid, entry_va in cur.fetchall():
-        if entry_va is not None:
-            func_to_entry[int(fid)] = int(entry_va)
-
-    cur.execute(
-        f"""
-        SELECT view_id, src_va, dst_va, ref_type_raw
-        FROM xrefs
-        WHERE view_id IN ({placeholders}) AND dst_va IS NOT NULL;
-        """,
-        view_ids,
-    )
-    for view_id, src_va, dst_va, ref_type_raw in cur.fetchall():
+    for dst_va, ref_type_raw, entry_va_raw in cur.fetchall():
         addr = int(dst_va)
         node = globals_by_addr.get(addr)
         if node is None:
             continue
-
-        func_id = addr_to_func.get((int(view_id), int(src_va)))
-        if func_id is None:
-            continue
-        entry_va = func_to_entry.get(func_id)
-        if entry_va is None:
-            continue
+        entry_va = int(entry_va_raw)
 
         access_kind = (ref_type_raw or "").strip().upper()
         if "WRITE" in access_kind:
