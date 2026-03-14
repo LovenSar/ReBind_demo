@@ -39,8 +39,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple, List, Set, Dict
 
-from openpyxl import Workbook
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+try:
+    from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+except Exception:  # pragma: no cover - optional dependency
+    Workbook = None  # type: ignore[assignment]
+    ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
 
 def _install_print_with_location() -> None:
@@ -1520,6 +1524,10 @@ def export_sqlite_to_workbook(
     tables: Iterable[str],
 ) -> None:
     """导出所有表数据到 Excel 工作簿。"""
+    if Workbook is None:
+        raise RuntimeError(
+            "导出 Excel 需要 openpyxl。请安装: pip install openpyxl"
+        )
 
     def _excel_safe_cell_value(value: Any) -> Any:
         if value is None:

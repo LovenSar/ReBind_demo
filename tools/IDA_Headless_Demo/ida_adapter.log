@@ -1299,3 +1299,25 @@
 2026-02-05 14:35:48,269 - ida_adapter - INFO - 开始分析文件: E:\WorkSpace\ReBind_demo\tmp\CSAgent.sys
 2026-02-05 14:35:48,270 - ida_adapter - INFO - 准备工作目录: E:\WorkSpace\ReBind_demo\tmp\CSAgent_sys_idademo
 2026-02-05 14:35:48,275 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2026-03-14 20:40:47,843 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b
+2026-03-14 20:40:47,843 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_idademo
+2026-03-14 20:40:47,846 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2026-03-14 20:41:08,784 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2026-03-14 20:41:08,785 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2026-03-14 20:41:36,320 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2026-03-14 20:41:36,321 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2026-03-14 20:42:57,835 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2026-03-14 20:42:57,836 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-14 20:42:57,837 - ida_adapter - INFO - 处理输出文件...
+2026-03-14 20:42:57,838 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_idademo
+2026-03-14 20:58:05,707 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_goal_deep/client_b
+2026-03-14 20:58:05,707 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_goal_deep/client_b_idademo
+2026-03-14 20:58:05,710 - ida_adapter - INFO - [1/3] 执行脚本: ExtractBinaryInfo_IDA.py
+2026-03-14 20:58:24,572 - ida_adapter - INFO - 脚本 ExtractBinaryInfo_IDA.py 执行完成
+2026-03-14 20:58:24,573 - ida_adapter - INFO - [2/3] 执行脚本: ExtractDisassembly_IDA.py
+2026-03-14 20:58:51,764 - ida_adapter - INFO - 脚本 ExtractDisassembly_IDA.py 执行完成
+2026-03-14 20:58:51,765 - ida_adapter - INFO - [3/3] 执行脚本: ExtractPseudocode_IDA.py
+2026-03-14 21:00:23,612 - ida_adapter - INFO - 脚本 ExtractPseudocode_IDA.py 执行完成
+2026-03-14 21:00:23,613 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-14 21:00:23,614 - ida_adapter - INFO - 处理输出文件...
+2026-03-14 21:00:23,615 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_goal_deep/client_b_idademo
