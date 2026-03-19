@@ -12,6 +12,7 @@ import logging
 import argparse
 import subprocess
 import re
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -37,28 +38,32 @@ class GhidraAdapter:
         """
         self.config = self._load_config(config_path)
         self.logger = self._setup_logging()
+        self._ghidra_temp_workspace: Optional[str] = None
         
     def _load_config(self, config_path: Optional[str]) -> Dict[str, Any]:
-        """加载配置文件
-        
-        Args:
-            config_path: 配置文件路径
-            
-        Returns:
-            配置字典
-        """
+        """加载配置：默认合并仓库根目录 ``config.yaml`` 中 ``ghidra`` 段与 ``platforms``。"""
+
+        repo_root = Path(__file__).resolve().parents[2]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        import project_config
+
         if config_path is None:
-            config_path = Path(__file__).parent / "config.yaml"
-        else:
-            config_path = Path(config_path)
-            
-        if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
-            
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-            
-        return config
+            data = project_config.load_global_config()
+            return project_config.merge_tool_config(
+                data, "ghidra", project_config.detect_platform_key()
+            )
+
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {path}")
+        raw = project_config.load_yaml_file(path)
+        plat = raw.get("platforms")
+        if isinstance(plat, dict) and plat:
+            return project_config.merge_tool_config(
+                raw, "ghidra", project_config.detect_platform_key()
+            )
+        return raw
     
     def _setup_logging(self) -> logging.Logger:
         """设置日志系统
@@ -149,14 +154,15 @@ class GhidraAdapter:
         
         # 创建目录
         output_dir.mkdir(exist_ok=True)
-        
-        # 复制Python脚本
-        script_dir = Path(__file__).parent
-        for script_file in script_dir.glob("*.py"):
-            if script_file.name != "ida_adapter.py":
-                shutil.copy2(script_file, output_dir)
-                self.logger.debug(f"复制脚本: {script_file.name}")
-        
+
+        scripts_cfg = self.config.get("scripts", {})
+        if scripts_cfg.get("copy_tool_scripts", False):
+            script_dir = Path(__file__).parent
+            for script_file in script_dir.glob("*.py"):
+                if script_file.name != "ida_adapter.py":
+                    shutil.copy2(script_file, output_dir)
+                    self.logger.debug(f"复制脚本: {script_file.name}")
+
         # 复制输入文件（总是复制，与批处理文件行为一致）
         shutil.copy2(input_path, output_dir / input_path.name)
         self.logger.debug(f"复制输入文件: {input_path.name}")
@@ -175,37 +181,54 @@ class GhidraAdapter:
         """
         ghidra_config = self.config.get('ghidra', {})
         scripts_config = self.config.get('scripts', {})
-        
+
         cmd_path = self._normalize_cmd_path(ghidra_config.get('cmd_path', ''))
         if not cmd_path:
             raise ValueError("配置文件中未设置 ghidra.cmd_path")
-            
-        workspace = ghidra_config.get('workspace', '')
-        if not workspace:
-            workspace = str(output_dir)
-            
-        project_name_prefix = ghidra_config.get('project_name_prefix', 'MyPEAnalysisTemp')
-        sanitized_name = self.sanitize_filename(Path(input_file).name)
-        project_name = f"{project_name_prefix}_{sanitized_name}"
-        
+
+        self._ghidra_temp_workspace = None
+        use_temp = bool(scripts_config.get("use_temp_project", True))
+        if use_temp:
+            self._ghidra_temp_workspace = tempfile.mkdtemp(prefix="rebind_ghidra_")
+            workspace = self._ghidra_temp_workspace
+            project_name = str(scripts_config.get("temp_project_name", "proj"))
+        else:
+            workspace = ghidra_config.get('workspace', '') or str(output_dir)
+            project_name_prefix = ghidra_config.get('project_name_prefix', 'MyPEAnalysisTemp')
+            sanitized_name = self.sanitize_filename(Path(input_file).name)
+            project_name = f"{project_name_prefix}_{sanitized_name}"
+
         script_path = scripts_config.get('script_path', '')
         if not script_path:
-            script_path = str(output_dir)
-        
-        # 构建命令
-        command = [
-            cmd_path,
-            workspace,
-            project_name,
-            "-deleteProject",
-            "-import", input_file,
-            "-scriptPath", script_path,
-        ]
+            script_path = str(Path(__file__).resolve().parent)
 
-        # 添加后处理脚本
-        post_scripts = scripts_config.get('post_scripts', [])
-        for script in post_scripts:
-            command.extend(["-postScript", script])
+        out_abs = str(Path(output_dir).resolve())
+        in_name = Path(input_file).name
+
+        command: List[str] = [cmd_path, workspace, project_name, "-deleteProject", "-import", input_file, "-scriptPath", script_path]
+
+        extra = ghidra_config.get("extra_headless_args", [])
+        if isinstance(extra, str):
+            extra = [extra] if extra.strip() else []
+        if isinstance(extra, list):
+            command.extend([str(x) for x in extra if x is not None])
+
+        post_script = (scripts_config.get("post_script") or "").strip()
+        post_args_tpl = scripts_config.get("post_script_args") or []
+        post_extra = scripts_config.get("post_script_extra") or []
+
+        if post_script:
+            expanded: List[str] = []
+            for token in post_args_tpl:
+                s = str(token)
+                s = s.replace("{output_dir}", out_abs).replace("{input_filename}", in_name)
+                expanded.append(s)
+            extra_tail = [str(x) for x in post_extra if str(x).strip()]
+            command.extend(["-postScript", post_script, *expanded, *extra_tail])
+        else:
+            post_scripts = scripts_config.get('post_scripts', [])
+            for script in post_scripts:
+                command.extend(["-postScript", script])
 
         command_display = command if isinstance(command, str) else ' '.join(command)
         self.logger.debug(f"构建的命令: {command_display}")
@@ -221,27 +244,27 @@ class GhidraAdapter:
         self.logger.info("处理输出文件...")
         self.logger.debug(f"清理后的文件名: {sanitized_name}")
         self.logger.debug(f"当前工作目录: {Path.cwd()}")
-        
-        # 移动输出目录 - 从当前工作目录移动
-        # 使用包含扩展名的sanitized_name（sanitized_name已经包含扩展名）
-        # 注意：sanitized_name已经将点号替换为下划线
-        output_dirs_to_move = [
-            f"{sanitized_name}_disassembly",
-            f"{sanitized_name}_binaryinfo", 
-            f"{sanitized_name}_pseudocode"
-        ]
-        
-        for src_dir in output_dirs_to_move:
-            src_path = Path(src_dir)
-            self.logger.debug(f"检查目录: {src_path} (绝对路径: {src_path.absolute()})")
-            if src_path.exists():
-                dst_path = output_dir / src_path.name
-                self.logger.debug(f"目标路径: {dst_path}")
-                if dst_path.exists():
-                    self.logger.debug(f"目标目录已存在，删除: {dst_path}")
-                    shutil.rmtree(dst_path)
-                shutil.move(src_path, dst_path)
-                self.logger.debug(f"移动目录: {src_dir} -> {dst_path}")
+
+        scripts_config = self.config.get("scripts", {})
+        if scripts_config.get("legacy_cwd_output_move", False):
+            output_dirs_to_move = [
+                f"{sanitized_name}_disassembly",
+                f"{sanitized_name}_binaryinfo",
+                f"{sanitized_name}_pseudocode",
+            ]
+            for src_dir in output_dirs_to_move:
+                src_path = Path(src_dir)
+                self.logger.debug(f"检查目录: {src_path} (绝对路径: {src_path.absolute()})")
+                if src_path.exists():
+                    dst_path = output_dir / src_path.name
+                    self.logger.debug(f"目标路径: {dst_path}")
+                    if src_path.resolve() == dst_path.resolve():
+                        continue
+                    if dst_path.exists():
+                        self.logger.debug(f"目标目录已存在，删除: {dst_path}")
+                        shutil.rmtree(dst_path)
+                    shutil.move(str(src_path), str(dst_path))
+                    self.logger.debug(f"移动目录: {src_dir} -> {dst_path}")
         
         # 清理临时文件
         output_config = self.config.get('output', {})
@@ -321,9 +344,12 @@ class GhidraAdapter:
             self.logger.error(f"执行Ghidra命令时出错: {e}")
             raise
         finally:
-            # 切换回原始目录
             os.chdir(original_dir)
-        
+            tw = self._ghidra_temp_workspace
+            if tw:
+                shutil.rmtree(tw, ignore_errors=True)
+                self._ghidra_temp_workspace = None
+
         # 处理输出文件
         sanitized_name = self.sanitize_filename(Path(input_file).name)
         self.process_output_files(output_dir, sanitized_name)
@@ -364,7 +390,7 @@ def main():
     )
     parser.add_argument(
         "-c", "--config",
-        help="配置文件路径（默认: config.yaml）"
+        help="配置文件路径（默认: 仓库根目录 config.yaml 中的 ghidra 段）"
     )
     parser.add_argument(
         "-v", "--verbose",

@@ -1309,6 +1309,11 @@ def load_ghidra_view(
         if candidate is not None and candidate.is_dir():
             return candidate
 
+        # ExtractAll.py (Ghidra) 使用 *_output 存放 symbols/strings/segments 等 CSV
+        candidate = next(view_dir.glob("*_output"), None)
+        if candidate is not None and candidate.is_dir():
+            return candidate
+
         # Common alternate layout observed in this repo: <view>/*_ghidemo/
         candidate = next(view_dir.glob("*_ghidemo"), None)
         if candidate is not None and candidate.is_dir():
@@ -1332,7 +1337,8 @@ def load_ghidra_view(
     segments_csv = next(binaryinfo_dir.glob("*_segments.csv"), None)
     sections_csv = next(binaryinfo_dir.glob("*_sections.csv"), None)
     symbols_csv = next(binaryinfo_dir.glob("*_symbols.csv"), None)
-    xrefs_dir = next(binaryinfo_dir.glob("*_xrefs"), None)
+    # ExtractAll.py creates "*_cross_refs" directory, not "*_xrefs"
+    xrefs_dir = next(binaryinfo_dir.glob("*_cross_refs"), None)
 
     # 先用临时 view_id=-1 解析一次 segments，以获取 image_base，
     # 再创建 binary_view 记录，之后删除临时记录并重新插入一次。
@@ -1420,29 +1426,57 @@ def load_ida_view(
 
     目录结构示例：
     tmp/Malware_sample_exe_idademo/
-      ├── Malware_sample_exe_binaryinfo/
+      ├── Malware_sample_exe_output/          (ExtractAll_IDA.py 创建)
       │     ├── Malware_sample_exe_segments.csv
       │     ├── Malware_sample_exe_sections.csv
       │     ├── Malware_sample_exe_symbols.csv
       │     ├── Malware_sample_exe_strings.csv
-      │     └── Malware_sample_exe_xrefs/*.csv
+      │     └── xrefs/*.csv                    (无前缀，直接是 "xrefs")
       ├── Malware_sample_exe_disassembly/*.asm
-      └── Malware_sample_exe_pesudocode/*.c
+      └── Malware_sample_exe_pseudocode/*.c
     """
     output_dir = Path(output_dir).resolve()
     tool_id = _get_or_create_tool(conn, ToolInfo(name="ida", version=tool_version))
     binary_id = _get_or_create_binary(conn, output_dir)
 
     # ===== 解析 segments / sections / symbols / xrefs / strings ===== #
-    binaryinfo_dir = next(output_dir.glob("*_binaryinfo"), None)
+    def _pick_ida_binaryinfo_dir(view_dir: Path) -> Optional[Path]:
+        """Best-effort locate the directory containing *_segments/sections/symbols.csv and xrefs.
+
+        ExtractAll_IDA.py creates '*_output' directory, not '*_binaryinfo'.
+        We accept both for robustness.
+        """
+        # Preferred layout: <view>/*_output/ (created by ExtractAll_IDA.py)
+        candidate = next(view_dir.glob("*_output"), None)
+        if candidate is not None and candidate.is_dir():
+            return candidate
+
+        # Legacy layout: <view>/*_binaryinfo/
+        candidate = next(view_dir.glob("*_binaryinfo"), None)
+        if candidate is not None and candidate.is_dir():
+            return candidate
+
+        # Fallback: infer from presence of symbols/sections csv
+        symbols_csv = next(view_dir.rglob("*_symbols.csv"), None)
+        sections_csv = next(view_dir.rglob("*_sections.csv"), None)
+        if symbols_csv is not None:
+            return symbols_csv.parent
+        if sections_csv is not None:
+            return sections_csv.parent
+        return None
+
+    binaryinfo_dir = _pick_ida_binaryinfo_dir(output_dir)
     if binaryinfo_dir is None:
-        raise FileNotFoundError(f"未找到 IDA binaryinfo 目录: {output_dir}")
+        raise FileNotFoundError(
+            f"未找到 IDA binaryinfo 目录（期望 *_output 或 *_binaryinfo），且无法从 *_symbols.csv/_sections.csv 推断: {output_dir}"
+        )
 
     segments_csv = next(binaryinfo_dir.glob("*_segments.csv"), None)
     sections_csv = next(binaryinfo_dir.glob("*_sections.csv"), None)
     symbols_csv = next(binaryinfo_dir.glob("*_symbols.csv"), None)
     strings_csv = next(binaryinfo_dir.glob("*_strings.csv"), None)
-    xrefs_dir = next(binaryinfo_dir.glob("*_xrefs"), None)
+    # ExtractAll_IDA.py creates "xrefs" directory (no prefix) inside *_output/
+    xrefs_dir = binaryinfo_dir / "xrefs" if (binaryinfo_dir / "xrefs").is_dir() else None
 
     image_base: Optional[int] = None
     if segments_csv:
@@ -1474,8 +1508,8 @@ def load_ida_view(
     if disasm_dir and disasm_dir.is_dir():
         _parse_asm_functions_and_instructions(conn, view_id=view_id, disasm_dir=disasm_dir)
 
-    # ===== 解析伪代码函数（注意目录名拼写: pesudocode）=====
-    pseudo_dir = next(output_dir.glob("*_pesudocode"), None)
+    # ===== 解析伪代码函数 =====
+    pseudo_dir = next(output_dir.glob("*_pseudocode"), None)
     if pseudo_dir and pseudo_dir.is_dir():
         _parse_pseudocode_functions(conn, view_id=view_id, pseudo_dir=pseudo_dir)
 
@@ -1770,11 +1804,18 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     # 若同时提供 Ghidra / IDA 输出目录，则基于 symbols.csv 自动推断 Ghidra/IDA 基址偏移
     address_offset = 0
     if ghidra_dir is not None and ida_dir is not None:
-        # Ghidra 导出目录在历史版本中可能使用嵌套的 *_ghidemo 目录存放 csv。
+        # 使用与 _pick_ghidra_binaryinfo_dir 和 _pick_ida_binaryinfo_dir 相同的逻辑
+        # 以保持一致性，避免在使用新导出格式（*_output）时静默回退到 offset=0
         ghidra_binaryinfo = next(ghidra_dir.glob("*_binaryinfo"), None)
         if ghidra_binaryinfo is None:
+            ghidra_binaryinfo = next(ghidra_dir.glob("*_output"), None)
+        if ghidra_binaryinfo is None:
             ghidra_binaryinfo = next(ghidra_dir.glob("*_ghidemo"), None)
-        ida_binaryinfo = next(ida_dir.glob("*_binaryinfo"), None)
+        
+        ida_binaryinfo = next(ida_dir.glob("*_output"), None)
+        if ida_binaryinfo is None:
+            ida_binaryinfo = next(ida_dir.glob("*_binaryinfo"), None)
+        
         if ghidra_binaryinfo is not None and ida_binaryinfo is not None:
             ghidra_symbols_csv = next(ghidra_binaryinfo.glob("*_symbols.csv"), None)
             ida_symbols_csv = next(ida_binaryinfo.glob("*_symbols.csv"), None)

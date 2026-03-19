@@ -6,7 +6,6 @@ ReBind Demo 综合脚本
 
 import argparse
 import atexit
-import copy
 import http.client
 import json
 import os
@@ -43,13 +42,22 @@ except ImportError as e:
     IDAAdapter = None
 
 
-SEMANTIC_ALIGN_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "semantic_align.py"
-DEEP_PATH_DFS_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "deep_path_dfs.py"
-GOAL_DEEP_ENGINE_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "goal_deep_engine.py"
-ALIGNMENT_LOADER_SCRIPT = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment" / "alignment_loader.py"
+_SA = Path(__file__).resolve().parent / "tools" / "Semantics_Alignment"
+SEMANTIC_ALIGN_SCRIPT = _SA / "breadth" / "pipeline.py"
+DEEP_PATH_DFS_SCRIPT = _SA / "depth" / "deep_path_dfs.py"
+GOAL_DEEP_ENGINE_SCRIPT = _SA / "depth" / "engine.py"
+ALIGNMENT_LOADER_SCRIPT = _SA / "breadth" / "alignment_loader.py"
 IDAT_EXIT_PORT = 12345
 _IDAT_EXIT_TIMEOUT = 2.0
-GLOBAL_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+from project_config import (
+    ROOT_CONFIG_PATH as GLOBAL_CONFIG_PATH,
+    deep_merge_dicts as _deep_merge_dicts,
+    detect_platform_key as _detect_platform_key,
+    load_yaml_file as _load_yaml_file,
+    merge_semantics_config_dict,
+    merge_tool_config,
+)
 _TEMP_MERGED_CONFIGS: List[Path] = []
 
 
@@ -63,118 +71,6 @@ def _cleanup_temp_configs() -> None:
 
 
 atexit.register(_cleanup_temp_configs)
-
-
-def _load_yaml_file(path: Path, *, allow_missing: bool = False) -> Dict[str, Any]:
-    """Load a YAML file and ensure it returns a dictionary."""
-
-    if not path.exists():
-        if allow_missing:
-            return {}
-        raise FileNotFoundError(f"配置文件不存在: {path}")
-
-    with path.open("r", encoding="utf-8") as fp:
-        data = yaml.safe_load(fp)
-
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise RuntimeError(f"配置文件 {path} 必须是一个字典结构。")
-    return data
-
-
-def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively merge two dictionaries, giving precedence to override."""
-
-    merged = copy.deepcopy(base)
-    for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = _deep_merge_dicts(merged[key], value)
-        else:
-            merged[key] = value
-
-    return merged
-
-
-def _detect_platform_key(explicit: Optional[str] = None) -> str:
-    if explicit:
-        key = explicit.strip().lower()
-        if key in {"windows", "macos", "linux"}:
-            return key
-        raise ValueError(f"不支持的 --platform={explicit!r}，仅支持 windows/macos/linux")
-
-    sys_name = platform.system().strip().lower()
-    if sys_name.startswith(("win", "msys", "cygwin", "mingw")):
-        return "windows"
-    if sys_name.startswith("darwin") or sys_name.startswith("mac"):
-        return "macos"
-    if sys_name.startswith("linux"):
-        return "linux"
-    return sys_name or "unknown"
-
-
-def _normalize_module_overrides(section_key: str, raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Accept either module-shaped overrides or shorthand overrides and normalize."""
-
-    if not raw:
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-
-    # If the user already wrote module-shaped config, keep it.
-    if section_key == "ghidra":
-        if any(k in raw for k in ("ghidra", "output", "scripts", "filename", "logging")):
-            return raw
-        ghidra_keys = ("cmd_path", "workspace", "project_name_prefix")
-        nested = {k: raw[k] for k in ghidra_keys if k in raw}
-        result: Dict[str, Any] = {"ghidra": nested} if nested else {}
-        for k in ("output", "scripts", "filename", "logging"):
-            if k in raw:
-                result[k] = raw[k]
-        return result or raw
-
-    if section_key == "ida":
-        if any(k in raw for k in ("ida", "output", "scripts", "filename", "logging")):
-            return raw
-        ida_keys = ("cmd_path", "args")
-        nested = {k: raw[k] for k in ida_keys if k in raw}
-        result = {"ida": nested} if nested else {}
-        for k in ("output", "scripts", "filename", "logging"):
-            if k in raw:
-                result[k] = raw[k]
-        return result or raw
-
-    # semantics already matches its module config shape (llm/pipeline) + optional runtime.
-    return raw
-
-
-def _platform_overrides(global_config: Dict[str, Any], platform_key: str, section_key: str) -> Dict[str, Any]:
-    platforms = global_config.get("platforms", {})
-    if not isinstance(platforms, dict):
-        return {}
-    by_os = platforms.get(platform_key, {})
-    if not isinstance(by_os, dict):
-        return {}
-    section = by_os.get(section_key, {})
-    return section if isinstance(section, dict) else {}
-
-
-def _select_module_config_path(
-    module_config_arg: Optional[str],
-    module_dir_name: str,
-    default_path: Path,
-) -> Path:
-    """Prefer a user-specified config if it is rooted in the requested module."""
-
-    if module_config_arg:
-        candidate = Path(module_config_arg).expanduser().resolve()
-        if candidate.exists() and candidate.parent.name == module_dir_name:
-            return candidate
-    return default_path
 
 
 def _write_temp_config(config: Dict[str, Any], prefix: str) -> Path:
@@ -779,17 +675,10 @@ class ReBindDemo:
     
     def __init__(
         self,
-        module_config_path: Optional[str] = None,
         global_config_path: Optional[str] = None,
         platform_key: Optional[str] = None,
     ):
-        """初始化综合分析工具
-        
-        Args:
-            module_config_path: 模块级配置文件路径（若在对应模块目录下则会被使用）
-            global_config_path: 全局配置文件路径（优先级最高，若不指定则使用项目根的 config.yaml）
-        """
-        self.module_config_path = module_config_path
+        """初始化综合分析工具；配置仅来自根目录 config.yaml（或 --global-config 指定路径）。"""
         self.platform_key = _detect_platform_key(platform_key)
         if global_config_path:
             resolved_global_path = Path(global_config_path).expanduser().resolve()
@@ -805,27 +694,17 @@ class ReBindDemo:
         self.ghidra_adapter = None
         self.ida_adapter = None
 
-        ghidra_default_config = tools_dir / "Ghidra_Headless_Demo" / "config.yaml"
-        ida_default_config = tools_dir / "IDA_Headless_Demo" / "config.yaml"
-        semantics_default_config = tools_dir / "Semantics_Alignment" / "config.yaml"
-
         self.ghidra_config_path = self._prepare_module_config(
             module_dir_name="Ghidra_Headless_Demo",
             section_key="ghidra",
-            default_config_path=ghidra_default_config,
-            module_override_arg=self.module_config_path,
         )
         self.ida_config_path = self._prepare_module_config(
             module_dir_name="IDA_Headless_Demo",
             section_key="ida",
-            default_config_path=ida_default_config,
-            module_override_arg=self.module_config_path,
         )
         self.semantics_config_path = self._prepare_module_config(
             module_dir_name="Semantics_Alignment",
             section_key="semantics",
-            default_config_path=semantics_default_config,
-            module_override_arg=None,
         )
         self.semantics_config = _load_yaml_file(self.semantics_config_path)
         runtime = self.semantics_config.get("runtime", {})
@@ -848,22 +727,14 @@ class ReBindDemo:
         self,
         module_dir_name: str,
         section_key: str,
-        default_config_path: Path,
-        module_override_arg: Optional[str],
     ) -> Path:
-        """Load module config, merge global overrides, and write to a temp file."""
+        """从根 config.yaml 合并平台覆盖，写入临时 YAML（供适配器 / 子进程使用）。"""
 
-        base_path = _select_module_config_path(
-            module_override_arg, module_dir_name, default_config_path
-        )
-        base_config = _load_yaml_file(base_path)
-        overrides_common = self.global_config.get(section_key, {})
-        overrides_common_dict = overrides_common if isinstance(overrides_common, dict) else {}
-        overrides_platform_dict = _platform_overrides(self.global_config, self.platform_key, section_key)
-        normalized_common = _normalize_module_overrides(section_key, overrides_common_dict)
-        normalized_platform = _normalize_module_overrides(section_key, overrides_platform_dict)
-        merged_overrides = _deep_merge_dicts(normalized_common, normalized_platform)
-        merged_config = _deep_merge_dicts(base_config, merged_overrides)
+        if section_key == "semantics":
+            merged_section = merge_semantics_config_dict(self.global_config, self.platform_key)
+        else:
+            merged_section = merge_tool_config(self.global_config, section_key, self.platform_key)
+        merged_config = merged_section
         prefix = f"{module_dir_name.lower()}_config_"
         return _write_temp_config(merged_config, prefix=prefix)
     
@@ -957,12 +828,8 @@ def main():
         help="要分析的文件路径（支持多个文件）"
     )
     parser.add_argument(
-        "-c", "--config",
-        help="配置文件路径（默认: 使用各工具的默认配置）"
-    )
-    parser.add_argument(
         "--global-config",
-        help="全局配置文件路径（默认: rebind_demo.py 所在目录的 config.yaml）"
+        help="唯一配置文件路径（默认: 项目根目录 config.yaml）",
     )
     parser.add_argument(
         "--platform",
@@ -1151,7 +1018,7 @@ def main():
     
     try:
         # 创建综合分析工具
-        demo = ReBindDemo(args.config, args.global_config, args.platform)
+        demo = ReBindDemo(args.global_config, args.platform)
         print(f"[ReBindDemo] 平台检测: {demo.platform_key} (system={platform.system()}, release={platform.release()})")
         
         # 在执行分析之前，进行 OpenAI API Key 启动检查；纯导出或 deep-path+llm-off 时跳过

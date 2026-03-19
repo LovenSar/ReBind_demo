@@ -1,30 +1,27 @@
-# 全局配置（优先级最高）
+# =============================================================================
+# ReBind Demo — 唯一配置文件（仓库根目录）
+# =============================================================================
+# 所有 Ghidra / IDA / 语义流水线参数均在此维护，可按 platforms.<os> 覆盖路径等。
+# 不再使用 tools/*/config.yaml。
 #
-# 合并规则（每个模块分别合并）：
-# 1) 读取模块目录下的 config.yaml 作为 base
-# 2) 合并本文件中同名模块的“通用覆盖”(ghidra/ida/semantics)
-# 3) 自动检测系统后，再合并 platforms.<os> 下的“平台覆盖”（优先级高于通用覆盖）
-#
-# os 取值：windows / macos / linux
-#
-# 注意：
-# - ghidra/ida 的结构与对应模块 config.yaml 一致（顶层包含 ghidra|ida / output / scripts / filename / logging）。
-# - semantics 的结构与 tools/Semantics_Alignment/config.yaml 一致（顶层包含 llm / pipeline），额外允许 runtime。
+# 结构说明：
+# - platforms.windows | macos | linux：按系统覆盖 ghidra / ida / semantics 子树
+# - ghidra：Ghidra Headless + ExtractAll.py（与 ghidra_adapter 期望结构一致）
+# - ida：IDA + ExtractAll_IDA.py
+# - semantics：breadth 流水线 / depth 引擎 等（llm / pipeline / runtime）
+# =============================================================================
 
 platforms:
   windows:
     ghidra:
       ghidra:
-        # Windows 下通常是 analyzeHeadless.bat
         cmd_path: "E:\\Program Files (x86)\\ghidra_11.4.3_PUBLIC_20251203\\ghidra_11.4.3_PUBLIC\\support\\analyzeHeadless.bat"
     ida:
       ida:
-        # Windows 下通常是 idat64.exe（按安装路径调整）
         cmd_path: "C:\\Program Files\\IDA Professional 9.2\\idat.exe"
         args: ["-A", "-c"]
     semantics:
       runtime:
-        # semantic_align.py 启动 IDA(idat) 时使用的可执行文件
         idat_exe: "C:\\Program Files\\IDA Professional 9.2\\idat.exe"
 
   macos:
@@ -51,25 +48,30 @@ platforms:
       runtime:
         idat_exe: "/opt/ida/idat64"
 
-
-# -----------------------------
-# Ghidra Headless（通用覆盖）
-# -----------------------------
+# -----------------------------------------------------------------------------
+# Ghidra Headless（ExtractAll.py）
+# -----------------------------------------------------------------------------
 ghidra:
   ghidra:
-    # 工作空间目录（留空则使用输出目录）
     workspace: ""
     project_name_prefix: "ReBindDemo"
+    extra_headless_args: []
   output:
     dir_suffix: "_ghidemo"
     keep_python_scripts: false
     keep_input_copy: false
   scripts:
-    post_scripts:
-      - "ExtractBinaryInfo.py"
-      - "ExtractDisassembly.py"
-      - "ExtractPseudocode.py"
+    use_temp_project: true
+    temp_project_name: "proj"
+    copy_tool_scripts: false
     script_path: ""
+    post_script: "ExtractAll.py"
+    post_script_args:
+      - "{output_dir}"
+      - "{input_filename}"
+    post_script_extra: []
+    legacy_cwd_output_move: false
+    post_scripts: []
   filename:
     sanitize: true
     allowed_chars_pattern: "[A-Za-z0-9]"
@@ -79,23 +81,19 @@ ghidra:
     log_to_file: true
     log_file_path: ""
 
-
-# -----------------------------
-# IDA Headless（通用覆盖）
-# -----------------------------
+# -----------------------------------------------------------------------------
+# IDA Headless（ExtractAll_IDA.py）
+# -----------------------------------------------------------------------------
 ida:
   ida:
-    # args 既可写成字符串，也可写成数组（推荐数组，避免空格解析问题）
     args: ["-A", "-c"]
   output:
     dir_suffix: "_idademo"
     keep_python_scripts: false
-    keep_input_copy: false
+    keep_input_copy: true
   scripts:
     scripts:
-      - "ExtractBinaryInfo_IDA.py"
-      - "ExtractDisassembly_IDA.py"
-      - "ExtractPseudocode_IDA.py"
+      - "ExtractAll_IDA.py"
   filename:
     sanitize: true
     allowed_chars_pattern: "[A-Za-z0-9]"
@@ -105,16 +103,16 @@ ida:
     log_to_file: true
     log_file_path: ""
 
-
-# -----------------------------
-# Semantics Alignment（通用覆盖）
-# -----------------------------
+# -----------------------------------------------------------------------------
+# Semantics Alignment（LLM + 流水线）
+# -----------------------------------------------------------------------------
 semantics:
   runtime:
     ida_url: "http://127.0.0.1:12345"
     ida_start_delay: 3.0
     no_ida: false
     no_align: false
+
   llm:
     provider: "openai"
     model: "LongCat-Flash-Chat"
@@ -123,16 +121,24 @@ semantics:
     api:
       key_env_var: "OPENAI_API_KEY"
       base_url: "https://api.longcat.chat/openai/v1"
+    chat_completion_kwargs: {}
+
   pipeline:
     ida_sync:
       connect_max_wait_seconds: 120
+
     phase1:
       batch_size_default: 25
+      target_preview_max: 20
+      scheduler_top_k: 50
+      score_recompute_every_batches: 8
+
     phase4_lvar:
       min_pseudo_lines_default: 6
       batch_size_cap: 3
       verify_max_retries: 3
       verify_wait_seconds: 1.0
+
     prompt_limits:
       phase1_max_disasm_lines: 200
       phase1_max_pseudo_chars_per_tool: 4000
@@ -141,6 +147,8 @@ semantics:
       annotation_context_max_pseudo_chars_per_tool: 1200
       annotation_context_max_strings: 20
       ida_snapshot_max_disasm_lines: 400
+      annotation_ida_disasm_lines_per_prompt: 120
+
     phase5_annotation:
       min_pseudo_lines: 6
       max_code_chars: 8000
@@ -155,3 +163,11 @@ semantics:
       ida_sync_chunk_size: 120
       log_llm_response: true
       log_llm_response_max_chars: 0
+
+    sqlite_tuning:
+      enabled: true
+      wal: true
+      synchronous_normal: true
+      temp_store_memory: true
+      busy_timeout_ms: 5000
+      cache_size_kib: 131072

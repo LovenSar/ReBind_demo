@@ -39,26 +39,29 @@ class IDAAdapter:
         self.logger = self._setup_logging()
         
     def _load_config(self, config_path: Optional[str]) -> Dict[str, Any]:
-        """加载配置文件
-        
-        Args:
-            config_path: 配置文件路径
-            
-        Returns:
-            配置字典
-        """
+        """加载配置：默认合并仓库根目录 ``config.yaml`` 中 ``ida`` 段与 ``platforms``。"""
+
+        repo_root = Path(__file__).resolve().parents[2]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        import project_config
+
         if config_path is None:
-            config_path = Path(__file__).parent / "config.yaml"
-        else:
-            config_path = Path(config_path)
-            
-        if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
-            
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-            
-        return config
+            data = project_config.load_global_config()
+            return project_config.merge_tool_config(
+                data, "ida", project_config.detect_platform_key()
+            )
+
+        path = Path(config_path)
+        if not path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {path}")
+        raw = project_config.load_yaml_file(path)
+        plat = raw.get("platforms")
+        if isinstance(plat, dict) and plat:
+            return project_config.merge_tool_config(
+                raw, "ida", project_config.detect_platform_key()
+            )
+        return raw
     
     def _setup_logging(self) -> logging.Logger:
         """设置日志系统
@@ -157,8 +160,7 @@ class IDAAdapter:
                 shutil.copy2(script_file, output_dir)
                 self.logger.debug(f"复制脚本: {script_file.name}")
         
-        # 复制输入文件
-        if output_config.get('keep_input_copy', False):
+        if output_config.get("keep_input_copy", True):
             shutil.copy2(input_path, output_dir / input_path.name)
             self.logger.debug(f"复制输入文件: {input_path.name}")
         
@@ -189,12 +191,18 @@ class IDAAdapter:
         else:
             extra_args = ['-A', '-c']
 
-        # 构建命令
+        in_path = Path(input_file)
+        work_binary = (output_dir / in_path.name).resolve()
+        if work_binary.exists():
+            binary_arg = str(work_binary)
+        else:
+            binary_arg = str(in_path.resolve())
+
         command = [
             cmd_path,
             *extra_args,
             f"-S{script_file}",
-            input_file,
+            binary_arg,
         ]
         
         self.logger.debug(f"构建的命令: {' '.join(command)}")
@@ -352,7 +360,7 @@ def main():
     )
     parser.add_argument(
         "-c", "--config",
-        help="配置文件路径（默认: config.yaml）"
+        help="配置文件路径（默认: 仓库根目录 config.yaml 中的 ida 段）"
     )
     parser.add_argument(
         "-v", "--verbose",

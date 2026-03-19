@@ -1321,3 +1321,100 @@
 2026-03-14 21:00:23,613 - ida_adapter - INFO - 所有脚本执行完成
 2026-03-14 21:00:23,614 - ida_adapter - INFO - 处理输出文件...
 2026-03-14 21:00:23,615 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/ReBind_demo/tmp/client_b_goal_deep/client_b_idademo
+2026-03-20 00:21:14,812 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b
+2026-03-20 00:21:14,813 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:21:14,814 - ida_adapter - DEBUG - 复制脚本: ExtractAll_IDA.py
+2026-03-20 00:21:14,815 - ida_adapter - DEBUG - 复制输入文件: client_b
+2026-03-20 00:21:14,815 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-20 00:21:14,815 - ida_adapter - DEBUG - 构建的命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo/client_b
+2026-03-20 00:21:14,816 - ida_adapter - DEBUG - 完整命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo/client_b
+2026-03-20 00:21:14,816 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:22:10,730 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-20 00:22:10,730 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-20 00:22:10,730 - ida_adapter - DEBUG - 当前工作目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo):
+2026-03-20 00:22:10,730 - ida_adapter - DEBUG -   - client_b_disassembly
+2026-03-20 00:22:10,730 - ida_adapter - DEBUG -   - client_b.i64
+2026-03-20 00:22:10,730 - ida_adapter - DEBUG -   - client_b_output
+2026-03-20 00:22:10,730 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_pseudocode
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 原始目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp):
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - .DS_Store
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_idademo
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_ghidemo
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 文件名清理: client_b -> client_b
+2026-03-20 00:22:10,731 - ida_adapter - INFO - 处理输出文件...
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 清理后的文件名: client_b
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo):
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_disassembly
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b.i64
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_output
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:22:10,731 - ida_adapter - DEBUG -   - client_b_pseudocode
+2026-03-20 00:22:10,732 - ida_adapter - DEBUG - 删除临时脚本: ExtractAll_IDA.py
+2026-03-20 00:22:10,732 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:23:33,376 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b
+2026-03-20 00:23:33,377 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:23:33,378 - ida_adapter - DEBUG - 复制脚本: ExtractAll_IDA.py
+2026-03-20 00:23:33,380 - ida_adapter - DEBUG - 复制输入文件: client_b
+2026-03-20 00:23:33,380 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-20 00:23:33,380 - ida_adapter - DEBUG - 构建的命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo/client_b
+2026-03-20 00:23:33,380 - ida_adapter - DEBUG - 完整命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo/client_b
+2026-03-20 00:23:33,380 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:23:44,325 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-20 00:23:44,325 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 当前工作目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo):
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b_disassembly
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b.i64
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b_output
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b_pseudocode
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 原始目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp):
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - .DS_Store
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b_idademo
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b_ghidemo
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 文件名清理: client_b -> client_b
+2026-03-20 00:23:44,326 - ida_adapter - INFO - 处理输出文件...
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 清理后的文件名: client_b
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo
+2026-03-20 00:23:44,326 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo):
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - client_b_disassembly
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - client_b.i64
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - client_b_output
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - client_b
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG -   - client_b_pseudocode
+2026-03-20 00:23:44,327 - ida_adapter - DEBUG - 删除临时脚本: ExtractAll_IDA.py
+2026-03-20 00:23:44,327 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:24:18,904 - ida_adapter - INFO - 开始分析文件: tmp/client_b
+2026-03-20 00:24:18,904 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:24:18,906 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-20 00:24:29,682 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-20 00:24:29,683 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-20 00:24:29,683 - ida_adapter - INFO - 处理输出文件...
+2026-03-20 00:24:29,683 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:25:28,895 - ida_adapter - INFO - 开始分析文件: tmp/client_b
+2026-03-20 00:25:28,896 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:25:28,898 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-20 00:25:40,271 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-20 00:25:40,271 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-20 00:25:40,271 - ida_adapter - INFO - 处理输出文件...
+2026-03-20 00:25:40,271 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:48:15,089 - ida_adapter - INFO - 开始分析文件: tmp/client_b
+2026-03-20 00:48:15,090 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo
+2026-03-20 00:48:15,092 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-20 00:48:25,824 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-20 00:48:25,824 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-20 00:48:25,825 - ida_adapter - INFO - 处理输出文件...
+2026-03-20 00:48:25,825 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_idademo

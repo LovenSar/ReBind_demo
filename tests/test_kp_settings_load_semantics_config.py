@@ -24,27 +24,6 @@ class TestLoadSemanticsConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
-            base_dir = td_path / "Semantics_Alignment"
-            base_dir.mkdir(parents=True, exist_ok=True)
-
-            (base_dir / "config.yaml").write_text(
-                "\n".join(
-                    [
-                        "llm:",
-                        "  model: base-model",
-                        "  temperature: 0.2",
-                        "  max_tokens: 100",
-                        "  api:",
-                        "    key_env_var: KEY",
-                        "pipeline:",
-                        "  ida_sync:",
-                        "    connect_max_wait_seconds: 10",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-
             global_config = td_path / "config.yaml"
             global_config.write_text(
                 "\n".join(
@@ -59,6 +38,9 @@ class TestLoadSemanticsConfig(unittest.TestCase):
                         "    ida_url: 'http://127.0.0.1:9999'",
                         "  llm:",
                         "    model: override-model",
+                        "  pipeline:",
+                        "    ida_sync:",
+                        "      connect_max_wait_seconds: 10",
                         "",
                     ]
                 ),
@@ -66,7 +48,7 @@ class TestLoadSemanticsConfig(unittest.TestCase):
             )
 
             with mock.patch.object(mod.platform, "system", return_value="Windows"):
-                merged = mod.load_semantics_config(str(global_config), base_dir=base_dir)
+                merged = mod.load_semantics_config(str(global_config))
 
             self.assertEqual(merged.get("llm", {}).get("model"), "override-model")
             self.assertEqual(merged.get("runtime", {}).get("ida_url"), "http://127.0.0.1:9999")
@@ -78,10 +60,6 @@ class TestLoadSemanticsConfig(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             td_path = Path(td)
-            base_dir = td_path / "Semantics_Alignment"
-            base_dir.mkdir(parents=True, exist_ok=True)
-            (base_dir / "config.yaml").write_text("llm: {model: base}\n", encoding="utf-8")
-
             global_config = td_path / "config.yaml"
             global_config.write_text(
                 "\n".join(
@@ -91,7 +69,9 @@ class TestLoadSemanticsConfig(unittest.TestCase):
                         "    semantics:",
                         "      runtime:",
                         "        idat_exe: 'C:\\\\IDA\\\\idat64.exe'",
-                        "semantics: {}",
+                        "semantics:",
+                        "  llm:",
+                        "    model: base",
                         "",
                     ]
                 ),
@@ -99,7 +79,7 @@ class TestLoadSemanticsConfig(unittest.TestCase):
             )
 
             with mock.patch.object(mod.platform, "system", return_value="MSYS_NT-10.0"):
-                merged = mod.load_semantics_config(str(global_config), base_dir=base_dir)
+                merged = mod.load_semantics_config(str(global_config))
 
             self.assertEqual(merged.get("runtime", {}).get("idat_exe"), r"C:\\IDA\\idat64.exe")
 

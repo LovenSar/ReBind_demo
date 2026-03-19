@@ -544,22 +544,26 @@ def run_validation_phase(
 
     cur = conn.cursor()
 
-    def _is_locked(entry_va: int) -> bool:
-        node = graph.nodes.get(entry_va)
-        if not node or not node.function_ids:
-            return False
-        placeholders = ",".join("?" for _ in node.function_ids)
-        cur.execute(
-            f"""
-            SELECT COUNT(*)
-            FROM analysis_status
-            WHERE analysis_state = 'LOCKED'
-              AND function_id IN ({placeholders});
-            """,
-            tuple(node.function_ids),
+    # 优化：一次性查询所有 LOCKED 函数，构建缓存
+    def _build_locked_cache(conn: sqlite3.Connection, graph: UnifiedGraph) -> Set[int]:
+        """一次性查询所有 LOCKED 函数，构建缓存。"""
+        cur_cache = conn.cursor()
+        cur_cache.execute(
+            """
+            SELECT DISTINCT f.entry_va
+            FROM analysis_status AS a
+            JOIN functions AS f ON f.id = a.function_id
+            WHERE a.analysis_state = 'LOCKED';
+            """
         )
-        (cnt,) = cur.fetchone()
-        return cnt > 0
+        return {int(row[0]) for row in cur_cache.fetchall()}
+
+    locked_cache = _build_locked_cache(conn, graph)
+    logger.info("[Phase2] 已构建 LOCKED 函数缓存，共 %d 个函数", len(locked_cache))
+
+    def _is_locked(entry_va: int) -> bool:
+        """使用缓存检查函数是否已锁定。"""
+        return entry_va in locked_cache
 
     for va in entry_vas:
         if va in visited:

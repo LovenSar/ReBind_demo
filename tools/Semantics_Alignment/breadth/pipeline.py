@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""semantic_align.py
+"""pipeline.py — 广度优先 6 步流水线入口。
 
-一键执行“对齐加载 + 语义传播(Phase1-5) + IDA 同步”的流水线：
-
-1) 调用 alignment_loader.py 从 Ghidra / IDA 导出的目录构建 SQLite 数据库；
-2) （可选）启动 IDA（idat）并运行 idat_server.py；
-3) 在本进程内依次执行 Phase1~Phase5（模块化实现位于 tools/Semantics_Alignment/phases/）。
-
-说明：此脚本是新的工作流入口，避免再通过子进程调用 knowledge_propagation.py。
-公共能力已下沉到 kp/（日志、配置、建图、评分等），工作流不再依赖 knowledge_propagation.py。
+对齐加载 + Phase1~5 语义传播 + Phase6 IDA 刷新；与深度优先（depth/）工作流分离。
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_BREADTH_DIR = Path(__file__).resolve().parent
+_SA_ROOT = _BREADTH_DIR.parent
+# 确保 SA_ROOT 在 BREADTH_DIR 之前，这样 kp 等共享模块优先从 SA_ROOT 导入
+# 但 BREADTH_DIR 必须在 sys.path 中，这样 phases 模块才能被找到
+for _p in (_SA_ROOT, _BREADTH_DIR):
+    _p_str = str(_p)
+    if _p_str not in sys.path:
+        sys.path.insert(0, _p_str)
+# 验证 phases 目录存在
+_PHASES_DIR = _BREADTH_DIR / "phases"
+if not _PHASES_DIR.exists():
+    raise RuntimeError(f"phases 目录不存在: {_PHASES_DIR}")
+# 确保 BREADTH_DIR 在 sys.path 中（phases 是 breadth 的子目录）
+_BREADTH_DIR_STR = str(_BREADTH_DIR)
+if _BREADTH_DIR_STR not in sys.path:
+    sys.path.insert(0, _BREADTH_DIR_STR)
 
 import argparse
 import heapq
@@ -52,6 +65,14 @@ from kp.kp_schema import (
 from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedGraph
 from kp.kp_unified_prompt import build_unified_batch_prompt, build_unified_prompt
 from tqdm import tqdm
+
+# 在导入 phases 之前，再次确保 BREADTH_DIR 在 sys.path 的最前面
+# 因为某些模块（如 kp_settings）可能会修改 sys.path，导致 BREADTH_DIR 被移出或覆盖
+_BREADTH_DIR_STR = str(_BREADTH_DIR)
+if _BREADTH_DIR_STR in sys.path:
+    sys.path.remove(_BREADTH_DIR_STR)
+sys.path.insert(0, _BREADTH_DIR_STR)
+
 from phases.phase1_kp import analyze_one_unified_function as phase1_analyze_one_unified_function
 from phases.phase1_kp import analyze_unified_batch as phase1_analyze_unified_batch
 from phases.phase2_validation import run_validation_phase as phase2_run_validation_phase
@@ -63,8 +84,9 @@ from alignment_loader import inspect_sqlite_database
 
 
 SCRIPT_PATH = Path(__file__).resolve()
-TOOLS_DIR = SCRIPT_PATH.parent
-REPO_ROOT = SCRIPT_PATH.parents[2]
+TOOLS_DIR = SCRIPT_PATH.parents[1]
+REPO_ROOT = SCRIPT_PATH.parents[3]
+BREADTH_DIR = SCRIPT_PATH.parent
 
 DEFAULT_IDA_HTTP_PORT = 12345
 DEFAULT_IDA_URL = f"http://127.0.0.1:{DEFAULT_IDA_HTTP_PORT}"
@@ -242,7 +264,7 @@ def run_alignment_loader(
     """
     cmd = [
         sys.executable,
-        str(TOOLS_DIR / "alignment_loader.py"),
+        str(BREADTH_DIR / "alignment_loader.py"),
         "--db",
         str(db_path),
         "--ghidra-dir",
@@ -604,12 +626,49 @@ def run_semantic_pipeline(
             phase1_latest_seq: Dict[int, int] = {}
             phase1_scores: Dict[int, int] = {}
 
+            class LazyHeap:
+                """延迟删除的堆（优化：避免堆中积累过期条目）。"""
+                def __init__(self):
+                    self.heap: List[tuple[int, int, int]] = []
+                    self.entry_va_to_best: Dict[int, tuple[int, int]] = {}  # entry_va -> (score, seq)
+                
+                def push(self, entry_va: int, score: int, seq: int) -> None:
+                    """只保留每个 entry_va 的最新分数。"""
+                    if entry_va in self.entry_va_to_best:
+                        old_score, old_seq = self.entry_va_to_best[entry_va]
+                        if seq <= old_seq:  # 旧序列号，忽略
+                            return
+                    self.entry_va_to_best[entry_va] = (score, seq)
+                    heapq.heappush(self.heap, (-score, seq, entry_va))
+                
+                def pop(self) -> Optional[tuple[int, int, int]]:
+                    """弹出时跳过过期条目。"""
+                    while self.heap:
+                        neg_score, seq, entry_va = heapq.heappop(self.heap)
+                        best_score, best_seq = self.entry_va_to_best.get(entry_va, (0, 0))
+                        if seq == best_seq:  # 是最新条目
+                            del self.entry_va_to_best[entry_va]
+                            return (-neg_score, seq, entry_va)
+                    return None
+                
+                def __bool__(self) -> bool:
+                    """检查堆是否为空（跳过过期条目）。"""
+                    while self.heap:
+                        neg_score, seq, entry_va = self.heap[0]
+                        best_score, best_seq = self.entry_va_to_best.get(entry_va, (0, 0))
+                        if seq == best_seq:
+                            return True
+                        heapq.heappop(self.heap)  # 移除过期条目
+                    return False
+
+            phase1_lazy_heap = LazyHeap()
+
             def _push_phase1_score(entry_va: int, score: int) -> None:
                 nonlocal phase1_heap_seq
                 phase1_heap_seq += 1
                 phase1_latest_seq[int(entry_va)] = phase1_heap_seq
                 phase1_scores[int(entry_va)] = int(score)
-                heapq.heappush(phase1_score_heap, (-int(score), phase1_heap_seq, int(entry_va)))
+                phase1_lazy_heap.push(int(entry_va), int(score), phase1_heap_seq)
 
             if phase1_nodes_by_va:
                 init_scores: Dict[int, int] = {}
@@ -631,13 +690,14 @@ def run_semantic_pipeline(
             phase1_batch_count = 0
             phase1_scheduler_top_k = max(1, _get_cfg_int(semantics_config, ("pipeline", "phase1", "scheduler_top_k"), 50))
 
-            while phase1_score_heap:
+            while phase1_lazy_heap:
                 requested_nodes: List[UnifiedFunctionNode] = []
                 requested_entry_vas: List[int] = []
-                while phase1_score_heap and len(requested_nodes) < phase1_scheduler_top_k:
-                    neg_score, seq, entry_va = heapq.heappop(phase1_score_heap)
-                    if phase1_latest_seq.get(int(entry_va)) != int(seq):
-                        continue
+                while phase1_lazy_heap and len(requested_nodes) < phase1_scheduler_top_k:
+                    result = phase1_lazy_heap.pop()
+                    if result is None:
+                        break
+                    score, seq, entry_va = result
                     node = phase1_nodes_by_va.get(int(entry_va))
                     if node is None:
                         continue
@@ -757,15 +817,27 @@ def run_semantic_pipeline(
                 ]
                 if impacted_candidates:
                     try:
+                        # 使用增量评分优化
+                        from kp.kp_scoring import compute_unified_scores_incremental
+                        changed_vas = {int(node.entry_va) for node in selected_nodes}
+                        impacted_scores = compute_unified_scores_incremental(
+                            unified_graph,
+                            analysis_info,
+                            changed_entry_vas=changed_vas,
+                            existing_scores=phase1_scores,
+                            only_entry_vas=impacted_candidates,
+                        )
+                    except Exception:
+                        # 回退到全量计算
                         impacted_scores = compute_unified_scores(
                             unified_graph,
                             analysis_info,
                             only_entry_vas=impacted_candidates,
                         )
-                    except Exception:
-                        impacted_scores = {}
                     for entry_va in impacted_candidates:
-                        _push_phase1_score(int(entry_va), int(impacted_scores.get(int(entry_va), 0)))
+                        new_score = int(impacted_scores.get(int(entry_va), phase1_scores.get(int(entry_va), 0)))
+                        phase1_scores[int(entry_va)] = new_score
+                        _push_phase1_score(int(entry_va), new_score)
 
                 phase1_batch_count += 1
                 if phase1_batch_count % phase1_recompute_every_batches == 0:
@@ -935,8 +1007,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         "--config",
         default=None,
         help=(
-            "语义对齐模块配置文件路径（默认: "
-            f"{TOOLS_DIR / 'config.yaml'})"
+            "配置文件路径（默认: 仓库根目录 config.yaml，读取其中 semantics + platforms）"
         ),
     )
     parser.add_argument(

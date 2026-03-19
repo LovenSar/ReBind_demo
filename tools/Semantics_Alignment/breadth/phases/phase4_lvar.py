@@ -36,6 +36,39 @@ except Exception:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+def _load_pseudocode_batch(
+    conn: sqlite3.Connection,
+    function_ids: Set[int],
+) -> Dict[int, Tuple[str, str]]:
+    """批量加载伪代码（优化：减少数据库查询次数）。
+    
+    Args:
+        conn: 数据库连接
+        function_ids: 函数 ID 集合
+    
+    Returns:
+        字典：function_id -> (prototype, body)
+    """
+    if not function_ids:
+        return {}
+    
+    placeholders = ",".join("?" for _ in function_ids)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT function_id, prototype, body
+        FROM pseudo_functions
+        WHERE function_id IN ({placeholders});
+        """,
+        tuple(function_ids),
+    )
+    
+    result = {}
+    for fid, proto, body in cur.fetchall():
+        result[int(fid)] = (proto or "", body or "")
+    return result
+
+
 def build_local_var_prompt(
     node: UnifiedFunctionNode,
     code: str,

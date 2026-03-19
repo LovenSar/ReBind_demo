@@ -1,0 +1,6 @@
+# ReBind Demo — Python 依赖（pip）
+PyYAML>=6.0
+tqdm>=4.66
+openai>=1.0.0
+openpyxl>=3.1.0
+requests>=2.28.0

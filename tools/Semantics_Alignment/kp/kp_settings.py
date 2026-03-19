@@ -8,12 +8,19 @@ Goal: allow semantic_align + phases to run without importing knowledge_propagati
 from __future__ import annotations
 
 import copy
+import sys
 import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import project_config  # noqa: E402
 
 
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
@@ -45,29 +52,21 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return merged
 
 
-def _detect_platform_key() -> str:
-    sys_name = platform.system().strip().lower()
-    if sys_name.startswith(("win", "msys", "cygwin", "mingw")):
-        return "windows"
-    if sys_name.startswith("darwin") or sys_name.startswith("mac"):
-        return "macos"
-    if sys_name.startswith("linux"):
-        return "linux"
-    return sys_name or "unknown"
-
-
 def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Optional[Path] = None) -> Dict[str, Any]:
-    """Load YAML config.yaml for Semantics Alignment.
+    """加载语义流水线配置。
 
-    If config_path is None, defaults to <base_dir>/config.yaml, where base_dir
-    defaults to this file's parent directory (tools/Semantics_Alignment).
+    - 默认读取仓库根目录 ``config.yaml``（唯一配置源）。
+    - 若 YAML 含 ``semantics`` / ``platforms``，则合并为扁平的 llm/pipeline/runtime。
+    - 否则将整文件视为旧版「仅语义段」YAML。
+    ``base_dir`` 已弃用，保留仅为兼容测试/旧调用。
     """
+
+    del base_dir  # 保留签名；配置仅来自根 config 或显式路径
 
     if config_path:
         path = Path(config_path)
     else:
-        root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parents[1]
-        path = root / "config.yaml"
+        path = project_config.ROOT_CONFIG_PATH
 
     if not path.exists():
         if config_path:
@@ -75,42 +74,13 @@ def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Option
         return {}
 
     try:
-        with path.open("r", encoding="utf-8") as fp:
-            data = yaml.safe_load(fp)
+        data = project_config.load_yaml_file(path)
     except yaml.YAMLError as exc:
         raise RuntimeError(f"无法解析配置文件 {path}：{exc}") from exc
 
-    if data is None:
-        return {}
-    if not isinstance(data, dict):
-        raise RuntimeError(f"配置文件 {path} 必须是一个字典结构。")
-
-    # Support being pointed at the repo's global config.yaml (with `semantics:` + `platforms:`).
-    # Merge order: module defaults < semantics common overrides < platform overrides.
     if "semantics" in data or "platforms" in data:
-        base_root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parents[1]
-        base_config_path = base_root / "config.yaml"
-        base_config: Dict[str, Any] = {}
-        if base_config_path.exists():
-            try:
-                with base_config_path.open("r", encoding="utf-8") as fp:
-                    loaded_base = yaml.safe_load(fp) or {}
-                if isinstance(loaded_base, dict):
-                    base_config = loaded_base
-            except yaml.YAMLError as exc:
-                raise RuntimeError(f"无法解析配置文件 {base_config_path}：{exc}") from exc
-
-        semantics_common = data.get("semantics") if isinstance(data.get("semantics"), dict) else {}
-        platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
-        platform_key = _detect_platform_key()
-        platform_semantics: Dict[str, Any] = {}
-        by_os = platforms.get(platform_key) if isinstance(platforms.get(platform_key), dict) else {}
-        if isinstance(by_os, dict):
-            platform_semantics = by_os.get("semantics") if isinstance(by_os.get("semantics"), dict) else {}
-
-        merged = _deep_merge_dicts(base_config, semantics_common)
-        merged = _deep_merge_dicts(merged, platform_semantics)
-        return merged
+        platform_key = project_config.detect_platform_key()
+        return project_config.merge_semantics_config_dict(data, platform_key)
 
     return data
 

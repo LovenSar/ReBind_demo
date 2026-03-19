@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 def _load_alignment_loader():
     repo_root = Path(__file__).resolve().parents[1]
-    path = repo_root / "tools" / "Semantics_Alignment" / "alignment_loader.py"
+    path = repo_root / "tools" / "Semantics_Alignment" / "breadth" / "alignment_loader.py"
     spec = importlib.util.spec_from_file_location("alignment_loader", path)
     if not spec or not spec.loader:
         raise RuntimeError(f"Failed to load module spec: {path}")

@@ -1,3 +1,5 @@
+.DS_Store
+**/.DS_Store
 *_disassembly
 *.asm
 *_pseudocode
@@ -5,4 +7,5 @@
 *.c
 Samples
 data
-
+Ghidra*
+file_*

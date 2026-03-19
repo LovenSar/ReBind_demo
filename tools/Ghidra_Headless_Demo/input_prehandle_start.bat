@@ -51,9 +51,6 @@ set "INPUT_NAME=%~n1"
 
 REM Define the dedicated output and working directory relative to the input's location
 set "WORK_OUTPUT_DIR=%INPUT_PARENT_DIR%\%INPUT_NAME%_ghidemo"
-REM Set Ghidra Temporary Workspace (Project location)
-set "WORKSPACE=%WORK_OUTPUT_DIR%"
-
 
 REM --- Preparation Steps ---
 
@@ -72,16 +69,7 @@ if not exist "%WORK_OUTPUT_DIR%" (
     echo Directory already exists. Files may be overwritten.
 )
 
-REM 2. Copy Python scripts from script's location to the working directory
-echo Copying Ghidra Python scripts (*.py) from "%SCRIPT_DIR%"...
-copy /Y "%SCRIPT_DIR%*.py" "%WORK_OUTPUT_DIR%" > nul
-if errorlevel 1 (
-    echo Warning: Failed to copy Python scripts. Check permissions or if scripts exist.
-    REM Continue? Pause? Exit? Decide based on requirement. Let's pause for now.
-    pause
-)
-
-REM 3. Copy the input target (we know it's a file) to the working directory
+REM 2. Copy the input target (we know it's a file) to the working directory
 echo Copying input file to working directory...
 echo Copying file "%INPUT_TARGET%"...
 copy /Y "%INPUT_TARGET%" "%WORK_OUTPUT_DIR%" > nul
@@ -139,42 +127,21 @@ REM Function to process a single file *within* the WORK_OUTPUT_DIR
 
     echo =====================================================================
     echo Processing File: "%file_to_process_in_workdir%"
-    echo Using Ghidra Scripts from: "%target_output_dir%"
-    echo Ghidra Output directed to: "%target_output_dir%"
+    echo ExtractAll.py from: "%SCRIPT_DIR%"
+    echo Output base: "%target_output_dir%"
     echo =====================================================================
 
-    REM Call Ghidra:
-    REM - Use the WORKSPACE and a unique PROJECT_NAME (or delete it)
-    REM - Import the file *from the working directory*
-    REM - Set scriptPath to the working directory
-    REM - Pass the working directory path to the Python scripts (if needed - check scripts)
-    echo "%GHIDRA_CMD%" "%WORKSPACE%" %PROJECT_NAME%_%NAME_X% -deleteProject  -import "%file_to_process_in_workdir%"  -scriptPath "%target_output_dir%"  -postScript ExtractBinaryInfo.py  -postScript ExtractDisassembly.py  -postScript ExtractPseudocode.py
-    call "%GHIDRA_CMD%" "%WORKSPACE%" %PROJECT_NAME%_%NAME_X% -deleteProject  -import "%file_to_process_in_workdir%"  -scriptPath "%target_output_dir%"  -postScript ExtractBinaryInfo.py  -postScript ExtractDisassembly.py  -postScript ExtractPseudocode.py
-    
+    set "GHIDRA_PROJ=%TEMP%\rebind_g_%RANDOM%%RANDOM%"
+    mkdir "%GHIDRA_PROJ%" 2>nul
 
-    REM --- Post-processing: Move Ghidra script outputs ---
-    REM Assumes Ghidra scripts output relative to where analyzeHeadless was run from,
-    REM OR relative to the project location, OR potentially need adjustment based
-    REM on how the scripts *actually* save their output.
-    REM This section *might* need adjustment based on Ghidra script behavior.
-    REM The current assumption is scripts save to the CWD of analyzeHeadless,
-    REM which is *usually* the ghidra support dir unless changed.
-    REM Let's assume scripts write to the target_output_dir because of -scriptPath maybe?
+    echo "%GHIDRA_CMD%" "%GHIDRA_PROJ%" proj -deleteProject -import "%file_to_process_in_workdir%" -scriptPath "%SCRIPT_DIR%" -postScript ExtractAll.py "%target_output_dir%" "!ORIGINAL_NAME!"
+    call "%GHIDRA_CMD%" "%GHIDRA_PROJ%" proj -deleteProject -import "%file_to_process_in_workdir%" -scriptPath "%SCRIPT_DIR%" -postScript ExtractAll.py "%target_output_dir%" "!ORIGINAL_NAME!"
 
-    echo Moving Ghidra script outputs...
+    rd /S /Q "%GHIDRA_PROJ%" 2>nul
 
-    REM Cleanup copied Python scripts after successful processing
-    echo "%NAME_X%"
-    echo "%target_output_dir%"
-    xcopy /E /I /H /Y /Q ".\%NAME_X%_disassembly\" "%target_output_dir%\%NAME_X%_disassembly\"
-    xcopy /E /I /H /Y /Q ".\%NAME_X%_binaryinfo\" "%target_output_dir%\%NAME_X%_binaryinfo\"
-    xcopy /E /I /H /Y /Q ".\%NAME_X%_pseudocode\" "%target_output_dir%\%NAME_X%_pseudocode\"
-    echo Cleaning up temporary Python scripts...
-    del /Q /F "%target_output_dir%\*.py" > nul
-    del /Q /F "%target_output_dir%\%ORIGINAL_NAME%" > nul
-    rd /Q /S ".\%NAME_X%_disassembly" > nul
-    rd /Q /S ".\%NAME_X%_binaryinfo" > nul
-    rd /Q /S ".\%NAME_X%_pseudocode" > nul
+    echo Cleaning up copied input and any stray .py in work dir...
+    del /Q /F "%target_output_dir%\*.py" > nul 2>&1
+    del /Q /F "%target_output_dir%\%ORIGINAL_NAME%" > nul 2>&1
 
     echo.
 goto :eof

@@ -1,5 +1,8 @@
 *.pyc
+__pycache__/
+.pytest_cache/
 tmp/*
+deep_llm_runs/*
 .env
 *.i64
 *.log
@@ -7,5 +10,3 @@ tmp/*
 tools/IDA_Headless_Demo/*.log
 *.bat
 .DS_Store
-tools/Ghidra_Headless_Demo/*
-tools/IDA_Headless_Demo/*

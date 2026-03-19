@@ -8,7 +8,7 @@ import sys
 
 def _load_phase7_5_module():
     repo_root = Path(__file__).resolve().parents[1]
-    path = repo_root / "tools" / "Semantics_Alignment" / "phases" / "phase7_5_strict_align.py"
+    path = repo_root / "tools" / "Semantics_Alignment" / "depth" / "strict_align.py"
     spec = importlib.util.spec_from_file_location("phase7_5_strict_align", path)
     if not spec or not spec.loader:
         raise RuntimeError(f"Failed to load module spec: {path}")
@@ -19,6 +19,26 @@ def _load_phase7_5_module():
 
 
 class TestPhase75StrictAlign(unittest.TestCase):
+    def test_extract_variable_names_from_pseudo(self):
+        mod = _load_phase7_5_module()
+        proto = "int __cdecl foo(int a1, char *buf, const char *fmt)"
+        body = """
+        int v1 = 0;
+        if (a1 > 0) {
+            v1 = a1;
+            out_len = snprintf(buf, 16, fmt);
+        }
+        return v1;
+        """
+        names = mod._extract_variable_names_from_pseudo(proto, body)  # type: ignore[attr-defined]
+        self.assertIn("a1", names)
+        self.assertIn("buf", names)
+        self.assertIn("fmt", names)
+        self.assertIn("v1", names)
+        self.assertIn("out_len", names)
+        self.assertNotIn("if", names)
+        self.assertNotIn("return", names)
+
     def test_mode_off_skips_without_db(self):
         mod = _load_phase7_5_module()
         report = mod.run_phase7_5_strict_align(
@@ -48,8 +68,18 @@ class TestPhase75StrictAlign(unittest.TestCase):
                     mod,
                     "_collect_ida_profile",
                     side_effect=[
-                        {"functions": {"count": 1, "sha256": "aaa"}},
-                        {"functions": {"count": 1, "sha256": "aaa"}},
+                        {
+                            "functions": {"count": 1, "sha256": "aaa"},
+                            "import_symbols": {"count": 0, "sha256": "0"},
+                            "export_symbols": {"count": 0, "sha256": "0"},
+                            "pseudo_variable_names": {"count": 1, "sha256": "v0"},
+                        },
+                        {
+                            "functions": {"count": 1, "sha256": "aaa"},
+                            "import_symbols": {"count": 0, "sha256": "0"},
+                            "export_symbols": {"count": 0, "sha256": "0"},
+                            "pseudo_variable_names": {"count": 1, "sha256": "v0"},
+                        },
                     ],
                 ),
                 mock.patch.object(mod, "_replace_db_atomically") as mocked_replace,
@@ -66,6 +96,10 @@ class TestPhase75StrictAlign(unittest.TestCase):
             self.assertEqual(report.get("status"), "aligned")
             self.assertEqual(int(report.get("profile_diff_count", -1)), 0)
             mocked_replace.assert_not_called()
+            focus = report.get("focus_metrics_summary") or {}
+            self.assertIn("imports", focus)
+            self.assertIn("exports", focus)
+            self.assertIn("variable_names", focus)
 
     def test_drift_replaces_and_passes_recheck(self):
         mod = _load_phase7_5_module()
@@ -84,9 +118,24 @@ class TestPhase75StrictAlign(unittest.TestCase):
                     mod,
                     "_collect_ida_profile",
                     side_effect=[
-                        {"functions": {"count": 1, "sha256": "old"}},
-                        {"functions": {"count": 1, "sha256": "new"}},
-                        {"functions": {"count": 1, "sha256": "new"}},
+                        {
+                            "functions": {"count": 1, "sha256": "old"},
+                            "import_symbols": {"count": 1, "sha256": "i_old"},
+                            "export_symbols": {"count": 1, "sha256": "e_old"},
+                            "pseudo_variable_names": {"count": 1, "sha256": "v_old"},
+                        },
+                        {
+                            "functions": {"count": 1, "sha256": "new"},
+                            "import_symbols": {"count": 1, "sha256": "i_new"},
+                            "export_symbols": {"count": 1, "sha256": "e_new"},
+                            "pseudo_variable_names": {"count": 1, "sha256": "v_new"},
+                        },
+                        {
+                            "functions": {"count": 1, "sha256": "new"},
+                            "import_symbols": {"count": 1, "sha256": "i_new"},
+                            "export_symbols": {"count": 1, "sha256": "e_new"},
+                            "pseudo_variable_names": {"count": 1, "sha256": "v_new"},
+                        },
                     ],
                 ),
                 mock.patch.object(mod, "_replace_db_atomically") as mocked_replace,
@@ -101,9 +150,16 @@ class TestPhase75StrictAlign(unittest.TestCase):
                 )
 
             self.assertEqual(report.get("status"), "replaced")
-            self.assertEqual(int(report.get("profile_diff_count", -1)), 1)
+            self.assertGreater(int(report.get("profile_diff_count", -1)), 0)
             self.assertEqual(int(report.get("post_replace_diff_count", -1)), 0)
             mocked_replace.assert_called_once()
+            self.assertTrue(
+                bool(
+                    ((report.get("focus_metrics_summary") or {}).get("variable_names") or {}).get(
+                        "aligned_after_phase7_5"
+                    )
+                )
+            )
 
     def test_drift_replace_but_post_check_still_diff_raises(self):
         mod = _load_phase7_5_module()

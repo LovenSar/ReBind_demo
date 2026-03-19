@@ -1,5 +1,1 @@
-"""Phase implementations for knowledge_propagation pipeline (Phase 1-6).
-
-Each phase module exposes a `run_*_phase` entry function.
-The main entrypoint (`knowledge_propagation.py`) should stay thin and only orchestrate.
-"""
+# Phase 实现已拆分：广度 1–6 → breadth/phases/，深度相关 → depth/

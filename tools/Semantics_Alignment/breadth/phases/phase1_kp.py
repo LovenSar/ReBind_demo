@@ -139,6 +139,122 @@ def _apply_unified_llm_result(
             print(f"[IDA-Sync] 同步到 IDA 失败: {exc}")
 
 
+def _apply_unified_llm_result_batch(
+    *,
+    conn: sqlite3.Connection,
+    graph: UnifiedGraph,
+    nodes: List[UnifiedFunctionNode],
+    results: List[Dict[str, Any]],
+    ida_sync: bool = False,
+    ida_url: Optional[str] = None,
+) -> None:
+    """批量更新多个函数的分析结果（优化：减少数据库操作次数）。"""
+    if not nodes or not results or len(nodes) != len(results):
+        return
+
+    cur = conn.cursor()
+    updates_with_phase2: List[tuple] = []
+    updates_without_phase2: List[tuple] = []
+    ida_sync_tasks: List[tuple] = []
+
+    for node, result in zip(nodes, results):
+        signature = str(result.get("signature", "")).strip() or None
+        summary = str(result.get("summary", "")).strip() or None
+        confidence = result.get("confidence")
+        try:
+            confidence_score = int(float(confidence) * 100) if confidence is not None else 0
+        except (TypeError, ValueError):
+            confidence_score = 0
+
+        raw_name = _extract_name_from_signature(signature or "", fallback="") or ""
+        rename_ready = bool(raw_name) and not DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name)
+        if raw_name:
+            if DEFAULT_FUNC_NAME_PATTERN.fullmatch(raw_name):
+                logger.info("[Phase1] entry_va=0x%08X LLM 返回默认风格函数名 %s，保留现有命名。", node.entry_va, raw_name)
+                rename_ready = False
+            elif signature and node.function_ids:
+                ref_fid = next(iter(node.function_ids))
+                unique_name = _make_name_unique(conn, raw_name, ref_fid)
+                if unique_name != raw_name:
+                    logger.info("[Phase1] entry_va=0x%08X 函数名发生去重调整: %s -> %s", node.entry_va, raw_name, unique_name)
+                signature = signature.replace(raw_name, unique_name)
+                raw_name = unique_name
+                rename_ready = True
+
+        libfunction = _coerce_libfunction_flag(result.get("libfunction"))
+        if libfunction:
+            confidence_score = 0
+            logger.info("[Phase1] entry_va=0x%08X 被标记为库函数，设置为 LOCKED 并停止后续尝试。", node.entry_va)
+        elif signature and not rename_ready:
+            logger.info("[Phase1] entry_va=0x%08X 未获得有效新函数名，保持 PENDING 以便后续重试。", node.entry_va)
+
+        analysis_state = "LOCKED" if libfunction else ("ANALYZED" if rename_ready else "PENDING")
+        phase2_pending = 1 if (not libfunction and rename_ready) else 0
+
+        for fid in node.function_ids:
+            update_tuple = (analysis_state, confidence_score, signature, summary, int(phase2_pending), int(fid))
+            try:
+                updates_with_phase2.append(update_tuple)
+            except Exception:
+                updates_without_phase2.append((analysis_state, confidence_score, signature, summary, int(fid)))
+
+        if ida_sync and signature and rename_ready and requests is not None:
+            ida_sync_tasks.append((node, signature, summary or ""))
+
+    # 批量执行更新
+    if updates_with_phase2:
+        try:
+            cur.executemany(
+                """
+                UPDATE analysis_status
+                SET analysis_state = ?,
+                    confidence_score = ?,
+                    summary_signature = ?,
+                    semantic_summary = ?,
+                    phase2_pending = ?
+                WHERE function_id = ?;
+                """,
+                updates_with_phase2,
+            )
+        except sqlite3.OperationalError:
+            # 兼容旧数据库（无 phase2_pending 列）
+            # t = (analysis_state, confidence_score, signature, summary, phase2_pending, function_id)
+            # 需要 (analysis_state, confidence_score, signature, summary, function_id)
+            for t in updates_with_phase2:
+                updates_without_phase2.append((t[0], t[1], t[2], t[3], t[5]))
+
+    if updates_without_phase2:
+        cur.executemany(
+            """
+            UPDATE analysis_status
+            SET analysis_state = ?,
+                confidence_score = ?,
+                summary_signature = ?,
+                semantic_summary = ?
+            WHERE function_id = ?;
+            """,
+            updates_without_phase2,
+        )
+
+    conn.commit()
+
+    # IDA 同步（逐个执行，因为涉及 HTTP 请求）
+    for node, sig, summ in ida_sync_tasks:
+        try:
+            _sync_with_ida_and_update_db(
+                conn=conn,
+                graph=graph,
+                node=node,
+                entry_va=node.entry_va,
+                signature=sig,
+                summary=summ,
+                ida_url=ida_url or "http://127.0.0.1:12345",
+                enforce_non_sub=False,
+            )
+        except Exception as exc:
+            logger.warning("[Phase1-Batch] IDA 同步失败 entry_va=0x%08X: %s", node.entry_va, exc)
+
+
 def analyze_one_unified_function(
     *,
     conn: sqlite3.Connection,
@@ -295,9 +411,22 @@ def analyze_unified_batch(
         logger.warning("[Phase1-Batch] %s targets=%s", msg, target_list)
         return
 
+    # 使用批量更新优化
+    valid_pairs = []
     for node, result in zip(nodes, result_list):
         if not isinstance(result, dict):
             logger.warning("[Phase1-Batch] 跳过 entry_va=0x%08X，原因：返回值不是对象：%r", node.entry_va, result)
             continue
+        valid_pairs.append((node, result))
 
-        _apply_unified_llm_result(conn=conn, graph=graph, node=node, result=result, ida_sync=ida_sync, ida_url=ida_url)
+    if valid_pairs:
+        valid_nodes = [pair[0] for pair in valid_pairs]
+        valid_results = [pair[1] for pair in valid_pairs]
+        _apply_unified_llm_result_batch(
+            conn=conn,
+            graph=graph,
+            nodes=valid_nodes,
+            results=valid_results,
+            ida_sync=ida_sync,
+            ida_url=ida_url,
+        )

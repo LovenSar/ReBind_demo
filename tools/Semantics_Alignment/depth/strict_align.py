@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -22,11 +23,167 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
-ALIGNMENT_LOADER_SCRIPT = Path(__file__).resolve().parents[1] / "alignment_loader.py"
+ALIGNMENT_LOADER_SCRIPT = Path(__file__).resolve().parents[1] / "breadth" / "alignment_loader.py"
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+ASSIGN_LHS_RE = re.compile(r"(?<![=!<>])\b([A-Za-z_][A-Za-z0-9_]*)\s*=")
+PROTO_ARG_BLOCK_RE = re.compile(r"\((.*)\)", re.DOTALL)
+C_KEYWORDS: set[str] = {
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "int",
+    "long",
+    "register",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "bool",
+    "true",
+    "false",
+    "__int8",
+    "__int16",
+    "__int32",
+    "__int64",
+}
 
 
 class Phase75StrictAlignError(RuntimeError):
     """Raised when strict alignment cannot be completed safely."""
+
+
+def _filter_variable_token(token: str) -> bool:
+    t = str(token or "").strip()
+    if not t:
+        return False
+    tl = t.lower()
+    if tl in C_KEYWORDS:
+        return False
+    if tl.startswith("sub_") or tl.startswith("loc_"):
+        return False
+    if t.startswith("__"):
+        return False
+    return True
+
+
+def _extract_proto_arg_names(proto: str) -> List[str]:
+    raw = str(proto or "")
+    m = PROTO_ARG_BLOCK_RE.search(raw)
+    if not m:
+        return []
+    arg_text = m.group(1).strip()
+    if not arg_text or arg_text.lower() == "void":
+        return []
+    out: List[str] = []
+    for part in arg_text.split(","):
+        tokens = IDENT_RE.findall(part)
+        if not tokens:
+            continue
+        cand = tokens[-1]
+        if _filter_variable_token(cand):
+            out.append(cand)
+    return out
+
+
+def _extract_variable_names_from_pseudo(prototype: str, body: str) -> List[str]:
+    names: set[str] = set()
+    for name in _extract_proto_arg_names(prototype):
+        names.add(name)
+    for m in ASSIGN_LHS_RE.finditer(str(body or "")):
+        cand = str(m.group(1) or "")
+        if _filter_variable_token(cand):
+            names.add(cand)
+    return sorted(names)
+
+
+def _collect_pseudo_variable_metric(conn: sqlite3.Connection) -> Dict[str, Any]:
+    sql = """
+    SELECT p.entry_va, COALESCE(p.name, ''), COALESCE(p.prototype, ''), COALESCE(p.body, '')
+    FROM pseudo_functions AS p
+    JOIN binary_views AS bv ON p.view_id = bv.id
+    JOIN tools AS t ON bv.tool_id = t.id
+    WHERE LOWER(t.name) = 'ida'
+    ORDER BY p.entry_va, COALESCE(p.name, ''), p.id;
+    """
+    cur = conn.execute(sql)
+    h = hashlib.sha256()
+    fn_count = 0
+    token_total = 0
+    for row in cur:
+        entry_va = int(row[0] or 0)
+        name = str(row[1] or "")
+        prototype = str(row[2] or "")
+        body = str(row[3] or "")
+        var_names = _extract_variable_names_from_pseudo(prototype, body)
+        payload = [entry_va, name, var_names]
+        blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        h.update(blob.encode("utf-8"))
+        h.update(b"\n")
+        fn_count += 1
+        token_total += len(var_names)
+    return {"count": int(fn_count), "sha256": h.hexdigest(), "token_total": int(token_total)}
+
+
+def _focus_metric_entry(
+    metric_key: str,
+    current_profile: Dict[str, Dict[str, Any]],
+    rebuilt_profile: Dict[str, Dict[str, Any]],
+    active_profile: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    cur = current_profile.get(metric_key) or {}
+    reb = rebuilt_profile.get(metric_key) or {}
+    act = active_profile.get(metric_key) or {}
+    return {
+        "metric": metric_key,
+        "current": {
+            "count": int(cur.get("count", 0) or 0),
+            "sha256": str(cur.get("sha256", "")),
+        },
+        "rebuilt": {
+            "count": int(reb.get("count", 0) or 0),
+            "sha256": str(reb.get("sha256", "")),
+        },
+        "active": {
+            "count": int(act.get("count", 0) or 0),
+            "sha256": str(act.get("sha256", "")),
+        },
+        "aligned_after_phase7_5": str(act.get("sha256", "")) == str(reb.get("sha256", "")),
+    }
+
+
+def _build_focus_metrics_summary(
+    *,
+    current_profile: Dict[str, Dict[str, Any]],
+    rebuilt_profile: Dict[str, Dict[str, Any]],
+    active_profile: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "imports": _focus_metric_entry("import_symbols", current_profile, rebuilt_profile, active_profile),
+        "exports": _focus_metric_entry("export_symbols", current_profile, rebuilt_profile, active_profile),
+        "variable_names": _focus_metric_entry("pseudo_variable_names", current_profile, rebuilt_profile, active_profile),
+    }
 
 
 def _safe_name(text: str) -> str:
@@ -155,6 +312,43 @@ def _collect_ida_profile(db_path: Path, call_ref_types: Sequence[str]) -> Dict[s
                 (),
             ),
             (
+                "import_symbols",
+                """
+                SELECT COALESCE(s.address_va, -1), COALESCE(s.name, ''), COALESCE(s.raw_type, ''),
+                       COALESCE(s.source, ''), COALESCE(s.raw_address, ''), COALESCE(s.is_external, -1)
+                FROM symbols AS s
+                JOIN binary_views AS bv ON s.view_id = bv.id
+                JOIN tools AS t ON bv.tool_id = t.id
+                WHERE LOWER(t.name) = 'ida'
+                  AND (
+                    LOWER(COALESCE(s.kind, '')) = 'import'
+                    OR COALESCE(s.is_external, 0) = 1
+                    OR UPPER(COALESCE(s.source, '')) LIKE '%IMPORT%'
+                    OR UPPER(COALESCE(s.raw_type, '')) LIKE '%IMPORT%'
+                  )
+                ORDER BY COALESCE(s.address_va, -1), COALESCE(s.name, ''), s.id;
+                """,
+                (),
+            ),
+            (
+                "export_symbols",
+                """
+                SELECT COALESCE(s.address_va, -1), COALESCE(s.name, ''), COALESCE(s.raw_type, ''),
+                       COALESCE(s.source, ''), COALESCE(s.raw_address, ''), COALESCE(s.is_external, -1)
+                FROM symbols AS s
+                JOIN binary_views AS bv ON s.view_id = bv.id
+                JOIN tools AS t ON bv.tool_id = t.id
+                WHERE LOWER(t.name) = 'ida'
+                  AND (
+                    LOWER(COALESCE(s.kind, '')) = 'export'
+                    OR UPPER(COALESCE(s.source, '')) LIKE '%EXPORT%'
+                    OR UPPER(COALESCE(s.raw_type, '')) LIKE '%EXPORT%'
+                  )
+                ORDER BY COALESCE(s.address_va, -1), COALESCE(s.name, ''), s.id;
+                """,
+                (),
+            ),
+            (
                 "strings",
                 """
                 SELECT s.address_va, COALESCE(s.value, ''), COALESCE(s.length, -1)
@@ -258,6 +452,7 @@ def _collect_ida_profile(db_path: Path, call_ref_types: Sequence[str]) -> Dict[s
         for name, sql, params in queries:
             cnt, digest = _metric_digest(conn, sql, params)
             metrics[name] = {"count": int(cnt), "sha256": str(digest)}
+        metrics["pseudo_variable_names"] = _collect_pseudo_variable_metric(conn)
         return metrics
     finally:
         conn.close()
@@ -375,6 +570,7 @@ def run_phase7_5_strict_align(
         "current_profile": {},
         "rebuilt_profile": {},
         "post_replace_profile": {},
+        "focus_metrics_summary": {},
         "notes": [],
     }
     if mode_norm == "off":
@@ -421,6 +617,11 @@ def run_phase7_5_strict_align(
         report["post_replace_profile"] = post_profile
         report["post_replace_diff_count"] = len(post_diff)
         report["post_replace_diffs"] = post_diff
+        report["focus_metrics_summary"] = _build_focus_metrics_summary(
+            current_profile=current_profile,
+            rebuilt_profile=rebuilt_profile,
+            active_profile=post_profile,
+        )
         if post_diff:
             report["status"] = "failed"
             raise Phase75StrictAlignError(
@@ -431,6 +632,11 @@ def run_phase7_5_strict_align(
     else:
         report["status"] = "aligned"
         report["notes"] = ["active DB already matches rebuilt IDA-only profile"]
+        report["focus_metrics_summary"] = _build_focus_metrics_summary(
+            current_profile=current_profile,
+            rebuilt_profile=rebuilt_profile,
+            active_profile=current_profile,
+        )
 
     if not keep_rebuilt_db and rebuilt_db.exists():
         rebuilt_db.unlink()
@@ -439,4 +645,3 @@ def run_phase7_5_strict_align(
         report["rebuilt_db_removed"] = False
 
     return report
-

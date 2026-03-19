@@ -57,6 +57,14 @@ def _get_any_function_id_for_va(graph: UnifiedGraph, entry_va: int) -> Optional[
     return next(iter(node.function_ids)) if node.function_ids else None
 
 
+def _is_write_ref(ref_type_raw: Optional[str]) -> bool:
+    """判断 xref 是否是写操作。"""
+    if not ref_type_raw:
+        return False
+    access_kind = str(ref_type_raw).strip().upper()
+    return "WRITE" in access_kind or "STORE" in access_kind
+
+
 def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: UnifiedGraph) -> Dict[int, GlobalVarNode]:
     cur = conn.cursor()
 
@@ -67,19 +75,22 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
     view_ids = [row[0] for row in view_rows]
     placeholders = ",".join("?" for _ in view_ids)
 
+    # 优化：使用单次 SQL 查询构建全局变量图（包含 xrefs 和 symbols）
     cur.execute(
         f"""
-            SELECT DISTINCT dst_va, dst_name
-            FROM xrefs
-            WHERE view_id IN ({placeholders})
-                AND dst_va IS NOT NULL
-                AND ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
+            SELECT DISTINCT x.dst_va, x.dst_name, x.src_va, x.ref_type_raw
+            FROM xrefs AS x
+            WHERE x.view_id IN ({placeholders})
+                AND x.dst_va IS NOT NULL
+                AND x.ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
             """,
         view_ids,
     )
 
     candidate_globals: Dict[int, Set[str]] = {}
     text_based_readers: Dict[int, Set[int]] = {}
+    readers_by_addr: Dict[int, Set[int]] = {}
+    writers_by_addr: Dict[int, Set[int]] = {}
 
     code_entry_addrs: Set[int] = set(graph.nodes.keys())
 
@@ -103,7 +114,8 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
         re.IGNORECASE,
     )
 
-    for dst_va, dst_name in cur.fetchall():
+    # 处理 xrefs 结果
+    for dst_va, dst_name, src_va, ref_type_raw in cur.fetchall():
         addr = int(dst_va)
         if addr in code_entry_addrs:
             continue
@@ -119,6 +131,8 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
         candidate_globals.setdefault(addr, set())
         if name_str:
             candidate_globals[addr].add(name_str)
+        
+        # 记录读写关系（在后续查询中统一处理）
 
     cur.execute(
         f"""
@@ -188,6 +202,7 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
         node.names = names
         globals_by_addr[addr] = node
 
+    # 优化：单次查询获取所有读写关系
     cur.execute(
         f"""
         SELECT x.dst_va, x.ref_type_raw, f.entry_va
@@ -199,7 +214,8 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
           ON f.id = i.function_id
         WHERE x.view_id IN ({placeholders})
           AND x.dst_va IS NOT NULL
-          AND f.entry_va IS NOT NULL;
+          AND f.entry_va IS NOT NULL
+          AND x.ref_type_raw NOT IN ('UNCONDITIONAL_CALL', 'COMPUTED_CALL', '17', '19', '21');
         """,
         view_ids,
     )
@@ -210,8 +226,7 @@ def build_global_var_graph(conn: sqlite3.Connection, binary_id: int, graph: Unif
             continue
         entry_va = int(entry_va_raw)
 
-        access_kind = (ref_type_raw or "").strip().upper()
-        if "WRITE" in access_kind:
+        if _is_write_ref(ref_type_raw):
             node.writers.add(entry_va)
         else:
             node.readers.add(entry_va)

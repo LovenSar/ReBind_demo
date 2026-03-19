@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""deep_path_dfs.py
-
-Deep-path DFS command entrypoint.
-
-This file is intentionally kept thin:
-- kp.kp_deep_path: graph/path/core extraction logic
-- phases.phase2_deep_path: deepest-path step-by-step LLM polling
-- pmt.prompts: deep-path LLM prompt template
-"""
+"""deep_path_dfs.py — 深度优先 DFS 命令行入口（与 breadth 流水线并列）。"""
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_DEPTH_DIR = Path(__file__).resolve().parent
+_SA_ROOT = _DEPTH_DIR.parent
+if str(_SA_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SA_ROOT))
 
 import argparse
 import json
@@ -27,7 +27,7 @@ from kp.kp_deep_path import (
 )
 from kp.kp_graph import build_unified_graph
 from kp.kp_settings import build_llm_settings, load_semantics_config
-from phases.phase2_deep_path import run_llm_poll_on_deepest_path
+from depth.deep_path_step import run_llm_poll_on_deepest_path
 
 
 def _parse_args() -> argparse.Namespace:
@@ -80,7 +80,11 @@ def _parse_args() -> argparse.Namespace:
         default="auto",
         help="LLM 执行模式：auto=失败自动降级；on=失败即报错；off=不调用（默认 auto）",
     )
-    ap.add_argument("--llm-config", default=None, help="可选：LLM 配置路径（默认使用 tools/Semantics_Alignment/config.yaml）")
+    ap.add_argument(
+        "--llm-config",
+        default=None,
+        help="可选：LLM/流水线配置 YAML（默认：仓库根目录 config.yaml 中的 semantics 段）",
+    )
     ap.add_argument("--llm-model", default=None, help="可选：覆盖模型名")
     ap.add_argument("--llm-temperature", type=float, default=None, help="可选：覆盖 temperature")
     ap.add_argument("--llm-max-tokens", type=int, default=None, help="可选：覆盖 max_tokens")

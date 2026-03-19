@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""goal_deep_engine.py
+"""engine.py — 深度优先分析入口（原 goal_deep_engine）。
 
-独立的“目标驱动 + 深度主干 + 代际子树”分析入口。
-
-设计目标：
-1) 不并入 semantic_align 主流程，避免大样本下资源浪费；
-2) 复用现有 kp_* / deep_path 能力，减少重复实现；
-3) 默认先落临时 JSON，可按需回填 DB。
+目标驱动 + 深度主干 + 代际子树；与广度 6 步流水线（breadth/）并列。
 """
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+_DEPTH_DIR = Path(__file__).resolve().parent
+_SA_ROOT = _DEPTH_DIR.parent
+if str(_SA_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SA_ROOT))
 
 import argparse
 import hashlib
@@ -38,8 +41,8 @@ from kp.kp_schema import load_analysis_info
 from kp.kp_settings import build_llm_settings, load_semantics_config
 from kp.kp_types import CALL_REF_TYPES, UnifiedGraph, UnifiedFunctionNode
 from kp.kp_unified_prompt import build_unified_prompt
-from phases.phase2_deep_path import run_llm_poll_on_deepest_path
-from phases.phase7_5_strict_align import Phase75StrictAlignError, run_phase7_5_strict_align
+from depth.deep_path_step import run_llm_poll_on_deepest_path
+from depth.strict_align import Phase75StrictAlignError, run_phase7_5_strict_align
 
 
 STRUCT_HINT_RE = re.compile(r"\b(?:struct|field_|_ctx|_cfg|_info|_node|_state)\b|->", re.IGNORECASE)
@@ -133,7 +136,11 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--incremental-indirect-topn", type=int, default=3000, help="增量间接边 topN")
 
     ap.add_argument("--llm-mode", choices=("auto", "on", "off"), default="auto", help="LLM 执行模式")
-    ap.add_argument("--llm-config", default=None, help="LLM 配置路径")
+    ap.add_argument(
+        "--llm-config",
+        default=None,
+        help="LLM/流水线 YAML（默认：仓库根目录 config.yaml 的 semantics 段）",
+    )
     ap.add_argument("--llm-model", default=None)
     ap.add_argument("--llm-temperature", type=float, default=None)
     ap.add_argument("--llm-max-tokens", type=int, default=None)
