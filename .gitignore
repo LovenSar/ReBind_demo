@@ -10,3 +10,4 @@ deep_llm_runs/*
 tools/IDA_Headless_Demo/*.log
 *.bat
 .DS_Store
+.vscode

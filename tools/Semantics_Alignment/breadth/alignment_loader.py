@@ -24,6 +24,14 @@ alignment_loader.py
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# 确保 Semantics_Alignment 根目录在 sys.path 中，以便导入 kp 包
+_SA_ROOT = Path(__file__).resolve().parent.parent
+if str(_SA_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SA_ROOT))
+
 import argparse
 import base64
 import csv
@@ -32,11 +40,8 @@ import json
 import re
 import sqlite3
 import textwrap
-import builtins
-import inspect
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Iterable, Optional, Tuple, List, Set, Dict
 
 try:
@@ -46,30 +51,9 @@ except Exception:  # pragma: no cover - optional dependency
     Workbook = None  # type: ignore[assignment]
     ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
+from kp.kp_utils import install_print_with_location
 
-def _install_print_with_location() -> None:
-    """Prefix every print with absolute file path and line number."""
-    if getattr(builtins, "_original_print", None):
-        return
-
-    builtins._original_print = builtins.print  # type: ignore[attr-defined]
-
-    def _print_with_location(*args, **kwargs):
-        frame = inspect.currentframe()
-        if frame and frame.f_back:
-            caller = frame.f_back
-            path = Path(caller.f_code.co_filename).resolve()
-            lineno = caller.f_lineno
-            prefix = f"{path}:{lineno} "
-        else:
-            prefix = ""
-        message = " ".join(str(a) for a in args)
-        builtins._original_print(f"{prefix}{message}", **kwargs)
-
-    builtins.print = _print_with_location  # type: ignore[assignment]
-
-
-_install_print_with_location()
+install_print_with_location()
 
 
 @dataclass

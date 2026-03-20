@@ -8,11 +8,19 @@ importing the legacy entrypoint.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .kp_types import CALL_REF_TYPES, UnifiedFunctionNode, UnifiedGraph
+
+_BARE_HEX_RE = re.compile(r"^(?:0x)?[0-9a-f]{4,16}$")
+
+
+def _is_bare_hex_address(name: str) -> bool:
+    """Return True if *name* looks like an unresolved hex address rather than a real symbol."""
+    return bool(_BARE_HEX_RE.match(name.strip().lower()))
 
 
 def _ensure_graph_indexes(conn: sqlite3.Connection) -> None:
@@ -173,13 +181,24 @@ def hydrate_unified_xrefs_for_nodes(
                     if caller_node is None:
                         continue
 
+                    resolved_callee: int | None = None
                     if dst_va is not None and int(dst_va) in graph.nodes:
+                        resolved_callee = int(dst_va)
+                    elif dst_name:
+                        raw = (dst_name or "").strip()
+                        try:
+                            parsed = int(raw, 16) if raw else None
+                        except (ValueError, TypeError):
+                            parsed = None
+                        if parsed is not None and parsed in graph.nodes:
+                            resolved_callee = parsed
+
+                    if resolved_callee is not None:
                         if len(caller_node.internal_callee_vas) >= int(max_internal_callees_per_node):
                             continue
-                        callee_va = int(dst_va)
-                        if callee_va != int(caller_entry):
-                            caller_node.internal_callee_vas.add(callee_va)
-                            graph.nodes[callee_va].caller_vas.add(int(caller_entry))
+                        if resolved_callee != int(caller_entry):
+                            caller_node.internal_callee_vas.add(resolved_callee)
+                            graph.nodes[resolved_callee].caller_vas.add(int(caller_entry))
                         continue
 
                     dst_name_norm = (dst_name or "").strip()
@@ -189,6 +208,8 @@ def hydrate_unified_xrefs_for_nodes(
                         continue
                     lower = dst_name_norm.lower()
                     if lower.startswith(("sub_", "loc_", "label_")):
+                        continue
+                    if _is_bare_hex_address(lower):
                         continue
                     caller_node.external_callee_names.add(dst_name_norm)
 
@@ -370,6 +391,7 @@ def build_unified_graph(
         call_types = sorted(CALL_REF_TYPES)
         call_placeholders = ",".join("?" for _ in call_types)
         params: Iterable[object] = [*view_ids, *call_types]
+        instr_views = ",".join("?" for _ in view_ids)
         cur.execute(
             f"""
             SELECT i.function_id,
@@ -377,11 +399,12 @@ def build_unified_graph(
                    x.dst_name
             FROM xrefs AS x
             JOIN instructions AS i
-                 ON x.view_id = i.view_id AND x.src_va = i.address_va
+                 ON i.address_va = x.src_va
+                 AND i.view_id IN ({instr_views})
             WHERE x.view_id IN ({placeholders})
               AND x.ref_type_raw IN ({call_placeholders});
             """,
-            list(params),
+            [*view_ids, *view_ids, *call_types],
         )
         for caller_fid, dst_va, dst_name in cur:
             processed += 1
@@ -393,16 +416,30 @@ def build_unified_graph(
             if node is None:
                 continue
 
+            resolved_callee: int | None = None
             if dst_va is not None and int(dst_va) in nodes:
-                callee_va = int(dst_va)
-                if callee_va != caller_va:
-                    node.internal_callee_vas.add(callee_va)
-                    nodes[callee_va].caller_vas.add(caller_va)
+                resolved_callee = int(dst_va)
+            elif dst_name:
+                raw = (dst_name or "").strip()
+                try:
+                    parsed = int(raw, 16) if raw else None
+                except (ValueError, TypeError):
+                    parsed = None
+                if parsed is not None and parsed in nodes:
+                    resolved_callee = parsed
+
+            if resolved_callee is not None and resolved_callee != caller_va:
+                node.internal_callee_vas.add(resolved_callee)
+                nodes[resolved_callee].caller_vas.add(caller_va)
             else:
                 dst_name_norm = (dst_name or "").strip()
                 if dst_name_norm:
                     lower = dst_name_norm.lower()
-                    if not lower.startswith(("sub_", "loc_", "label_")):
+                    if lower.startswith(("sub_", "loc_", "label_")):
+                        pass
+                    elif _is_bare_hex_address(lower):
+                        pass
+                    else:
                         node.external_callee_names.add(dst_name_norm)
 
             _, last_print = _progress_every(

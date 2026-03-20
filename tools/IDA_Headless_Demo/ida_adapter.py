@@ -126,30 +126,38 @@ class IDAAdapter:
     
     def prepare_working_directory(self, input_file: str) -> Path:
         """准备工作目录
-        
+
+        输出目录放在样本专属的 ``{sanitized}_rebind_demo/`` 内::
+
+            <sample_parent>/
+              <sanitized>_rebind_demo/     ← 样本工作目录
+                <sanitized>_idademo/       ← 本方法返回此目录
+
         Args:
             input_file: 输入文件路径
-            
+
         Returns:
-            工作目录路径
+            IDA 输出目录路径（位于 _rebind_demo 内）
         """
         input_path = Path(input_file).resolve()
-        
+
         if not input_path.exists():
             raise FileNotFoundError(f"输入文件不存在: {input_file}")
-            
+
         if input_path.is_dir():
             raise ValueError("不支持目录输入，请提供单个文件")
-            
-        # 确定输出目录
+
         output_config = self.config.get('output', {})
         dir_suffix = output_config.get('dir_suffix', '_idademo')
-        # 使用文件名（包含扩展名，但去除点号）作为基础名称
         base_name = input_path.name.replace('.', '_')
-        output_dir = input_path.parent / f"{base_name}{dir_suffix}"
-        
+
+        # 先创建样本专属工作目录 (_rebind_demo)，再在其中创建 IDA 输出子目录
+        rebind_dir = input_path.parent / f"{base_name}_rebind_demo"
+        rebind_dir.mkdir(exist_ok=True)
+        output_dir = rebind_dir / f"{base_name}{dir_suffix}"
+
         self.logger.info(f"准备工作目录: {output_dir}")
-        
+
         # 创建目录
         output_dir.mkdir(exist_ok=True)
         
@@ -255,70 +263,54 @@ class IDAAdapter:
         # 准备工作目录
         output_dir = self.prepare_working_directory(input_file)
         
-        # 切换到工作目录
-        original_dir = Path.cwd()
-        os.chdir(output_dir)
+        # 获取要执行的脚本列表
+        scripts = self.config.get('scripts', {}).get('scripts', [])
+        if not scripts:
+            raise ValueError("配置文件中未设置要执行的脚本")
         
-        try:
-            # 获取要执行的脚本列表
-            scripts = self.config.get('scripts', {}).get('scripts', [])
-            if not scripts:
-                raise ValueError("配置文件中未设置要执行的脚本")
+        # 执行每个脚本（用 cwd= 代替 os.chdir，线程安全）
+        for i, script in enumerate(scripts, 1):
+            self.logger.info(f"[{i}/{len(scripts)}] 执行脚本: {script}")
             
-            # 执行每个脚本
-            for i, script in enumerate(scripts, 1):
-                self.logger.info(f"[{i}/{len(scripts)}] 执行脚本: {script}")
+            command = self.build_ida_command(input_file, script, output_dir)
+            self.logger.debug(f"完整命令: {' '.join(command)}")
+            self.logger.debug(f"工作目录: {output_dir}")
+            
+            try:
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    errors='replace',
+                    cwd=str(output_dir),
+                )
                 
-                # 构建并执行命令
-                command = self.build_ida_command(input_file, script, output_dir)
-                self.logger.debug(f"完整命令: {' '.join(command)}")
-                self.logger.debug(f"当前工作目录: {Path.cwd()}")
+                if result.stdout:
+                    self.logger.debug(f"脚本 {script} 标准输出:")
+                    for line in result.stdout.split('\n'):
+                        if line.strip():
+                            self.logger.debug(f"  {line}")
                 
-                try:
-                    result = subprocess.run(
-                        command,
-                        capture_output=True,
-                        text=True,
-                        errors='replace'
-                    )
+                if result.stderr:
+                    self.logger.debug(f"脚本 {script} 标准错误:")
+                    for line in result.stderr.split('\n'):
+                        if line.strip():
+                            self.logger.debug(f"  {line}")
+                
+                if result.returncode != 0:
+                    self.logger.warning(f"脚本 {script} 执行失败，返回码: {result.returncode}")
+                    self.logger.warning(f"标准错误: {result.stderr}")
+                else:
+                    self.logger.info(f"脚本 {script} 执行完成")
                     
-                    # 输出所有脚本输出（DEBUG级别）
-                    if result.stdout:
-                        self.logger.debug(f"脚本 {script} 标准输出:")
-                        for line in result.stdout.split('\n'):
-                            if line.strip():
-                                self.logger.debug(f"  {line}")
-                    
-                    if result.stderr:
-                        self.logger.debug(f"脚本 {script} 标准错误:")
-                        for line in result.stderr.split('\n'):
-                            if line.strip():
-                                self.logger.debug(f"  {line}")
-                    
-                    if result.returncode != 0:
-                        self.logger.warning(f"脚本 {script} 执行失败，返回码: {result.returncode}")
-                        self.logger.warning(f"标准错误: {result.stderr}")
-                    else:
-                        self.logger.info(f"脚本 {script} 执行完成")
-                        
-                except Exception as e:
-                    self.logger.error(f"执行脚本 {script} 时出错: {e}")
-                    continue
-            
-            self.logger.info("所有脚本执行完成")
-            # 列出当前目录和原始目录内容以帮助调试
-            self.logger.debug(f"当前工作目录内容 ({Path.cwd()}):")
-            for item in Path.cwd().iterdir():
-                self.logger.debug(f"  - {item.name}")
-            
-            original_parent_dir = output_dir.parent
-            self.logger.debug(f"原始目录内容 ({original_parent_dir}):")
-            for item in original_parent_dir.iterdir():
-                self.logger.debug(f"  - {item.name}")
-            
-        finally:
-            # 切换回原始目录
-            os.chdir(original_dir)
+            except Exception as e:
+                self.logger.error(f"执行脚本 {script} 时出错: {e}")
+                continue
+        
+        self.logger.info("所有脚本执行完成")
+        self.logger.debug(f"输出目录内容 ({output_dir}):")
+        for item in output_dir.iterdir():
+            self.logger.debug(f"  - {item.name}")
         
         # 处理输出文件
         sanitized_name = self.sanitize_filename(Path(input_file).name)

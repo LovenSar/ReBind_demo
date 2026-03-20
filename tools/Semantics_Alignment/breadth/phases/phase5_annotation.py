@@ -17,11 +17,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
-from kp.kp_config import _get_cfg_bool, _get_cfg_float, _get_cfg_int
+from kp.kp_config import get_cfg_bool, get_cfg_float, get_cfg_int
 from kp.kp_ida import wait_for_ida_server
 from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
-from kp.kp_types import UnifiedFunctionNode, UnifiedGraph, _count_effective_pseudocode_lines
+from kp.kp_types import UnifiedFunctionNode, UnifiedGraph, count_effective_pseudocode_lines
 from kp.kp_unified_prompt import _build_unified_prompt_body
 from pmt import prompts as pmt_prompts
 
@@ -642,91 +642,91 @@ def run_annotation_phase(
 
     _ = batch_size  # reserved
 
-    min_pseudo_lines = _get_cfg_int(
+    min_pseudo_lines = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "min_pseudo_lines"),
         int(min_pseudo_lines),
     )
-    max_code_chars = _get_cfg_int(
+    max_code_chars = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "max_code_chars"),
         int(max_code_chars),
     )
 
-    ann_ctx_max_disasm_lines = _get_cfg_int(
+    ann_ctx_max_disasm_lines = get_cfg_int(
         semantics_config,
         ("pipeline", "prompt_limits", "annotation_context_max_disasm_lines"),
         60,
     )
-    ann_ctx_max_pseudo_chars = _get_cfg_int(
+    ann_ctx_max_pseudo_chars = get_cfg_int(
         semantics_config,
         ("pipeline", "prompt_limits", "annotation_context_max_pseudo_chars_per_tool"),
         1200,
     )
-    ann_ctx_max_strings = _get_cfg_int(
+    ann_ctx_max_strings = get_cfg_int(
         semantics_config,
         ("pipeline", "prompt_limits", "annotation_context_max_strings"),
         20,
     )
-    ida_snapshot_max_disasm = _get_cfg_int(
+    ida_snapshot_max_disasm = get_cfg_int(
         semantics_config,
         ("pipeline", "prompt_limits", "ida_snapshot_max_disasm_lines"),
         400,
     )
 
-    llm_single_max_lines = _get_cfg_int(
+    llm_single_max_lines = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "llm_chunking", "single_max_lines"),
         80,
     )
-    llm_medium_max_lines = _get_cfg_int(
+    llm_medium_max_lines = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "llm_chunking", "medium_max_lines"),
         160,
     )
-    llm_medium_chunk_size = _get_cfg_int(
+    llm_medium_chunk_size = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "llm_chunking", "medium_chunk_size"),
         120,
     )
-    llm_large_chunk_size = _get_cfg_int(
+    llm_large_chunk_size = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "llm_chunking", "large_chunk_size"),
         80,
     )
 
-    ida_sync_chunk_size = _get_cfg_int(
+    ida_sync_chunk_size = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "ida_sync_chunk_size"),
         120,
     )
-    max_comments_per_prompt = _get_cfg_int(
+    max_comments_per_prompt = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "max_comments_per_prompt"),
         60,
     )
-    max_comments_ratio = _get_cfg_float(
+    max_comments_ratio = get_cfg_float(
         semantics_config,
         ("pipeline", "phase5_annotation", "max_comments_ratio"),
         0.35,
     )
-    max_duplicate_comment_occurrences = _get_cfg_int(
+    max_duplicate_comment_occurrences = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "max_duplicate_comment_occurrences"),
         2,
     )
-    log_llm_response = _get_cfg_bool(
+    log_llm_response = get_cfg_bool(
         semantics_config,
         ("pipeline", "phase5_annotation", "log_llm_response"),
         False,
     )
-    log_llm_response_max_chars = _get_cfg_int(
+    log_llm_response_max_chars = get_cfg_int(
         semantics_config,
         ("pipeline", "phase5_annotation", "log_llm_response_max_chars"),
         4000,
     )
 
-    ida_connect_max_wait_seconds = _get_cfg_float(
+    ida_connect_max_wait_seconds = get_cfg_float(
         semantics_config,
         ("pipeline", "ida_sync", "connect_max_wait_seconds"),
         120.0,
@@ -760,7 +760,7 @@ def run_annotation_phase(
         if not code:
             continue
 
-        eff_lines = _count_effective_pseudocode_lines(code)
+        eff_lines = count_effective_pseudocode_lines(code)
         if min_pseudo_lines and eff_lines < int(min_pseudo_lines):
             continue
 
@@ -825,7 +825,7 @@ def run_annotation_phase(
                     if not row:
                         continue
                     body = row[0] or ""
-                    if min_pseudo_lines and _count_effective_pseudocode_lines(body) < int(min_pseudo_lines):
+                    if min_pseudo_lines and count_effective_pseudocode_lines(body) < int(min_pseudo_lines):
                         continue
                     if _pseudo_body_already_annotated(body):
                         updated_any = True
@@ -895,7 +895,7 @@ def run_annotation_phase(
                 if not code:
                     pbar.update(1)
                     continue
-                if min_pseudo_lines and _count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
+                if min_pseudo_lines and count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
                     pbar.update(1)
                     continue
                 if max_code_chars and len(code) > int(max_code_chars):
@@ -998,7 +998,7 @@ def run_annotation_phase(
             pbar.update(1)
             continue
 
-        if min_pseudo_lines and _count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
+        if min_pseudo_lines and count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
             pbar.update(1)
             continue
 
@@ -1110,7 +1110,7 @@ def run_annotation_phase(
                 )
             if include_extras and ida_disasm_lines:
                 # 仅携带部分反汇编，避免 prompt 过长/诱导模型输出过多 ea_comments。
-                disasm_cap = _get_cfg_int(
+                disasm_cap = get_cfg_int(
                     semantics_config,
                     ("pipeline", "prompt_limits", "annotation_ida_disasm_lines_per_prompt"),
                     120,
@@ -1346,7 +1346,7 @@ def run_annotation_phase(
                             allowed_eas.add(int(ea))
                 elif inc_extras and ida_disasm_lines:
                     # 没有行号->EA 映射时，限制为“本次 prompt 附带的反汇编片段”里出现的 EA。
-                    disasm_cap = _get_cfg_int(
+                    disasm_cap = get_cfg_int(
                         semantics_config,
                         ("pipeline", "prompt_limits", "annotation_ida_disasm_lines_per_prompt"),
                         120,
@@ -1496,7 +1496,7 @@ def run_annotation_phase(
                     continue
                 body = row[0] or ""
 
-                if min_pseudo_lines and _count_effective_pseudocode_lines(body) < int(min_pseudo_lines):
+                if min_pseudo_lines and count_effective_pseudocode_lines(body) < int(min_pseudo_lines):
                     continue
                 if _pseudo_body_already_annotated(body):
                     updated_any = True

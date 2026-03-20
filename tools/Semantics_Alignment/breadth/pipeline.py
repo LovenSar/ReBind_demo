@@ -10,50 +10,32 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# sys.path 设置：SA_ROOT（含 kp 包）和 BREADTH_DIR（含 phases/alignment_loader）
 _BREADTH_DIR = Path(__file__).resolve().parent
 _SA_ROOT = _BREADTH_DIR.parent
-# 确保 SA_ROOT 在 BREADTH_DIR 之前，这样 kp 等共享模块优先从 SA_ROOT 导入
-# 但 BREADTH_DIR 必须在 sys.path 中，这样 phases 模块才能被找到
 for _p in (_SA_ROOT, _BREADTH_DIR):
     _p_str = str(_p)
     if _p_str not in sys.path:
         sys.path.insert(0, _p_str)
-# 验证 phases 目录存在
-_PHASES_DIR = _BREADTH_DIR / "phases"
-if not _PHASES_DIR.exists():
-    raise RuntimeError(f"phases 目录不存在: {_PHASES_DIR}")
-# 确保 BREADTH_DIR 在 sys.path 中（phases 是 breadth 的子目录）
-_BREADTH_DIR_STR = str(_BREADTH_DIR)
-if _BREADTH_DIR_STR not in sys.path:
-    sys.path.insert(0, _BREADTH_DIR_STR)
 
 import argparse
 import heapq
-import logging
-import os
-import platform
-import re
-import subprocess
-import sys
-import time
-import builtins
-import inspect
-import http.client
 import json
+import logging
+import re
 import signal
-from pathlib import Path
+import sqlite3
+import subprocess
+import time
 from typing import Dict, Iterable, List, Optional, Set
 
-import sqlite3
-
-from urllib.parse import urlparse
-
 from dynamic_batching import yield_dynamic_batch
-from kp.kp_config import _get_cfg_bool, _get_cfg_int
+from kp.kp_config import get_cfg_bool, get_cfg_int
 from kp.kp_ida import IDAService
 from kp.kp_llm import estimate_token_usage
 from kp.kp_logging import install_stdout_tee, setup_logging
 from kp.kp_settings import build_llm_settings, load_semantics_config
+from kp.kp_utils import install_print_with_location
 from kp.kp_graph import build_unified_graph, hydrate_unified_xrefs_for_nodes
 from kp.kp_scoring import compute_unified_scores
 from kp.kp_schema import (
@@ -66,13 +48,18 @@ from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedFunctionNode, UnifiedG
 from kp.kp_unified_prompt import build_unified_batch_prompt, build_unified_prompt
 from tqdm import tqdm
 
-# 在导入 phases 之前，再次确保 BREADTH_DIR 在 sys.path 的最前面
-# 因为某些模块（如 kp_settings）可能会修改 sys.path，导致 BREADTH_DIR 被移出或覆盖
-_BREADTH_DIR_STR = str(_BREADTH_DIR)
-if _BREADTH_DIR_STR in sys.path:
-    sys.path.remove(_BREADTH_DIR_STR)
-sys.path.insert(0, _BREADTH_DIR_STR)
-
+from ida_launcher import (
+    DEFAULT_IDA_URL,
+    default_idat_exe_for_platform,
+    coerce_float,
+    exit_if_library_init_failed,
+    install_ctrl_c_handler,
+    launch_idat_server,
+    run_alignment_loader,
+    send_ida_save_and_exit,
+    wait_for_ida_process_exit,
+)
+from layout_helpers import derive_tmp_layout, derive_tmp_layout_from_ida_db
 from phases.phase1_kp import analyze_one_unified_function as phase1_analyze_one_unified_function
 from phases.phase1_kp import analyze_unified_batch as phase1_analyze_unified_batch
 from phases.phase2_validation import run_validation_phase as phase2_run_validation_phase
@@ -84,303 +71,11 @@ from alignment_loader import inspect_sqlite_database
 
 
 SCRIPT_PATH = Path(__file__).resolve()
-TOOLS_DIR = SCRIPT_PATH.parents[1]
+TOOLS_DIR = _SA_ROOT          # Semantics_Alignment/ 目录，含 idat_server.py / sync_ida_to_db.py
 REPO_ROOT = SCRIPT_PATH.parents[3]
-BREADTH_DIR = SCRIPT_PATH.parent
-
-DEFAULT_IDA_HTTP_PORT = 12345
-DEFAULT_IDA_URL = f"http://127.0.0.1:{DEFAULT_IDA_HTTP_PORT}"
-DEFAULT_IDAT_EXE_MACOS = "/Applications/IDA Professional 9.2.app/Contents/MacOS/idat"
-DEFAULT_IDAT_EXE_WINDOWS = "idat.exe"
-DEFAULT_IDAT_EXE_LINUX = "idat"
-LIBRARY_INIT_FAILURE_MESSAGE = "Library initialization failed with result: 4"
-
-_CTRL_C_EXIT_REQUESTED = False
-_CTRL_C_EXIT_URL = DEFAULT_IDA_URL
 
 
-def _set_ctrl_c_exit_url(url: str) -> None:
-    """Remember which IDA HTTP address the Ctrl+C handler should target."""
-    global _CTRL_C_EXIT_URL
-    normalized = (url or "").strip()
-    if not normalized:
-        normalized = DEFAULT_IDA_URL
-    _CTRL_C_EXIT_URL = normalized
-
-
-def _send_ida_save_and_exit(timeout_s: float = 2.0) -> None:
-    """POST {'action': 'save_and_exit'} to the configured IDA URL."""
-    url = _CTRL_C_EXIT_URL
-    if not url:
-        return
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        parsed = urlparse(f"http://{url}")
-    scheme = (parsed.scheme or "http").lower()
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or (443 if scheme == "https" else DEFAULT_IDA_HTTP_PORT)
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-
-    payload = json.dumps({"action": "save_and_exit"}).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": str(len(payload)),
-    }
-
-    conn_cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
-    conn = None
-    try:
-        conn = conn_cls(host, port, timeout=float(timeout_s))
-        conn.request("POST", path, body=payload, headers=headers)
-        resp = conn.getresponse()
-        resp.read()
-        print(f"[SemanticAlign] 已向 {url} 发送 save_and_exit 请求 (HTTP {resp.status}).")
-    except Exception as exc:
-        print(f"[SemanticAlign] 发送 save_and_exit 请求失败: {exc}")
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
-def _default_idat_exe_for_platform() -> str:
-    sys_name = platform.system().strip().lower()
-    if sys_name.startswith(("win", "msys", "cygwin", "mingw")):
-        return DEFAULT_IDAT_EXE_WINDOWS
-    if sys_name.startswith("darwin") or sys_name.startswith("mac"):
-        return DEFAULT_IDAT_EXE_MACOS
-    if sys_name.startswith("linux"):
-        return DEFAULT_IDAT_EXE_LINUX
-    return DEFAULT_IDAT_EXE_WINDOWS if os.name == "nt" else DEFAULT_IDAT_EXE_LINUX
-
-
-def _coerce_float(value: object, default: float) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
-
-
-def _handle_ctrl_c(signum, frame):
-    """Signal handler that tells IDA to exit before propagating KeyboardInterrupt."""
-    global _CTRL_C_EXIT_REQUESTED
-    if not _CTRL_C_EXIT_REQUESTED:
-        _CTRL_C_EXIT_REQUESTED = True
-        print("[SemanticAlign] 捕获 Ctrl+C，正在请求 IDA save_and_exit...")
-        _send_ida_save_and_exit()
-    signal.default_int_handler(signum, frame)
-
-
-def _install_print_with_location() -> None:
-    """Prefix every print with absolute file path and line number."""
-    if getattr(builtins, "_original_print", None):
-        return
-
-    builtins._original_print = builtins.print  # type: ignore[attr-defined]
-
-    def _print_with_location(*args, **kwargs):
-        frame = inspect.currentframe()
-        if frame and frame.f_back:
-            caller = frame.f_back
-            path = Path(caller.f_code.co_filename).resolve()
-            lineno = caller.f_lineno
-            prefix = f"{path}:{lineno} "
-        else:
-            prefix = ""
-        message = " ".join(str(a) for a in args)
-        builtins._original_print(f"{prefix}{message}", **kwargs)
-
-    builtins.print = _print_with_location  # type: ignore[assignment]
-
-
-_install_print_with_location()
-
-
-def derive_tmp_layout(sample_path: Path) -> dict:
-    """Generate tmp layout adjacent to the provided sample."""
-
-    sample_path = sample_path.expanduser().resolve()
-    tmp_root = sample_path.parent
-    tmp_root.mkdir(parents=True, exist_ok=True)
-
-    sanitized = re.sub(r"[^A-Za-z]", "_", sample_path.name)
-    sample_name = sample_path.name
-    dump_basename = f"{sample_name}_dump"
-
-    defaults = {
-        "tmp_root": tmp_root,
-        "db_path": tmp_root / f"{sample_name}.db",
-        "dump_txt": tmp_root / f"{dump_basename}.txt",
-        "dump_xlsx": tmp_root / f"{dump_basename}.xlsx",
-        "ida_log": tmp_root / "idat_log.txt",
-        "ghidra_dir": tmp_root / f"{sanitized}_ghidemo",
-        "ida_dir": tmp_root / f"{sanitized}_idademo",
-    }
-    return defaults
-
-
-def derive_tmp_layout_from_ida_db(ida_db_path: Path) -> dict:
-    """Generate tmp layout from finalized IDA DB path for phase6-only mode."""
-
-    ida_db_path = ida_db_path.expanduser().resolve()
-    tmp_root = ida_db_path.parent
-    tmp_root.mkdir(parents=True, exist_ok=True)
-
-    sample_name = ida_db_path.stem
-    m = re.match(r"^(.+?\.(?:exe|dll|sys|bin))(?:[-_].*)?$", sample_name, flags=re.IGNORECASE)
-    if m:
-        sample_name = m.group(1)
-    sanitized = re.sub(r"[^A-Za-z]", "_", sample_name)
-    dump_basename = f"{sample_name}_dump"
-
-    defaults = {
-        "tmp_root": tmp_root,
-        "db_path": tmp_root / f"{sample_name}.db",
-        "dump_txt": tmp_root / f"{dump_basename}.txt",
-        "dump_xlsx": tmp_root / f"{dump_basename}.xlsx",
-        "ida_log": tmp_root / "idat_log.txt",
-        "ghidra_dir": tmp_root / f"{sanitized}_ghidemo",
-        "ida_dir": tmp_root / f"{sanitized}_idademo",
-    }
-    return defaults
-
-
-def run_alignment_loader(
-    db_path: Path,
-    ghidra_dir: Path,
-    ida_dir: Path,
-    dump_txt: Path,
-    dump_xlsx: Path,
-    delete_db: bool = True,
-) -> None:
-    """
-    调用 alignment_loader.py 构建对齐数据库，并导出文本/Excel 快照。
-    """
-    cmd = [
-        sys.executable,
-        str(BREADTH_DIR / "alignment_loader.py"),
-        "--db",
-        str(db_path),
-        "--ghidra-dir",
-        str(ghidra_dir),
-        "--ida-dir",
-        str(ida_dir),
-        "--dump-db",
-        "--dump-db-output",
-        str(dump_txt),
-        "--dump-db-workbook",
-        str(dump_xlsx),
-    ]
-
-    # if delete_db:
-    #     cmd.append("--delete-db")
-
-    print("[SemanticAlign] 运行 alignment_loader.py 构建对齐数据库...")
-    print("  命令:", " ".join(cmd))
-    result = subprocess.run(cmd, cwd=str(REPO_ROOT))
-    if result.returncode != 0:
-        raise SystemExit(
-            f"[SemanticAlign] alignment_loader.py 执行失败，退出码={result.returncode}"
-        )
-
-
-def launch_idat_server(
-    idat_exe: str,
-    ida_script: Path,
-    sample_path: Path,
-    log_path: Path,
-) -> subprocess.Popen:
-    """
-    启动 IDA（idat），在其中加载 sample 并运行 idat_server.py。
-    返回子进程对象，供后续等待。
-    """
-    cmd = [
-        idat_exe,
-        "-A",
-        f"-L{log_path}",
-        f"-S{ida_script}",
-        str(sample_path),
-    ]
-    print("[SemanticAlign] 启动 IDA(idat) + idat_server...")
-    print("  命令:", " ".join(str(c) for c in cmd))
-    try:
-        # 让 idat 运行在独立的 session/process group 中，避免用户在终端按 Ctrl+C
-        # 中断主流程时把 idat_server 一起 SIGINT 掉，导致后续出现 Connection refused。
-        proc = subprocess.Popen(cmd, cwd=str(REPO_ROOT), start_new_session=True)
-    except FileNotFoundError:
-        raise SystemExit(
-            f"[SemanticAlign] 无法找到可执行文件 {idat_exe!r}，"
-            "请确认 IDA 的 idat 已添加到 PATH，或通过 --idat-exe 指定完整路径。"
-        )
-    return proc
-
-
-def _read_log_tail(log_path: Path, max_bytes: int = 64 * 1024) -> str:
-    """Return the last chunk of the IDA log to help detect startup failures."""
-    if not log_path.exists():
-        return ""
-    try:
-        with log_path.open("rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            end_pos = fh.tell()
-            start_pos = max(0, end_pos - int(max_bytes))
-            fh.seek(start_pos, os.SEEK_SET)
-            return fh.read().decode("utf-8", errors="ignore")
-    except Exception:
-        return ""
-
-
-def _log_indicates_library_failure(log_path: Path) -> bool:
-    chunk = _read_log_tail(log_path)
-    return LIBRARY_INIT_FAILURE_MESSAGE in chunk
-
-
-def _exit_if_library_init_failed(log_path: Path, ida_proc: subprocess.Popen) -> None:
-    if not _log_indicates_library_failure(log_path):
-        return
-
-    msg = (
-        "[SemanticAlign] 发现 IDA 报错“Library initialization failed with result: 4”，"
-        "说明资源已锁定。已停止后续流水线。"
-    )
-    print(msg)
-    if ida_proc.poll() is None:
-        try:
-            ida_proc.terminate()
-            ida_proc.wait(timeout=5)
-        except Exception:
-            try:
-                ida_proc.kill()
-            except Exception:
-                pass
-    raise SystemExit(msg)
-
-
-def _wait_for_ida_process_exit(proc: subprocess.Popen, *, timeout: float = 300.0) -> None:
-    """Wait for the IDA(idat) process to exit, printing status or timing out."""
-
-    if proc.poll() is not None:
-        print(f"[SemanticAlign] IDA(idat) 进程已退出，退出码={proc.returncode}")
-        return
-
-    try:
-        exit_code = proc.wait(timeout=timeout)
-        print(f"[SemanticAlign] IDA(idat) 进程已退出，退出码={exit_code}")
-    except subprocess.TimeoutExpired:
-        print(
-            "[SemanticAlign] 等待 IDA(idat) 进程退出超时，如需强制终止请手动结束 idat 进程。"
-        )
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
+install_print_with_location()
 
 def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
     cur = conn.cursor()
@@ -393,15 +88,15 @@ def _pick_single_binary_id(conn: sqlite3.Connection) -> int:
 
 def _configure_sqlite_runtime(conn: sqlite3.Connection, semantics_config: Optional[Dict[str, object]], logger: logging.Logger) -> None:
     """Apply runtime SQLite tuning for long-running local pipelines."""
-    enable = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "enabled"), True)
+    enable = get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "enabled"), True)
     if not enable:
         return
 
-    busy_timeout_ms = max(0, _get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "busy_timeout_ms"), 5000))
-    cache_size_kib = max(0, _get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "cache_size_kib"), 131072))
-    use_wal = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "wal"), True)
-    use_temp_store_memory = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "temp_store_memory"), True)
-    use_sync_normal = _get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "synchronous_normal"), True)
+    busy_timeout_ms = max(0, get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "busy_timeout_ms"), 5000))
+    cache_size_kib = max(0, get_cfg_int(semantics_config, ("pipeline", "sqlite_tuning", "cache_size_kib"), 131072))
+    use_wal = get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "wal"), True)
+    use_temp_store_memory = get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "temp_store_memory"), True)
+    use_sync_normal = get_cfg_bool(semantics_config, ("pipeline", "sqlite_tuning", "synchronous_normal"), True)
 
     try:
         conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)};")
@@ -593,7 +288,7 @@ def run_semantic_pipeline(
             phase1_total_targets = len(phase1_targets)
             phase1_progress: Optional[tqdm] = None
             if phase1_total_targets:
-                preview_cap = max(0, _get_cfg_int(semantics_config, ("pipeline", "phase1", "target_preview_max"), 20))
+                preview_cap = max(0, get_cfg_int(semantics_config, ("pipeline", "phase1", "target_preview_max"), 20))
                 sorted_targets = sorted(phase1_targets, key=lambda n: n.entry_va)
                 print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数。")
                 if preview_cap > 0:
@@ -685,10 +380,10 @@ def run_semantic_pipeline(
 
             phase1_recompute_every_batches = max(
                 1,
-                _get_cfg_int(semantics_config, ("pipeline", "phase1", "score_recompute_every_batches"), 8),
+                get_cfg_int(semantics_config, ("pipeline", "phase1", "score_recompute_every_batches"), 8),
             )
             phase1_batch_count = 0
-            phase1_scheduler_top_k = max(1, _get_cfg_int(semantics_config, ("pipeline", "phase1", "scheduler_top_k"), 50))
+            phase1_scheduler_top_k = max(1, get_cfg_int(semantics_config, ("pipeline", "phase1", "scheduler_top_k"), 50))
 
             while phase1_lazy_heap:
                 requested_nodes: List[UnifiedFunctionNode] = []
@@ -904,7 +599,7 @@ def run_semantic_pipeline(
         # ---------------------
         if 4 in phases_to_run:
             print("[SemanticAlign] Phase 4: Local Vars")
-            phase4_min_lines = _get_cfg_int(
+            phase4_min_lines = get_cfg_int(
                 semantics_config, ("pipeline", "phase4_lvar", "min_pseudo_lines_default"), 6
             )
             phase4_run_local_var_phase(
@@ -931,7 +626,7 @@ def run_semantic_pipeline(
         # ---------------------
         if 5 in phases_to_run:
             print("[SemanticAlign] Phase 5: Annotation")
-            phase5_min_lines = _get_cfg_int(
+            phase5_min_lines = get_cfg_int(
                 semantics_config, ("pipeline", "phase5_annotation", "min_pseudo_lines"), 6
             )
             phase5_run_annotation_phase(
@@ -1221,13 +916,13 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     idat_exe = (
         args.idat_exe
         or runtime.get("idat_exe")
-        or _default_idat_exe_for_platform()
+        or default_idat_exe_for_platform()
     )
     ida_url = args.ida_url or runtime.get("ida_url") or DEFAULT_IDA_URL
     ida_start_delay = (
         float(args.ida_start_delay)
         if args.ida_start_delay is not None
-        else _coerce_float(runtime.get("ida_start_delay"), 3.0)
+        else coerce_float(runtime.get("ida_start_delay"), 3.0)
     )
 
     ida_script_value = (
@@ -1266,7 +961,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 print(f"[SemanticAlign] 等待 {ida_start_delay:.1f} 秒以便 IDA 启动...")
                 time.sleep(float(ida_start_delay))
             
-            _exit_if_library_init_failed(ida_log, ida_proc)
+            exit_if_library_init_failed(ida_log, ida_proc)
             
             # 调用同步脚本
             sync_cmd = [
@@ -1285,8 +980,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 print("[SemanticAlign] 同步失败，但继续导出...", file=sys.stderr)
             
             # 请求 IDA 退出
-            _send_ida_save_and_exit()
-            _wait_for_ida_process_exit(ida_proc, timeout=30.0)
+            send_ida_save_and_exit()
+            wait_for_ida_process_exit(ida_proc, timeout=30.0)
         
         print(
             f"[SemanticAlign] 导出数据库快照 -> txt: {dump_txt}, xlsx: {dump_xlsx}"
@@ -1334,8 +1029,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         return
 
     if needs_pipeline:
-        _set_ctrl_c_exit_url(str(ida_url))
-        signal.signal(signal.SIGINT, _handle_ctrl_c)
+        install_ctrl_c_handler(str(ida_url))
 
         # 启动 IDA(idat) + idat_server
         ida_log = tmp_defaults["ida_log"]
@@ -1351,7 +1045,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             print(f"[SemanticAlign] 等待 {ida_start_delay:.1f} 秒以便 IDA 启动...")
             time.sleep(float(ida_start_delay))
 
-        _exit_if_library_init_failed(ida_log, ida_proc)
+        exit_if_library_init_failed(ida_log, ida_proc)
 
         # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接）
         try:
@@ -1368,13 +1062,13 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             )
         except Exception:
             print("[SemanticAlign] 语义流水线异常终止，正在请求 IDA(save_and_exit)...")
-            _send_ida_save_and_exit()
-            _wait_for_ida_process_exit(ida_proc, timeout=30.0)
+            send_ida_save_and_exit()
+            wait_for_ida_process_exit(ida_proc, timeout=30.0)
             raise
 
         # 运行成功后等待 IDA 进程退出
         print("[SemanticAlign] 等待 IDA(idat) 进程退出...")
-        _wait_for_ida_process_exit(ida_proc)
+        wait_for_ida_process_exit(ida_proc)
 
     # Phase 6: refresh IDA headless outputs from finalized IDA database
     if phase6_selected:

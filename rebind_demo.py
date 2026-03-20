@@ -6,6 +6,7 @@ ReBind Demo 综合脚本
 
 import argparse
 import atexit
+import concurrent.futures
 import http.client
 import json
 import os
@@ -142,9 +143,20 @@ def _handle_sigint(signum, frame):
     sys.exit(0)
 
 
-def _expected_output_dir(sample_path: Path, dir_suffix: str) -> Path:
+def _rebind_workspace_dir(sample_path: Path) -> Path:
+    """返回该样本专属的 _rebind_demo 工作目录。
+
+    规则：``<sample_parent>/<sanitized>_rebind_demo``，
+    与 layout_helpers.rebind_workspace_dir 保持一致。
+    """
     base_name = sample_path.name.replace(".", "_")
-    return sample_path.parent / f"{base_name}{dir_suffix}"
+    return sample_path.parent / f"{base_name}_rebind_demo"
+
+
+def _expected_output_dir(sample_path: Path, dir_suffix: str) -> Path:
+    """返回 Ghidra/IDA 工具在 _rebind_demo 内的输出目录。"""
+    base_name = sample_path.name.replace(".", "_")
+    return _rebind_workspace_dir(sample_path) / f"{base_name}{dir_suffix}"
 
 
 def _phase7_workspace_dir(input_path: Path) -> Path:
@@ -159,6 +171,14 @@ def _phase7_workspace_dir(input_path: Path) -> Path:
 
 
 def _phase7_legacy_db_path(input_path: Path) -> Path:
+    """返回由常规流水线生成的对齐 DB 路径（用于 Phase7 自动迁移检测）。
+
+    优先返回新布局路径（_rebind_demo 内），若不存在则回退到旧的平铺路径
+    （``<parent>/<sample.name>.db``），以兼容历史数据。
+    """
+    new_path = _rebind_workspace_dir(input_path) / f"{input_path.name}.db"
+    if new_path.exists():
+        return new_path
     return input_path.parent / f"{input_path.name}.db"
 
 
@@ -221,7 +241,8 @@ def run_semantic_align(
     for sample_path in sample_paths:
         cmd = [sys.executable, str(SEMANTIC_ALIGN_SCRIPT), "--sample", str(sample_path)]
         db_for_sample = db_path_override
-        default_db_path = sample_path.parent / f"{sample_path.name}.db"
+        # DB 位于样本专属 _rebind_demo 工作目录内
+        default_db_path = _rebind_workspace_dir(sample_path) / f"{sample_path.name}.db"
 
         if dump_db_only:
             target_db = db_for_sample or default_db_path
@@ -767,32 +788,58 @@ class ReBindDemo:
         return self.ida_adapter.analyze_files(input_files)
     
     def analyze_with_both(self, input_files: List[str]) -> dict:
-        """使用 Ghidra 和 IDA 分析文件
+        """使用 Ghidra 和 IDA 并行分析文件。
         
+        两个工具写入独立的输出目录（_ghidemo / _idademo），无共享状态，
+        可安全并发执行。subprocess.run 通过 cwd= 参数指定工作目录，
+        不依赖 os.chdir，线程安全。
+
         Args:
             input_files: 输入文件路径列表
             
         Returns:
             包含两种工具输出目录的字典
         """
-        results = {}
-        
+        tasks: Dict[str, Any] = {}
         if self.ghidra_adapter:
-            try:
-                print("使用 Ghidra 分析文件...")
-                results['ghidra'] = self.analyze_with_ghidra(input_files)
-            except Exception as e:
-                print(f"Ghidra 分析失败: {e}")
-                results['ghidra'] = []
-        
+            tasks['ghidra'] = self.analyze_with_ghidra
         if self.ida_adapter:
+            tasks['ida'] = self.analyze_with_ida
+
+        if not tasks:
+            return {}
+
+        results: Dict[str, List[Path]] = {}
+
+        if len(tasks) == 1:
+            # 只有一个工具可用，直接串行执行
+            name, fn = next(iter(tasks.items()))
+            label = "Ghidra" if name == "ghidra" else "IDA"
             try:
-                print("使用 IDA 分析文件...")
-                results['ida'] = self.analyze_with_ida(input_files)
+                print(f"使用 {label} 分析文件...")
+                results[name] = fn(input_files)
             except Exception as e:
-                print(f"IDA 分析失败: {e}")
-                results['ida'] = []
-        
+                print(f"{label} 分析失败: {e}")
+                results[name] = []
+            return results
+
+        # 两个工具都可用，并行执行
+        print("[ReBindDemo] Ghidra 和 IDA 并行启动...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_ghidra = executor.submit(self.analyze_with_ghidra, input_files)
+            future_ida    = executor.submit(self.analyze_with_ida,    input_files)
+
+            for name, future, label in [
+                ("ghidra", future_ghidra, "Ghidra"),
+                ("ida",    future_ida,    "IDA"),
+            ]:
+                try:
+                    results[name] = future.result()
+                    print(f"[ReBindDemo] {label} 分析完成。")
+                except Exception as e:
+                    print(f"[ReBindDemo] {label} 分析失败: {e}")
+                    results[name] = []
+
         return results
 
 

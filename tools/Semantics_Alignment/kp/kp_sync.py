@@ -26,7 +26,15 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_name_from_signature(signature: str, fallback: str) -> Optional[str]:
-    """Extract function name from C-like signature (heuristic)."""
+    """Extract function name from C-like signature (heuristic).
+
+    Args:
+        signature: C-like 函数签名，例如 ``void *func_name(int a, int b)``
+        fallback: 无法解析时的回退名称
+
+    Returns:
+        解析出的函数名，或 fallback（均为 None 时返回 None）
+    """
     sig = (signature or "").strip()
     if not sig:
         return (fallback or None)
@@ -42,6 +50,15 @@ def _extract_name_from_signature(signature: str, fallback: str) -> Optional[str]
         return name
     except Exception:
         return fallback or None
+
+
+def extract_func_name(signature: str) -> str:
+    """从 C-like 函数签名中提取函数名，解析失败时返回空字符串。
+
+    这是 ``_extract_name_from_signature`` 的简化封装，专供不需要 fallback 的调用方使用
+    （原本在 phase2_validation.py 和 depth/engine.py 中各有一份相同逻辑的本地副本）。
+    """
+    return _extract_name_from_signature(signature, fallback="") or ""
 
 
 def _make_name_unique(conn: sqlite3.Connection, base_name: str, current_fid: int) -> str:

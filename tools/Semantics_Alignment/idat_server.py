@@ -53,7 +53,12 @@ _CLEANED_UP = False  # 确保清理逻辑只执行一次
 
 
 def _install_print_with_location() -> None:
-    """Prefix every print with absolute file path and line number."""
+    """Prefix every print with absolute file path and line number.
+
+    注意：该函数与 kp/kp_utils.py 中的 install_print_with_location 逻辑相同。
+    因为 idat_server.py 在 IDA 内部环境（ida_hexrays/idc 等 SDK）中运行，
+    无法依赖外部 kp 包，故在此保留独立副本。
+    """
     if getattr(builtins, "_original_print", None):
         return
 

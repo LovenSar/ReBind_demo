@@ -62,8 +62,5 @@ def get_cfg_bool(cfg: Optional[Dict[str, Any]], keys: Tuple[str, ...], default: 
     return bool(default)
 
 
-# Backward-compatible aliases
-_get_cfg_section = get_cfg_section
-_get_cfg_int = get_cfg_int
-_get_cfg_float = get_cfg_float
-_get_cfg_bool = get_cfg_bool
+# 向后兼容别名已移至 kp/_compat.py，此处不再重复定义。
+# 请使用正式名称：get_cfg_int / get_cfg_float / get_cfg_bool / get_cfg_section

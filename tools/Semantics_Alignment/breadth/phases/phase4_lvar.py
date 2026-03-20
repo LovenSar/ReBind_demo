@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from tqdm import tqdm
 
 from dynamic_batching import yield_dynamic_batch
-from kp.kp_config import _get_cfg_float, _get_cfg_int
+from kp.kp_config import get_cfg_float, get_cfg_int
 from kp.kp_ida import wait_for_ida_server
 from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
 from kp.kp_schema import ensure_analysis_rows_for_binary, ensure_analysis_schema, load_analysis_info
@@ -23,8 +23,8 @@ from kp.kp_types import (
     SUBFUNC_NAME_PATTERN,
     UnifiedFunctionNode,
     UnifiedGraph,
-    _count_effective_pseudocode_lines,
-    _find_generic_lvar_names,
+    count_effective_pseudocode_lines,
+    find_generic_lvar_names,
 )
 
 try:
@@ -192,7 +192,7 @@ def _prepare_lvar_candidate(
         code = code_by_fid.get(int(fid), "")
         if not code:
             continue
-        line_cnt = _count_effective_pseudocode_lines(code)
+        line_cnt = count_effective_pseudocode_lines(code)
         if min_pseudo_lines and line_cnt < int(min_pseudo_lines):
             continue
 
@@ -349,7 +349,7 @@ def _verify_lvar_persistence(
 ) -> Tuple[Optional[str], Set[str]]:
     """After sync, save IDB and refetch pseudocode to verify persistence."""
     latest_code = initial_code
-    remaining = _find_generic_lvar_names(latest_code or "")
+    remaining = find_generic_lvar_names(latest_code or "")
 
     if requests is None:
         return latest_code, remaining
@@ -364,7 +364,7 @@ def _verify_lvar_persistence(
             if auto_commit:
                 conn.commit()
 
-        remaining = _find_generic_lvar_names(latest_code or "")
+        remaining = find_generic_lvar_names(latest_code or "")
         if not remaining:
             break
 
@@ -429,7 +429,7 @@ def _apply_lvar_result_for_candidate(
         else:
             final_code = original_code
 
-    remaining_generics = _find_generic_lvar_names(final_code or "")
+    remaining_generics = find_generic_lvar_names(final_code or "")
     if changed and ida_sync and clean_map:
         verified_code, remaining_generics = _verify_lvar_persistence(
             conn=conn,
@@ -591,7 +591,7 @@ def run_local_var_phase(
 ) -> None:
     """Phase4 entry: optimize local variable names."""
 
-    ida_connect_max_wait_seconds = _get_cfg_float(semantics_config, ("pipeline", "ida_sync", "connect_max_wait_seconds"), 120.0)
+    ida_connect_max_wait_seconds = get_cfg_float(semantics_config, ("pipeline", "ida_sync", "connect_max_wait_seconds"), 120.0)
 
     ida_sync_active = bool(ida_sync)
     if ida_sync_active and ida_url:
@@ -684,7 +684,7 @@ def run_local_var_phase(
                 if "export" in (sym_source or "").strip().lower():
                     continue
 
-            if min_pseudo_lines and _count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
+            if min_pseudo_lines and count_effective_pseudocode_lines(code) < int(min_pseudo_lines):
                 continue
 
             eligible.setdefault(entry_va_i, set()).add(fid_i)
@@ -742,8 +742,8 @@ def run_local_var_phase(
 
     print(f"[Phase 4] Local Variable Renaming: 目标函数数量 {len(candidates)}")
 
-    verify_max_retries = _get_cfg_int(semantics_config, ("pipeline", "phase4_lvar", "verify_max_retries"), 3)
-    verify_wait_seconds = _get_cfg_float(semantics_config, ("pipeline", "phase4_lvar", "verify_wait_seconds"), 1.0)
+    verify_max_retries = get_cfg_int(semantics_config, ("pipeline", "phase4_lvar", "verify_max_retries"), 3)
+    verify_wait_seconds = get_cfg_float(semantics_config, ("pipeline", "phase4_lvar", "verify_wait_seconds"), 1.0)
 
     pbar = tqdm(total=len(candidates), desc="Phase 4: Local Vars", unit="func")
 

@@ -16,17 +16,12 @@ if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
 import argparse
-import hashlib
-import heapq
 import json
 import math
-import re
 import sqlite3
 from collections import defaultdict, deque
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from kp.kp_deep_path import (
     estimate_global_deepest_depth,
@@ -36,56 +31,71 @@ from kp.kp_deep_path import (
     run_deep_path_analysis,
 )
 from kp.kp_graph import build_unified_graph
-from kp.kp_llm import build_chat_request, call_llm_analyze_function
 from kp.kp_schema import load_analysis_info
 from kp.kp_settings import build_llm_settings, load_semantics_config
 from kp.kp_types import CALL_REF_TYPES, UnifiedGraph, UnifiedFunctionNode
-from kp.kp_unified_prompt import build_unified_prompt
 from depth.deep_path_step import run_llm_poll_on_deepest_path
 from depth.strict_align import Phase75StrictAlignError, run_phase7_5_strict_align
+from depth.run_management import (
+    RunLayout,
+    _safe_stem,
+    _build_output_paths,
+    _build_gen1_deepest_output_path,
+    _now_iso,
+    _write_json_file,
+    _append_jsonl,
+    _build_resume_signature,
+    _pick_latest_run_id,
+    _build_run_layout,
+    _load_checkpoint,
+    _save_checkpoint,
+    _write_manifest,
+    _log_event,
+    _checkpoint_stage,
+)
+from depth.goal_collector import (
+    GoalItem,
+    _goal_to_dict,
+    _goal_from_dict,
+    _load_analysis_info_safe,
+    _node_text_blob,
+    _semantic_richness,
+    _extract_tokens,
+    _node_name_tokens,
+    _pick_manual_goals,
+    _pick_auto_goals,
+)
+from depth.graph_augment import (
+    IndirectEdgeStatus,
+    _collect_direct_data_edges,
+    _collect_global_ref_map,
+    _build_name_index,
+    _collect_indirect_edges,
+    _add_undirected_edge,
+    _build_mixed_graph,
+    _edge_cost,
+    _mixed_neighborhood,
+)
+from depth.profile_ops import (
+    _load_backup_profile,
+    _call_llm_with_trace,
+    _analyze_node_semantics_with_llm,
+    _llm_compare_profiles,
+    _select_profile,
+    _rank_nodes_for_compare,
+    _collect_path_nodes,
+    _profile_to_analysis_state,
+    _update_analysis_status_with_fallback,
+    _apply_selected_profiles_to_db,
+)
+from depth.blackboard import (
+    SemanticBlackboard,
+    populate_from_profile,
+    populate_from_step_result,
+)
 
 
-STRUCT_HINT_RE = re.compile(r"\b(?:struct|field_|_ctx|_cfg|_info|_node|_state)\b|->", re.IGNORECASE)
-TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 DEFAULT_DB_COMPARE_THRESHOLD = 0.1
-
-
-@dataclass
-class GoalItem:
-    entry_va: int
-    source: str
-    xref_count: int
-    richness: int
-    manual_score: int = 0
-
-
-@dataclass
-class IndirectEdgeStatus:
-    enabled: bool
-    degraded: bool
-    reason: str
-    total_candidates: int
-    selected_candidates: int
-    incremental_applied: bool
-
-
-@dataclass
-class RunLayout:
-    sample_tag: str
-    run_id: str
-    run_dir: Path
-    artifacts_dir: Path
-    logs_dir: Path
-    checkpoints_dir: Path
-    reports_dir: Path
-    out_file: Path
-    backup_file: Path
-    gen1_deepest_file: Path
-    manifest_file: Path
-    checkpoint_file: Path
-    journal_file: Path
-    llm_poll_log_file: Path
-    llm_trace_file: Path
 
 
 def _parse_args() -> argparse.Namespace:
@@ -208,657 +218,6 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--dry-run", action="store_true", default=False, help="仅输出结构，不调用 LLM")
     ap.add_argument("--output", default=None, help="可选：显式输出 JSON 文件")
     return ap.parse_args()
-
-
-def _safe_stem(text: str) -> str:
-    s = str(text or "").strip()
-    if not s:
-        return "unknown"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-
-
-def _build_output_paths(db_path: Path, input_path: Optional[str], explicit_output: Optional[str]) -> Tuple[Path, Path, Path]:
-    if explicit_output:
-        out_file = Path(explicit_output).expanduser().resolve()
-        out_dir = out_file.parent
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = out_dir / f"backup_{ts}.json"
-        return out_dir, out_file, backup_file
-
-    if input_path:
-        input_name = Path(input_path).name
-    else:
-        input_name = db_path.stem
-
-    run_dir = db_path.parent / f"goal_engine_runs_{_safe_stem(input_name)}"
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_file = run_dir / f"goal_run_{ts}.json"
-    backup_file = run_dir / f"goal_backup_{ts}.json"
-    return run_dir, out_file, backup_file
-
-
-def _build_gen1_deepest_output_path(out_file: Path) -> Path:
-    return out_file.with_name(f"{out_file.stem}.gen1_deepest.json")
-
-
-def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _write_json_file(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fp:
-        json.dump(payload, fp, ensure_ascii=False, indent=2)
-    tmp.replace(path)
-
-
-def _append_jsonl(path: Path, event: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fp:
-        fp.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-
-def _goal_to_dict(goal: GoalItem) -> Dict[str, Any]:
-    return {
-        "entry_va": int(goal.entry_va),
-        "source": str(goal.source),
-        "xref_count": int(goal.xref_count),
-        "richness": int(goal.richness),
-        "manual_score": int(goal.manual_score),
-    }
-
-
-def _goal_from_dict(item: Dict[str, Any]) -> GoalItem:
-    return GoalItem(
-        entry_va=int(item.get("entry_va", 0) or 0),
-        source=str(item.get("source") or ""),
-        xref_count=int(item.get("xref_count", 0) or 0),
-        richness=int(item.get("richness", 0) or 0),
-        manual_score=int(item.get("manual_score", 0) or 0),
-    )
-
-
-def _build_resume_signature(args: argparse.Namespace, db_path: Path) -> str:
-    raw = vars(args)
-    excluded = {
-        "resume",
-        "force_resume",
-        "run_id",
-        "runs_root",
-        "output",
-        "log_raw_llm",
-    }
-    payload: Dict[str, Any] = {
-        k: raw[k]
-        for k in sorted(raw.keys())
-        if k not in excluded
-    }
-    payload["db_path"] = str(db_path)
-    enc = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(enc.encode("utf-8")).hexdigest()
-
-
-def _pick_latest_run_id(sample_root: Path) -> Optional[str]:
-    if not sample_root.exists() or not sample_root.is_dir():
-        return None
-    candidates = [p for p in sample_root.iterdir() if p.is_dir()]
-    if not candidates:
-        return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0].name
-
-
-def _build_run_layout(
-    *,
-    db_path: Path,
-    input_path: Optional[str],
-    explicit_output: Optional[str],
-    runs_root: Optional[str],
-    run_id: Optional[str],
-    resume: bool,
-) -> RunLayout:
-    if input_path:
-        sample_name = Path(input_path).name
-    else:
-        sample_name = db_path.stem
-    sample_tag = _safe_stem(sample_name)
-
-    root = Path(runs_root).expanduser().resolve() if runs_root else (db_path.parent / "runs")
-    sample_root = root / sample_tag
-
-    rid = _safe_stem(str(run_id or "").strip())
-    if not rid:
-        if resume:
-            latest = _pick_latest_run_id(sample_root)
-            if not latest:
-                raise SystemExit(f"未找到可恢复 run: {sample_root}")
-            rid = latest
-        else:
-            rid = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    run_dir = sample_root / rid
-    artifacts_dir = run_dir / "artifacts"
-    logs_dir = run_dir / "logs"
-    checkpoints_dir = run_dir / "checkpoints"
-    reports_dir = run_dir / "reports"
-
-    if explicit_output:
-        out_file = Path(explicit_output).expanduser().resolve()
-        backup_file = out_file.with_name("goal_backup.json")
-        gen1_file = out_file.with_name("goal_gen1_deepest.json")
-    else:
-        out_file = reports_dir / "goal_run.json"
-        backup_file = reports_dir / "goal_backup.json"
-        gen1_file = reports_dir / "goal_gen1_deepest.json"
-
-    return RunLayout(
-        sample_tag=sample_tag,
-        run_id=rid,
-        run_dir=run_dir,
-        artifacts_dir=artifacts_dir,
-        logs_dir=logs_dir,
-        checkpoints_dir=checkpoints_dir,
-        reports_dir=reports_dir,
-        out_file=out_file,
-        backup_file=backup_file,
-        gen1_deepest_file=gen1_file,
-        manifest_file=run_dir / "manifest.json",
-        checkpoint_file=checkpoints_dir / "state.json",
-        journal_file=logs_dir / "journal.jsonl",
-        llm_poll_log_file=logs_dir / "llm_poll.jsonl",
-        llm_trace_file=logs_dir / "llm_trace.jsonl",
-    )
-
-
-def _load_checkpoint(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as fp:
-            data = json.load(fp)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _save_checkpoint(path: Path, state: Dict[str, Any]) -> None:
-    payload = dict(state)
-    payload["ts"] = _now_iso()
-    _write_json_file(path, payload)
-
-
-def _write_manifest(layout: RunLayout, payload: Dict[str, Any]) -> None:
-    _write_json_file(layout.manifest_file, payload)
-
-
-def _log_event(layout: RunLayout, event_type: str, **data: Any) -> None:
-    event = {"ts": _now_iso(), "event": str(event_type)}
-    event.update(data)
-    _append_jsonl(layout.journal_file, event)
-
-
-def _checkpoint_stage(layout: RunLayout, state: Dict[str, Any], stage: str) -> None:
-    payload = dict(state)
-    payload["stage"] = str(stage)
-    _save_checkpoint(layout.checkpoint_file, payload)
-
-
-def _load_analysis_info_safe(conn: sqlite3.Connection) -> Dict[int, dict]:
-    try:
-        return load_analysis_info(conn)
-    except Exception:
-        return {}
-
-
-def _node_text_blob(node: UnifiedFunctionNode) -> str:
-    parts: List[str] = []
-    if node.names:
-        parts.append(" ".join(sorted(node.names)))
-    for code in node.pseudocodes.values():
-        if code:
-            parts.append(code)
-    for s in node.string_refs:
-        parts.append(s)
-    for api in node.external_callee_names:
-        parts.append(api)
-    return "\n".join(parts)
-
-
-def _semantic_richness(node: UnifiedFunctionNode, struct_tokens: Sequence[str]) -> int:
-    text = _node_text_blob(node).lower()
-    struct_hits = len(STRUCT_HINT_RE.findall(text))
-    manual_struct_hits = 0
-    for t in struct_tokens:
-        tok = str(t or "").strip().lower()
-        if tok and tok in text:
-            manual_struct_hits += 1
-
-    ext_api = len(node.external_callee_names)
-    strings = len(node.string_refs)
-    internal = len(node.internal_callee_vas)
-    callers = len(node.caller_vas)
-    instr_bucket = 2 if int(node.instr_count or 0) >= 120 else (1 if int(node.instr_count or 0) >= 30 else 0)
-
-    score = 4 * min(ext_api, 15)
-    score += 3 * min(strings, 20)
-    score += 2 * min(internal, 20)
-    score += 2 * min(callers, 20)
-    score += 5 * min(struct_hits, 10)
-    score += 8 * min(manual_struct_hits, 6)
-    score += instr_bucket
-    return int(score)
-
-
-def _collect_direct_data_edges(conn: sqlite3.Connection, graph: UnifiedGraph) -> Dict[int, Set[int]]:
-    adjacency: Dict[int, Set[int]] = defaultdict(set)
-    view_ids = sorted(set(graph.function_id_to_view_id.values()))
-    if not view_ids:
-        return adjacency
-
-    call_types = sorted(CALL_REF_TYPES)
-    view_ph = ",".join("?" for _ in view_ids)
-    call_ph = ",".join("?" for _ in call_types)
-
-    cur = conn.cursor()
-    cur.execute(
-        f"""
-        SELECT src.function_id, dst.function_id
-        FROM xrefs AS x
-        JOIN instructions AS src
-             ON src.view_id = x.view_id AND src.address_va = x.src_va
-        JOIN instructions AS dst
-             ON dst.view_id = x.view_id AND dst.address_va = x.dst_va
-        WHERE x.view_id IN ({view_ph})
-          AND x.ref_type_raw NOT IN ({call_ph})
-        GROUP BY src.function_id, dst.function_id;
-        """,
-        [*view_ids, *call_types],
-    )
-
-    for src_fid, dst_fid in cur.fetchall():
-        s_entry = graph.function_id_to_entry_va.get(int(src_fid))
-        d_entry = graph.function_id_to_entry_va.get(int(dst_fid))
-        if s_entry is None or d_entry is None or int(s_entry) == int(d_entry):
-            continue
-        adjacency[int(s_entry)].add(int(d_entry))
-        adjacency[int(d_entry)].add(int(s_entry))
-
-    return adjacency
-
-
-def _collect_global_ref_map(conn: sqlite3.Connection, graph: UnifiedGraph) -> Tuple[Dict[int, Set[int]], Dict[int, List[Tuple[int, int]]]]:
-    """Return:
-    - global_to_funcs: global_va -> set(entry_va)
-    - func_to_globals: entry_va -> [(global_va, ref_count), ...]
-    """
-    global_to_funcs: Dict[int, Set[int]] = defaultdict(set)
-    func_to_globals_counter: Dict[int, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
-
-    view_ids = sorted(set(graph.function_id_to_view_id.values()))
-    if not view_ids:
-        return global_to_funcs, {}
-
-    cur = conn.cursor()
-    view_ph = ",".join("?" for _ in view_ids)
-    cur.execute(
-        f"""
-        SELECT src.function_id, x.dst_va, COUNT(*)
-        FROM xrefs AS x
-        JOIN instructions AS src
-             ON src.view_id = x.view_id AND src.address_va = x.src_va
-        LEFT JOIN instructions AS dst
-               ON dst.view_id = x.view_id AND dst.address_va = x.dst_va
-        LEFT JOIN strings AS s
-               ON s.view_id = x.view_id AND s.address_va = x.dst_va
-        WHERE x.view_id IN ({view_ph})
-          AND x.dst_va IS NOT NULL
-          AND dst.function_id IS NULL
-          AND s.address_va IS NULL
-        GROUP BY src.function_id, x.dst_va;
-        """,
-        view_ids,
-    )
-
-    for src_fid, dst_va, cnt in cur.fetchall():
-        entry = graph.function_id_to_entry_va.get(int(src_fid))
-        if entry is None:
-            continue
-        gva = int(dst_va)
-        c = int(cnt or 0)
-        if c <= 0:
-            continue
-        global_to_funcs[gva].add(int(entry))
-        func_to_globals_counter[int(entry)][gva] += c
-
-    func_to_globals: Dict[int, List[Tuple[int, int]]] = {}
-    for entry_va, counter in func_to_globals_counter.items():
-        pairs = sorted(counter.items(), key=lambda x: x[1], reverse=True)
-        func_to_globals[int(entry_va)] = pairs[:128]
-
-    return global_to_funcs, func_to_globals
-
-
-def _build_name_index(graph: UnifiedGraph) -> Dict[str, Set[int]]:
-    idx: Dict[str, Set[int]] = defaultdict(set)
-    for entry_va, node in graph.nodes.items():
-        for n in node.names:
-            key = str(n or "").strip().lower()
-            if key:
-                idx[key].add(int(entry_va))
-    return idx
-
-
-def _collect_indirect_edges(
-    conn: sqlite3.Connection,
-    graph: UnifiedGraph,
-    *,
-    mode: str,
-    budget: int,
-    incremental: bool,
-    incremental_topn: int,
-) -> Tuple[Dict[int, Set[int]], IndirectEdgeStatus]:
-    if mode == "off":
-        return {}, IndirectEdgeStatus(False, False, "mode_off", 0, 0, False)
-
-    view_ids = sorted(set(graph.function_id_to_view_id.values()))
-    if not view_ids:
-        return {}, IndirectEdgeStatus(False, False, "no_views", 0, 0, False)
-
-    cur = conn.cursor()
-    view_ph = ",".join("?" for _ in view_ids)
-
-    # 仅看 COMPUTED_CALL / IDA 19 这类潜在间接调用。
-    cur.execute(
-        f"""
-        SELECT COUNT(*)
-        FROM xrefs AS x
-        WHERE x.view_id IN ({view_ph})
-          AND x.ref_type_raw IN ('COMPUTED_CALL', '19');
-        """,
-        view_ids,
-    )
-    total_candidates = int(cur.fetchone()[0] or 0)
-
-    degraded = False
-    incremental_applied = False
-    selected_limit: Optional[int] = None
-    reason = "enabled"
-
-    if mode == "auto" and total_candidates > int(max(1, budget)):
-        degraded = True
-        reason = f"auto_degraded_over_budget(total={total_candidates}, budget={budget})"
-        if incremental:
-            selected_limit = max(1, int(incremental_topn or 1))
-            incremental_applied = True
-            reason += f"_incremental_topn={selected_limit}"
-        else:
-            return {}, IndirectEdgeStatus(False, True, reason, total_candidates, 0, False)
-
-    name_index = _build_name_index(graph)
-
-    query = f"""
-        SELECT src.function_id, COALESCE(x.dst_name, ''), COUNT(*) AS cnt
-        FROM xrefs AS x
-        JOIN instructions AS src
-             ON src.view_id = x.view_id AND src.address_va = x.src_va
-        LEFT JOIN instructions AS dst
-               ON dst.view_id = x.view_id AND dst.address_va = x.dst_va
-        WHERE x.view_id IN ({view_ph})
-          AND x.ref_type_raw IN ('COMPUTED_CALL', '19')
-          AND dst.function_id IS NULL
-          AND COALESCE(x.dst_name, '') <> ''
-        GROUP BY src.function_id, x.dst_name
-    """
-    params: List[Any] = [*view_ids]
-    if selected_limit is not None:
-        query += " ORDER BY cnt DESC LIMIT ?"
-        params.append(int(selected_limit))
-    query += ";"
-
-    cur.execute(query, params)
-
-    edges: Dict[int, Set[int]] = defaultdict(set)
-    selected_candidates = 0
-    for src_fid, dst_name, _cnt in cur.fetchall():
-        src_entry = graph.function_id_to_entry_va.get(int(src_fid))
-        if src_entry is None:
-            continue
-        dname = str(dst_name or "").strip().lower()
-        if not dname:
-            continue
-        matched = name_index.get(dname, set())
-        if not matched:
-            continue
-        for dst_entry in matched:
-            if int(dst_entry) == int(src_entry):
-                continue
-            edges[int(src_entry)].add(int(dst_entry))
-            edges[int(dst_entry)].add(int(src_entry))
-            selected_candidates += 1
-
-    status = IndirectEdgeStatus(
-        enabled=True,
-        degraded=degraded,
-        reason=reason,
-        total_candidates=total_candidates,
-        selected_candidates=int(selected_candidates),
-        incremental_applied=incremental_applied,
-    )
-    return edges, status
-
-
-def _add_undirected_edge(adj: Dict[int, Dict[int, Set[str]]], a: int, b: int, kind: str) -> None:
-    if int(a) == int(b):
-        return
-    adj[int(a)].setdefault(int(b), set()).add(str(kind))
-    adj[int(b)].setdefault(int(a), set()).add(str(kind))
-
-
-def _build_mixed_graph(
-    conn: sqlite3.Connection,
-    graph: UnifiedGraph,
-    *,
-    include_indirect_edges: Dict[int, Set[int]],
-) -> Tuple[Dict[int, Dict[int, Set[str]]], Dict[int, List[Tuple[int, int]]], Dict[str, Any]]:
-    """Build mixed adjacency with edge kinds: call/data/string/global/indirect."""
-    adj: Dict[int, Dict[int, Set[str]]] = defaultdict(dict)
-
-    for entry_va, node in graph.nodes.items():
-        for callee in node.internal_callee_vas:
-            if int(callee) in graph.nodes:
-                _add_undirected_edge(adj, int(entry_va), int(callee), "call")
-
-    direct_data = _collect_direct_data_edges(conn, graph)
-    for a, nbs in direct_data.items():
-        for b in nbs:
-            _add_undirected_edge(adj, int(a), int(b), "data")
-
-    global_to_funcs, func_to_globals = _collect_global_ref_map(conn, graph)
-    for _gva, funcs in global_to_funcs.items():
-        nodes = sorted(funcs)
-        if len(nodes) <= 1:
-            continue
-        if len(nodes) > 24:
-            nodes = nodes[:24]
-        for i in range(len(nodes)):
-            for j in range(i + 1, len(nodes)):
-                _add_undirected_edge(adj, nodes[i], nodes[j], "global")
-
-    string_map: Dict[str, List[int]] = defaultdict(list)
-    for entry_va, node in graph.nodes.items():
-        for s in node.string_refs:
-            key = str(s or "").strip().lower()
-            if key:
-                string_map[key].append(int(entry_va))
-
-    for _s, funcs in string_map.items():
-        uniq = sorted(set(funcs))
-        if len(uniq) <= 1:
-            continue
-        if len(uniq) > 20:
-            uniq = uniq[:20]
-        for i in range(len(uniq)):
-            for j in range(i + 1, len(uniq)):
-                _add_undirected_edge(adj, uniq[i], uniq[j], "string")
-
-    for a, nbs in include_indirect_edges.items():
-        for b in nbs:
-            _add_undirected_edge(adj, int(a), int(b), "indirect")
-
-    stats = {
-        "call_nodes": len(graph.nodes),
-        "direct_data_edge_sources": len(direct_data),
-        "global_clusters": len(global_to_funcs),
-        "string_clusters": len(string_map),
-    }
-    return adj, func_to_globals, stats
-
-
-def _edge_cost(kinds: Set[str], weights: Dict[str, float]) -> float:
-    vals: List[float] = []
-    for k in kinds:
-        vals.append(float(weights.get(k, 1.0)))
-    if not vals:
-        return 1.0
-    return float(min(vals))
-
-
-def _mixed_neighborhood(
-    adj: Dict[int, Dict[int, Set[str]]],
-    start_va: int,
-    *,
-    radius: float,
-    weights: Dict[str, float],
-) -> Tuple[Set[int], Dict[int, float]]:
-    start = int(start_va)
-    dist: Dict[int, float] = {start: 0.0}
-    pq: List[Tuple[float, int]] = [(0.0, start)]
-
-    while pq:
-        cur_d, va = heapq.heappop(pq)
-        if cur_d > dist.get(va, float("inf")):
-            continue
-        if cur_d > float(radius):
-            continue
-        for nb, kinds in adj.get(va, {}).items():
-            step = _edge_cost(kinds, weights)
-            nd = cur_d + step
-            if nd > float(radius):
-                continue
-            if nd + 1e-9 < dist.get(nb, float("inf")):
-                dist[int(nb)] = float(nd)
-                heapq.heappush(pq, (float(nd), int(nb)))
-
-    return set(dist.keys()), dist
-
-
-def _extract_tokens(text: str) -> Set[str]:
-    toks = {m.group(0).lower() for m in TOKEN_RE.finditer(str(text or ""))}
-    return {t for t in toks if len(t) >= 3}
-
-
-def _node_name_tokens(node: UnifiedFunctionNode) -> Set[str]:
-    tokens: Set[str] = set()
-    for n in node.names:
-        tokens.update(_extract_tokens(n))
-    return tokens
-
-
-def _pick_manual_goals(
-    graph: UnifiedGraph,
-    adjacency: Dict[int, Dict[int, Set[str]]],
-    *,
-    goal_vas: Sequence[str],
-    goal_keywords: Sequence[str],
-    goal_structs: Sequence[str],
-    goal_limit: int,
-) -> List[GoalItem]:
-    selected: Dict[int, GoalItem] = {}
-
-    # 地址直指
-    for raw in goal_vas:
-        token = str(raw or "").strip()
-        if not token:
-            continue
-        try:
-            va = int(parse_va(token))
-        except Exception:
-            continue
-        if va not in graph.nodes:
-            continue
-        node = graph.nodes[va]
-        item = GoalItem(
-            entry_va=int(va),
-            source="manual_va",
-            xref_count=len(adjacency.get(int(va), {})),
-            richness=_semantic_richness(node, goal_structs),
-            manual_score=100,
-        )
-        selected[int(va)] = item
-
-    # 关键词 / 结构体文本匹配
-    tokens = [str(x or "").strip().lower() for x in [*goal_keywords, *goal_structs] if str(x or "").strip()]
-    if tokens:
-        for va, node in graph.nodes.items():
-            blob = _node_text_blob(node).lower()
-            score = 0
-            hit = False
-            for t in tokens:
-                if t and t in blob:
-                    hit = True
-                    score += 10 if t in [s.lower() for s in goal_structs] else 6
-            if not hit:
-                continue
-            old = selected.get(int(va))
-            xref_count = len(adjacency.get(int(va), {}))
-            richness = _semantic_richness(node, goal_structs)
-            item = GoalItem(
-                entry_va=int(va),
-                source="manual_text",
-                xref_count=int(xref_count),
-                richness=int(richness),
-                manual_score=int(score),
-            )
-            if old is None:
-                selected[int(va)] = item
-            else:
-                if (item.manual_score, item.xref_count, item.richness) > (old.manual_score, old.xref_count, old.richness):
-                    selected[int(va)] = item
-
-    out = sorted(
-        selected.values(),
-        key=lambda x: (int(x.manual_score), int(x.xref_count), int(x.richness), -int(x.entry_va)),
-        reverse=True,
-    )
-    return out[: max(1, int(goal_limit))]
-
-
-def _pick_auto_goals(
-    graph: UnifiedGraph,
-    adjacency: Dict[int, Dict[int, Set[str]]],
-    *,
-    goal_structs: Sequence[str],
-    auto_limit: int,
-    goal_limit: int,
-) -> List[GoalItem]:
-    items: List[GoalItem] = []
-    for va, node in graph.nodes.items():
-        xref_count = len(adjacency.get(int(va), {}))
-        richness = _semantic_richness(node, goal_structs)
-        items.append(
-            GoalItem(
-                entry_va=int(va),
-                source="auto",
-                xref_count=int(xref_count),
-                richness=int(richness),
-                manual_score=0,
-            )
-        )
-
-    candidates = sorted(items, key=lambda x: (int(x.xref_count), int(x.richness), -int(x.entry_va)), reverse=True)
-    candidates = candidates[: max(1, int(auto_limit))]
-    return candidates[: max(1, int(goal_limit))]
 
 
 def _best_paths_within(paths: Sequence[Dict[str, Any]], allowed_nodes: Set[int]) -> List[Dict[str, Any]]:
@@ -1123,588 +482,6 @@ def _compute_wlca_roots(
     }
 
 
-def _extract_name_from_signature(signature: str) -> str:
-    sig = str(signature or "").strip()
-    if not sig:
-        return ""
-    before = sig.split("(", 1)[0].strip()
-    if not before:
-        return ""
-    toks = before.split()
-    if not toks:
-        return ""
-    return toks[-1].strip("*&")
-
-
-def _load_backup_profile(
-    conn: sqlite3.Connection,
-    graph: UnifiedGraph,
-    analysis_info: Dict[int, dict],
-    entry_va: int,
-) -> Dict[str, Any]:
-    va = int(entry_va)
-    node = graph.nodes.get(va)
-    if not node:
-        return {"entry_va": f"0x{va:08X}", "exists": False}
-
-    ida_names = sorted(node.names_by_tool.get("ida", set())) if node.names_by_tool else []
-    default_name = ida_names[0] if ida_names else (sorted(node.names)[0] if node.names else f"sub_{va:08X}")
-
-    chosen_info: Optional[dict] = None
-    chosen_fid: Optional[int] = None
-    ida_fids = [fid for fid in node.function_ids if str(graph.func_tool.get(int(fid), "")).lower() == "ida"]
-    if ida_fids:
-        for fid in ida_fids:
-            info = analysis_info.get(int(fid))
-            if info:
-                chosen_info = info
-                chosen_fid = int(fid)
-                break
-    if chosen_info is None:
-        for fid in sorted(node.function_ids):
-            info = analysis_info.get(int(fid))
-            if info:
-                chosen_info = info
-                chosen_fid = int(fid)
-                break
-
-    profile = {
-        "entry_va": f"0x{va:08X}",
-        "name": default_name,
-        "function_id": int(chosen_fid) if chosen_fid is not None else None,
-        "analysis_state": str((chosen_info or {}).get("analysis_state") or "PENDING"),
-        "summary_signature": str((chosen_info or {}).get("summary_signature") or ""),
-        "semantic_summary": str((chosen_info or {}).get("semantic_summary") or ""),
-        "structured_analysis": str((chosen_info or {}).get("structured_analysis") or ""),
-        "confidence_score": int((chosen_info or {}).get("confidence_score") or 0),
-        "annotation_status": int((chosen_info or {}).get("annotation_status") or 0),
-    }
-
-    # 备份完整行，方便后续真实回填时做回滚。
-    if chosen_fid is not None:
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                """
-                SELECT function_id, analysis_state, confidence_score, summary_signature,
-                       semantic_summary, phase1_pending, phase2_pending,
-                       lvar_optimized, annotation_status, structured_analysis
-                FROM analysis_status
-                WHERE function_id = ?;
-                """,
-                (int(chosen_fid),),
-            )
-            row = cur.fetchone()
-            if row:
-                profile["analysis_status_row"] = {
-                    "function_id": int(row[0]),
-                    "analysis_state": row[1],
-                    "confidence_score": int(row[2] or 0),
-                    "summary_signature": row[3] or "",
-                    "semantic_summary": row[4] or "",
-                    "phase1_pending": int(row[5] or 0),
-                    "phase2_pending": int(row[6] or 0),
-                    "lvar_optimized": int(row[7] or 0),
-                    "annotation_status": int(row[8] or 0),
-                    "structured_analysis": row[9] or "",
-                }
-        except Exception:
-            pass
-
-    return profile
-
-
-def _call_llm_with_trace(
-    *,
-    prompt: str,
-    llm_settings: Any,
-    max_attempts: int,
-    llm_trace_file: Optional[Path],
-    trace_label: str,
-    trace_meta: Optional[Dict[str, Any]] = None,
-    log_raw_llm: bool = False,
-) -> Any:
-    conversation, request_kwargs = build_chat_request(prompt, llm_settings)
-    prompt_text = str(prompt or "")
-    prompt_sha = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
-    meta = dict(trace_meta or {})
-
-    if llm_trace_file is not None:
-        event: Dict[str, Any] = {
-            "ts": _now_iso(),
-            "stage": str(trace_label),
-            "event": "request",
-            "meta": meta,
-            "model": str(getattr(llm_settings, "model", "")),
-            "temperature": getattr(llm_settings, "temperature", None),
-            "max_tokens": getattr(llm_settings, "max_tokens", None),
-            "max_attempts": int(max(1, int(max_attempts or 1))),
-            "prompt_chars": len(prompt_text),
-            "prompt_sha256": prompt_sha,
-        }
-        if log_raw_llm:
-            event["prompt"] = prompt_text
-            event["conversation"] = conversation
-            event["request_kwargs"] = request_kwargs
-        else:
-            event["request_keys"] = sorted(request_kwargs.keys())
-        _append_jsonl(llm_trace_file, event)
-
-    raw_holder: Dict[str, str] = {"raw": ""}
-
-    def _on_raw_text(raw: str) -> None:
-        raw_holder["raw"] = str(raw or "")
-
-    result = call_llm_analyze_function(
-        conversation=conversation,
-        request_kwargs=request_kwargs,
-        api_settings=llm_settings.api_settings,
-        max_attempts=max(1, int(max_attempts or 1)),
-        on_raw_text=_on_raw_text if log_raw_llm else None,
-    )
-
-    if llm_trace_file is not None:
-        response_event: Dict[str, Any] = {
-            "ts": _now_iso(),
-            "stage": str(trace_label),
-            "event": "response",
-            "meta": meta,
-            "ok": isinstance(result, dict) and bool(result),
-            "result_type": type(result).__name__,
-        }
-        if log_raw_llm:
-            response_event["raw_text"] = raw_holder.get("raw", "")
-            response_event["result"] = result
-        else:
-            if isinstance(result, dict):
-                response_event["result_keys"] = sorted(result.keys())
-            else:
-                response_event["result_preview"] = str(result)[:240]
-        _append_jsonl(llm_trace_file, response_event)
-
-    return result
-
-
-def _analyze_node_semantics_with_llm(
-    *,
-    conn: sqlite3.Connection,
-    graph: UnifiedGraph,
-    analysis_info: Dict[int, dict],
-    entry_va: int,
-    llm_settings: Any,
-    max_attempts: int,
-    dry_run: bool,
-    llm_trace_file: Optional[Path] = None,
-    log_raw_llm: bool = False,
-) -> Dict[str, Any]:
-    va = int(entry_va)
-    node = graph.nodes.get(va)
-    if not node:
-        return {"entry_va": f"0x{va:08X}", "status": "missing_node"}
-
-    if dry_run:
-        return {"entry_va": f"0x{va:08X}", "status": "dry_run"}
-
-    prompt = build_unified_prompt(
-        conn=conn,
-        graph=graph,
-        node=node,
-        analysis_info=analysis_info,
-        max_disasm_lines=180,
-        max_pseudo_chars_per_tool=3200,
-        max_strings=20,
-    )
-    result = _call_llm_with_trace(
-        prompt=prompt,
-        llm_settings=llm_settings,
-        max_attempts=max_attempts,
-        llm_trace_file=llm_trace_file,
-        trace_label="analyze_node",
-        trace_meta={"entry_va": f"0x{va:08X}"},
-        log_raw_llm=bool(log_raw_llm),
-    )
-    if not isinstance(result, dict) or not result:
-        return {"entry_va": f"0x{va:08X}", "status": "llm_failed", "raw": result}
-
-    signature = str(result.get("signature") or "").strip()
-    summary = str(result.get("summary") or "").strip()
-    confidence = 0.0
-    try:
-        confidence = float(result.get("confidence", 0.0) or 0.0)
-    except Exception:
-        confidence = 0.0
-
-    return {
-        "entry_va": f"0x{va:08X}",
-        "status": "ok",
-        "name": _extract_name_from_signature(signature),
-        "summary_signature": signature,
-        "semantic_summary": summary,
-        "structured_analysis": json.dumps(
-            {
-                "tags": result.get("tags") or [],
-                "notes": result.get("notes") or "",
-                "libfunction": result.get("libfunction", 0),
-            },
-            ensure_ascii=False,
-        ),
-        "confidence_score": int(max(0.0, min(1.0, confidence)) * 100.0),
-        "raw": result,
-    }
-
-
-def _llm_compare_profiles(
-    *,
-    old_profile: Dict[str, Any],
-    new_profile: Dict[str, Any],
-    llm_settings: Any,
-    max_attempts: int,
-    dry_run: bool,
-    llm_trace_file: Optional[Path] = None,
-    log_raw_llm: bool = False,
-) -> Dict[str, Any]:
-    if dry_run:
-        return {
-            "status": "dry_run",
-            "choose": "old",
-            "old_score": 0.0,
-            "new_score": 0.0,
-            "reason": "dry_run",
-        }
-
-    prompt = (
-        "你是二进制语义恢复裁决器。请比较同一函数的旧语义与新语义，选择更适合逆向分析的一方。\n"
-        "比较时必须综合全部字段：name, summary_signature, semantic_summary, structured_analysis, confidence_score。\n"
-        "只返回 JSON："
-        "{\"choose\":\"old|new\",\"old_score\":0.0,\"new_score\":0.0,\"reason\":\"...\"}\n\n"
-        f"[OLD]\n{json.dumps(old_profile, ensure_ascii=False, indent=2)}\n\n"
-        f"[NEW]\n{json.dumps(new_profile, ensure_ascii=False, indent=2)}"
-    )
-    result = _call_llm_with_trace(
-        prompt=prompt,
-        llm_settings=llm_settings,
-        max_attempts=max_attempts,
-        llm_trace_file=llm_trace_file,
-        trace_label="compare_profiles",
-        trace_meta={"entry_va": str(old_profile.get("entry_va") or "")},
-        log_raw_llm=bool(log_raw_llm),
-    )
-    if not isinstance(result, dict) or not result:
-        return {
-            "status": "llm_failed",
-            "choose": "old",
-            "old_score": 0.0,
-            "new_score": 0.0,
-            "reason": "llm_failed",
-            "raw": result,
-        }
-
-    choose = str(result.get("choose") or "old").strip().lower()
-    if choose not in {"old", "new"}:
-        choose = "old"
-
-    def _f(v: Any) -> float:
-        try:
-            return float(v)
-        except Exception:
-            return 0.0
-
-    return {
-        "status": "ok",
-        "choose": choose,
-        "old_score": _f(result.get("old_score", 0.0)),
-        "new_score": _f(result.get("new_score", 0.0)),
-        "reason": str(result.get("reason") or ""),
-        "raw": result,
-    }
-
-
-def _select_profile(
-    old_profile: Dict[str, Any],
-    new_profile: Dict[str, Any],
-    compare_result: Dict[str, Any],
-    *,
-    min_delta: float,
-) -> Dict[str, Any]:
-    choose = str(compare_result.get("choose") or "old").strip().lower()
-    old_score = float(compare_result.get("old_score", 0.0) or 0.0)
-    new_score = float(compare_result.get("new_score", 0.0) or 0.0)
-
-    selected = "old"
-    if choose == "new" and (new_score - old_score) >= float(min_delta):
-        selected = "new"
-
-    selected_profile = dict(new_profile if selected == "new" else old_profile)
-    return {
-        "selected": selected,
-        "selected_profile": selected_profile,
-        "old_score": old_score,
-        "new_score": new_score,
-        "delta": round(new_score - old_score, 6),
-        "threshold": float(min_delta),
-    }
-
-
-def _rank_nodes_for_compare(
-    graph: UnifiedGraph,
-    adjacency: Dict[int, Dict[int, Set[str]]],
-    nodes: Iterable[int],
-    goal_structs: Sequence[str],
-    limit: int,
-) -> List[int]:
-    scored: List[Tuple[int, int, int]] = []
-    for va in set(int(x) for x in nodes if int(x) in graph.nodes):
-        node = graph.nodes[int(va)]
-        xref = len(adjacency.get(int(va), {}))
-        rich = _semantic_richness(node, goal_structs)
-        scored.append((int(xref), int(rich), int(va)))
-    scored.sort(reverse=True)
-    return [int(x[2]) for x in scored[: max(1, int(limit or 1))]]
-
-
-def _collect_path_nodes(paths: Sequence[Dict[str, Any]]) -> Set[int]:
-    out: Set[int] = set()
-    for p in paths:
-        for s in p.get("path_vas", []) or []:
-            try:
-                out.add(int(parse_va(str(s))))
-            except Exception:
-                continue
-    return out
-
-
-def _profile_to_analysis_state(profile: Dict[str, Any]) -> str:
-    structured = profile.get("structured_analysis")
-    parsed_struct: Dict[str, Any] = {}
-    if isinstance(structured, dict):
-        parsed_struct = structured
-    else:
-        raw = str(structured or "").strip()
-        if raw:
-            try:
-                obj = json.loads(raw)
-                if isinstance(obj, dict):
-                    parsed_struct = obj
-            except Exception:
-                parsed_struct = {}
-
-    raw_lib = parsed_struct.get("libfunction", 0)
-    try:
-        is_lib = int(raw_lib) != 0
-    except Exception:
-        is_lib = bool(raw_lib)
-
-    if is_lib:
-        return "LOCKED"
-
-    name = str(profile.get("name") or "").strip()
-    signature = str(profile.get("summary_signature") or "").strip()
-    if name and signature:
-        return "ANALYZED"
-    return "PENDING"
-
-
-def _update_analysis_status_with_fallback(conn: sqlite3.Connection, function_id: int, profile: Dict[str, Any]) -> str:
-    fid = int(function_id)
-    state = _profile_to_analysis_state(profile)
-    try:
-        confidence = int(profile.get("confidence_score", 0) or 0)
-    except Exception:
-        confidence = 0
-    confidence = max(0, min(100, int(confidence)))
-    signature = str(profile.get("summary_signature") or "")
-    summary = str(profile.get("semantic_summary") or "")
-    structured = str(profile.get("structured_analysis") or "")
-
-    attempts: List[Tuple[str, str, Tuple[Any, ...]]] = [
-        (
-            "full",
-            """
-            UPDATE analysis_status
-            SET analysis_state = ?,
-                confidence_score = ?,
-                summary_signature = ?,
-                semantic_summary = ?,
-                structured_analysis = ?,
-                phase1_pending = 0,
-                phase2_pending = 1,
-                lvar_optimized = 0,
-                annotation_status = 0
-            WHERE function_id = ?;
-            """,
-            (state, confidence, signature, summary, structured, fid),
-        ),
-        (
-            "no_phase_flags",
-            """
-            UPDATE analysis_status
-            SET analysis_state = ?,
-                confidence_score = ?,
-                summary_signature = ?,
-                semantic_summary = ?,
-                structured_analysis = ?,
-                annotation_status = 0
-            WHERE function_id = ?;
-            """,
-            (state, confidence, signature, summary, structured, fid),
-        ),
-        (
-            "basic",
-            """
-            UPDATE analysis_status
-            SET analysis_state = ?,
-                confidence_score = ?,
-                summary_signature = ?,
-                semantic_summary = ?
-            WHERE function_id = ?;
-            """,
-            (state, confidence, signature, summary, fid),
-        ),
-    ]
-
-    last_error: Optional[Exception] = None
-    for schema_mode, sql, params in attempts:
-        try:
-            conn.execute(sql, params)
-            return schema_mode
-        except sqlite3.OperationalError as exc:
-            last_error = exc
-            continue
-
-    if last_error:
-        raise last_error
-    raise RuntimeError(f"update analysis_status failed for function_id={fid}")
-
-
-def _apply_selected_profiles_to_db(
-    conn: sqlite3.Connection,
-    compare_items: Sequence[Dict[str, Any]],
-    *,
-    max_rows: int,
-    min_confidence: int,
-) -> Dict[str, Any]:
-    planned: List[Dict[str, Any]] = []
-    skipped: List[Dict[str, Any]] = []
-
-    for item in compare_items:
-        entry_va = str(item.get("entry_va") or "")
-        old_profile = item.get("old_profile") if isinstance(item.get("old_profile"), dict) else {}
-        new_profile = item.get("new_profile") if isinstance(item.get("new_profile"), dict) else {}
-        selection = item.get("selection") if isinstance(item.get("selection"), dict) else {}
-
-        selected = str(selection.get("selected") or "old").strip().lower()
-        if selected != "new":
-            skipped.append({"entry_va": entry_va, "reason": "selected_old"})
-            continue
-
-        if str(new_profile.get("status") or "").strip().lower() != "ok":
-            skipped.append({"entry_va": entry_va, "reason": "new_profile_not_ok"})
-            continue
-
-        selected_profile = selection.get("selected_profile")
-        if not isinstance(selected_profile, dict):
-            selected_profile = dict(new_profile)
-
-        fid_raw = selected_profile.get("function_id")
-        if fid_raw is None:
-            fid_raw = old_profile.get("function_id")
-        try:
-            fid = int(fid_raw)
-        except Exception:
-            skipped.append({"entry_va": entry_va, "reason": "missing_function_id"})
-            continue
-
-        selected_profile = dict(selected_profile)
-        selected_profile["function_id"] = int(fid)
-        try:
-            confidence_score = int(selected_profile.get("confidence_score", 0) or 0)
-        except Exception:
-            confidence_score = 0
-        confidence_score = max(0, min(100, int(confidence_score)))
-        if confidence_score < int(min_confidence):
-            skipped.append(
-                {
-                    "entry_va": entry_va,
-                    "reason": f"confidence_below_threshold({confidence_score}<{int(min_confidence)})",
-                }
-            )
-            continue
-
-        planned.append(
-            {
-                "entry_va": entry_va,
-                "function_id": int(fid),
-                "profile": selected_profile,
-            }
-        )
-
-    max_rows = max(0, int(max_rows or 0))
-    if max_rows > 0 and len(planned) > max_rows:
-        for item in planned[max_rows:]:
-            skipped.append(
-                {
-                    "entry_va": str(item.get("entry_va") or ""),
-                    "reason": f"apply_max_rows_limit({max_rows})",
-                }
-            )
-        planned = planned[:max_rows]
-
-    if not planned:
-        return {
-            "enabled": True,
-            "status": "skipped",
-            "reason": "no_applicable_rows",
-            "planned_count": 0,
-            "applied_count": 0,
-            "skipped_count": len(skipped),
-            "applied_items": [],
-            "skipped_items": skipped,
-        }
-
-    applied: List[Dict[str, Any]] = []
-    try:
-        conn.execute("BEGIN")
-        for item in planned:
-            entry_va = str(item.get("entry_va") or "")
-            fid = int(item["function_id"])
-            profile = item["profile"]
-            schema_mode = _update_analysis_status_with_fallback(conn, fid, profile)
-            applied.append(
-                {
-                    "entry_va": entry_va,
-                    "function_id": int(fid),
-                    "schema_mode": schema_mode,
-                    "analysis_state": _profile_to_analysis_state(profile),
-                    "confidence_score": int(max(0, min(100, int(profile.get("confidence_score", 0) or 0)))),
-                }
-            )
-        conn.commit()
-    except Exception as exc:
-        conn.rollback()
-        return {
-            "enabled": True,
-            "status": "failed",
-            "reason": "db_write_failed",
-            "error": str(exc),
-            "planned_count": len(planned),
-            "applied_count": 0,
-            "skipped_count": len(skipped),
-            "applied_items": [],
-            "skipped_items": skipped,
-        }
-
-    return {
-        "enabled": True,
-        "status": "applied",
-        "reason": "ok",
-        "planned_count": len(planned),
-        "applied_count": len(applied),
-        "skipped_count": len(skipped),
-        "applied_items": applied,
-        "skipped_items": skipped,
-    }
-
-
 def main() -> int:
     args = _parse_args()
 
@@ -1735,6 +512,11 @@ def main() -> int:
     layout.logs_dir.mkdir(parents=True, exist_ok=True)
     layout.checkpoints_dir.mkdir(parents=True, exist_ok=True)
     layout.reports_dir.mkdir(parents=True, exist_ok=True)
+
+    blackboard_file = layout.artifacts_dir / "blackboard.json"
+    board = SemanticBlackboard()
+    if blackboard_file.exists():
+        board.load(blackboard_file)
 
     resume_signature = _build_resume_signature(args, db_path)
     state = _load_checkpoint(layout.checkpoint_file) if (bool(args.resume) or layout.checkpoint_file.exists()) else {}
@@ -1899,6 +681,7 @@ def main() -> int:
                 goal_keywords=list(args.goal_keyword or []),
                 goal_structs=list(args.goal_struct or []),
                 goal_limit=max(1, int(args.goal_limit or 1)),
+                parse_va_fn=parse_va,
             )
 
             if manual_goals:
@@ -1953,6 +736,8 @@ def main() -> int:
                 start_va=goal_va,
                 radius=float(args.lambda_radius),
                 weights=weights,
+                max_nodes=180,
+                adaptive_shrink=True,
             )
 
             gen1 = _run_deep_generation(
@@ -2005,6 +790,8 @@ def main() -> int:
                     start_va=int(r),
                     radius=float(args.lambda_radius),
                     weights=weights,
+                    max_nodes=180,
+                    adaptive_shrink=True,
                 )
                 gen2_nodes_union.update(sub_nodes)
 
@@ -2021,8 +808,8 @@ def main() -> int:
                 log_raw_llm=bool(args.log_raw_llm),
             )
 
-            gen1_path_nodes = _collect_path_nodes(gen1_paths)
-            gen2_path_nodes = _collect_path_nodes(list(gen2.get("paths", []) or []))
+            gen1_path_nodes = _collect_path_nodes(gen1_paths, parse_va)
+            gen2_path_nodes = _collect_path_nodes(list(gen2.get("paths", []) or []), parse_va)
             comparison_candidate_nodes.update(gen1_path_nodes)
             comparison_candidate_nodes.update(gen2_path_nodes)
 
@@ -2052,6 +839,24 @@ def main() -> int:
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.json", generation_item)
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.deepest.json", deepest_item)
 
+            gen1_llm = gen1.get("llm") or {}
+            if isinstance(gen1_llm, dict):
+                for step in gen1_llm.get("steps", []) or []:
+                    if isinstance(step, dict) and step.get("status") == "ok":
+                        populate_from_step_result(
+                            board, step,
+                            source="gen1", generation=1, goal_index=int(idx),
+                        )
+            gen2_llm = gen2.get("llm") or {}
+            if isinstance(gen2_llm, dict):
+                for step in gen2_llm.get("steps", []) or []:
+                    if isinstance(step, dict) and step.get("status") == "ok":
+                        populate_from_step_result(
+                            board, step,
+                            source="gen2", generation=2, goal_index=int(idx),
+                        )
+            board.save(blackboard_file)
+
             state["generation_results"] = generation_results
             state["gen1_deepest_items"] = gen1_deepest_items
             state["comparison_candidate_nodes"] = sorted(comparison_candidate_nodes)
@@ -2063,14 +868,15 @@ def main() -> int:
                 entry_va=f"0x{goal_va:08X}",
                 gen1_paths=len(gen1_paths),
                 gen2_paths=len(list(gen2.get("paths", []) or [])),
+                blackboard_entries=board.total_entries,
             )
 
         if not comparison_candidate_nodes:
             for g in generation_results:
                 g1_paths = (((g.get("gen1") or {}).get("result") or {}).get("paths", []) or [])
                 g2_paths = (((g.get("gen2") or {}).get("result") or {}).get("paths", []) or [])
-                comparison_candidate_nodes.update(_collect_path_nodes(g1_paths))
-                comparison_candidate_nodes.update(_collect_path_nodes(g2_paths))
+                comparison_candidate_nodes.update(_collect_path_nodes(g1_paths, parse_va))
+                comparison_candidate_nodes.update(_collect_path_nodes(g2_paths, parse_va))
             state["comparison_candidate_nodes"] = sorted(comparison_candidate_nodes)
 
         cached_compare_nodes = list(state.get("compare_nodes", []) or [])
@@ -2211,7 +1017,13 @@ def main() -> int:
                 "selection": select_result,
             }
             compare_items.append(compare_item)
-            selected_profiles.append(select_result.get("selected_profile", old_profile))
+            selected_profile = select_result.get("selected_profile", old_profile)
+            selected_profiles.append(selected_profile)
+            populate_from_profile(
+                board, int(va), selected_profile,
+                source=str(select_result.get("selected") or "gen1"),
+                generation=1, goal_index=0,
+            )
             _write_json_file(layout.artifacts_dir / f"compare_0x{int(va):08X}.json", compare_item)
 
             state["backup_profiles"] = backup_profiles
@@ -2347,6 +1159,7 @@ def main() -> int:
             "function_compare": compare_items,
             "selected_profiles": selected_profiles,
             "db_apply": db_apply,
+            "blackboard": board.summary_stats(),
             "next_option": {
                 "question": "是否要进行间接调用边的增量分析？",
                 "suggested_command": (
@@ -2378,11 +1191,19 @@ def main() -> int:
             },
         )
 
+        board.save(blackboard_file)
+
         state["report_file"] = str(layout.out_file)
         state["backup_file"] = str(layout.backup_file)
         state["gen1_deepest_file"] = str(layout.gen1_deepest_file)
+        state["blackboard_file"] = str(blackboard_file)
         _checkpoint_stage(layout, state, "completed")
-        _log_event(layout, "run_completed", report=str(layout.out_file))
+        _log_event(
+            layout, "run_completed",
+            report=str(layout.out_file),
+            blackboard_entries=board.total_entries,
+            blackboard_conflicts=board.conflict_count,
+        )
 
         print(f"[GoalDeep] run_id={layout.run_id}")
         print(f"[GoalDeep] run_dir={layout.run_dir}")
@@ -2406,6 +1227,14 @@ def main() -> int:
             f"diffs={int(phase7_5_report.get('profile_diff_count', 0) or 0)} "
             f"report={phase7_5_report_file}"
         )
+
+        bb_stats = board.summary_stats()
+        print(
+            f"[GoalDeep] blackboard entries={bb_stats['total_entries']} "
+            f"addresses={bb_stats['total_addresses']} "
+            f"conflicts={bb_stats['conflict_count']}"
+        )
+        print(f"[GoalDeep] blackboard_file={blackboard_file}")
 
         if indirect_status.degraded and not indirect_status.incremental_applied:
             print("[GoalDeep] 间接调用边已自动降级。可加 --incremental-indirect 做增量分析。")

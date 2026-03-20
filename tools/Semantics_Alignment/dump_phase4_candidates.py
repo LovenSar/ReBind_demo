@@ -23,7 +23,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from kp.kp_types import SUBFUNC_NAME_PATTERN, _count_effective_pseudocode_lines
+from kp.kp_types import SUBFUNC_NAME_PATTERN, count_effective_pseudocode_lines
 
 
 def _pick_single_binary_id(conn: sqlite3.Connection, user_binary_id: Optional[int]) -> int:
@@ -151,7 +151,7 @@ def main() -> int:
                     excluded_export += 1
                     continue
 
-            eff_lines = _count_effective_pseudocode_lines(pseudo_body)
+            eff_lines = count_effective_pseudocode_lines(pseudo_body)
             if min_lines and eff_lines < min_lines:
                 excluded_short += 1
                 continue

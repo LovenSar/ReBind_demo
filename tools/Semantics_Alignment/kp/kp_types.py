@@ -61,9 +61,8 @@ def find_generic_lvar_names(code: str) -> Set[str]:
     return {m.group(0) for m in GENERIC_LVAR_PATTERN.finditer(code)}
 
 
-# Backward-compatible aliases (keep old underscore names used in knowledge_propagation)
-_count_effective_pseudocode_lines = count_effective_pseudocode_lines
-_find_generic_lvar_names = find_generic_lvar_names
+# 向后兼容别名已移至 kp/_compat.py，此处不再重复定义。
+# 请使用正式名称：count_effective_pseudocode_lines / find_generic_lvar_names
 
 
 # =========================

@@ -19,25 +19,11 @@ from tqdm import tqdm
 from dynamic_batching import yield_dynamic_batch
 from kp.kp_ida import wait_for_ida_server
 from kp.kp_llm import build_chat_request, call_llm_analyze_function, estimate_token_usage
-from kp.kp_sync import _sync_with_ida_and_update_db
+from kp.kp_sync import _sync_with_ida_and_update_db, extract_func_name as _extract_name_from_signature
 from kp.kp_types import DEFAULT_FUNC_NAME_PATTERN, UnifiedGraph, ValidationTask
 
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_name_from_signature(signature: str) -> str:
-    sig = (signature or "").strip()
-    if not sig:
-        return ""
-    before_paren = sig.split("(", 1)[0].strip()
-    if not before_paren:
-        return ""
-    tokens = before_paren.split()
-    if not tokens:
-        return ""
-    name = tokens[-1].strip("*&")
-    return name or ""
 
 
 def _get_phase2_pending_entry_vas(conn: sqlite3.Connection, graph: UnifiedGraph) -> List[int]:

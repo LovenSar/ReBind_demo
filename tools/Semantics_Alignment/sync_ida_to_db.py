@@ -36,7 +36,7 @@ def get_ida_functions(ida_url: str, timeout: int = 5) -> Dict[int, str]:
         with request.urlopen(req, timeout=timeout) as response:
             result = json.loads(response.read().decode('utf-8'))
             
-            if result.get('status') != 'success':
+            if result.get('status') not in ('ok', 'success'):
                 raise RuntimeError(f"IDA 返回错误: {result.get('message', 'unknown')}")
             
             functions = result.get('functions', {})
@@ -136,7 +136,7 @@ def wait_for_ida_server(ida_url: str, max_wait: int = 30) -> bool:
             )
             with request.urlopen(req, timeout=2) as response:
                 result = json.loads(response.read().decode('utf-8'))
-                if result.get('status') == 'success':
+                if result.get('status') in ('ok', 'success'):
                     print(f"[SyncIDAToDb] IDA 服务已就绪")
                     return True
         except Exception:

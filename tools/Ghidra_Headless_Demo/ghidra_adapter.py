@@ -128,30 +128,38 @@ class GhidraAdapter:
     
     def prepare_working_directory(self, input_file: str) -> Path:
         """准备工作目录
-        
+
+        输出目录放在样本专属的 ``{sanitized}_rebind_demo/`` 内::
+
+            <sample_parent>/
+              <sanitized>_rebind_demo/     ← 样本工作目录
+                <sanitized>_ghidemo/       ← 本方法返回此目录
+
         Args:
             input_file: 输入文件路径
-            
+
         Returns:
-            工作目录路径
+            Ghidra 输出目录路径（位于 _rebind_demo 内）
         """
         input_path = Path(input_file).resolve()
-        
+
         if not input_path.exists():
             raise FileNotFoundError(f"输入文件不存在: {input_file}")
-            
+
         if input_path.is_dir():
             raise ValueError("不支持目录输入，请提供单个文件")
-            
-        # 确定输出目录
+
         output_config = self.config.get('output', {})
         dir_suffix = output_config.get('dir_suffix', '_ghidemo')
-        # 使用文件名（包含扩展名，但去除点号）作为基础名称
         base_name = input_path.name.replace('.', '_')
-        output_dir = input_path.parent / f"{base_name}{dir_suffix}"
-        
+
+        # 先创建样本专属工作目录 (_rebind_demo)，再在其中创建 Ghidra 输出子目录
+        rebind_dir = input_path.parent / f"{base_name}_rebind_demo"
+        rebind_dir.mkdir(exist_ok=True)
+        output_dir = rebind_dir / f"{base_name}{dir_suffix}"
+
         self.logger.info(f"准备工作目录: {output_dir}")
-        
+
         # 创建目录
         output_dir.mkdir(exist_ok=True)
 
@@ -243,28 +251,22 @@ class GhidraAdapter:
         """
         self.logger.info("处理输出文件...")
         self.logger.debug(f"清理后的文件名: {sanitized_name}")
-        self.logger.debug(f"当前工作目录: {Path.cwd()}")
+        self.logger.debug(f"输出目录: {output_dir}")
 
         scripts_config = self.config.get("scripts", {})
         if scripts_config.get("legacy_cwd_output_move", False):
+            # legacy 模式：从 output_dir 内寻找子目录（已用 cwd=output_dir 运行 Ghidra）
             output_dirs_to_move = [
                 f"{sanitized_name}_disassembly",
                 f"{sanitized_name}_binaryinfo",
                 f"{sanitized_name}_pseudocode",
             ]
-            for src_dir in output_dirs_to_move:
-                src_path = Path(src_dir)
-                self.logger.debug(f"检查目录: {src_path} (绝对路径: {src_path.absolute()})")
+            for src_name in output_dirs_to_move:
+                src_path = output_dir / src_name
+                self.logger.debug(f"检查目录: {src_path}")
                 if src_path.exists():
-                    dst_path = output_dir / src_path.name
-                    self.logger.debug(f"目标路径: {dst_path}")
-                    if src_path.resolve() == dst_path.resolve():
-                        continue
-                    if dst_path.exists():
-                        self.logger.debug(f"目标目录已存在，删除: {dst_path}")
-                        shutil.rmtree(dst_path)
-                    shutil.move(str(src_path), str(dst_path))
-                    self.logger.debug(f"移动目录: {src_dir} -> {dst_path}")
+                    self.logger.debug(f"目录已在目标位置，无需移动: {src_path}")
+                    continue
         
         # 清理临时文件
         output_config = self.config.get('output', {})
@@ -296,28 +298,25 @@ class GhidraAdapter:
         # 准备工作目录
         output_dir = self.prepare_working_directory(input_file)
         
-        # 切换到工作目录执行Ghidra命令
-        original_dir = Path.cwd()
-        os.chdir(output_dir)
-        
         try:
             # 使用工作目录中的文件路径
             input_filename = Path(input_file).name
             input_in_workdir = output_dir / input_filename
             
-            # 构建并执行命令
+            # 构建并执行命令（用 cwd= 代替 os.chdir，线程安全）
             command = self.build_ghidra_command(str(input_in_workdir), output_dir)
             
             self.logger.info(f"执行Ghidra命令...")
             command_display = command if isinstance(command, str) else ' '.join(command)
             self.logger.debug(f"完整命令: {command_display}")
-            self.logger.debug(f"当前工作目录: {Path.cwd()}")
+            self.logger.debug(f"工作目录: {output_dir}")
             
             result = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
-                errors='replace'
+                errors='replace',
+                cwd=str(output_dir),
             )
             
             # 输出所有脚本输出（DEBUG级别）
@@ -344,7 +343,6 @@ class GhidraAdapter:
             self.logger.error(f"执行Ghidra命令时出错: {e}")
             raise
         finally:
-            os.chdir(original_dir)
             tw = self._ghidra_temp_workspace
             if tw:
                 shutil.rmtree(tw, ignore_errors=True)
