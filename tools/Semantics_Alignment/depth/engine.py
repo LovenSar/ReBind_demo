@@ -123,6 +123,19 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--cond-window", type=int, default=10, help="守卫窗口")
     ap.add_argument("--max-guards-per-site", type=int, default=3, help="每调用点最多守卫")
 
+    ap.add_argument(
+        "--max-generations", type=int, default=0,
+        help="最大子树代数，0=根据目标复杂度自动决定（默认 0）",
+    )
+    ap.add_argument(
+        "--gen-stop-new-ratio", type=float, default=0.05,
+        help="当新一代发现的新节点占比低于此阈值时停止扩展（默认 0.05 即 5%%）",
+    )
+    ap.add_argument(
+        "--gen-token-budget", type=int, default=0,
+        help="所有代际累计 Token 预算上限，0=不限制（默认 0）",
+    )
+
     ap.add_argument("--gen2-ancestor-depth", type=int, default=5, help="二代向上追溯深度")
     ap.add_argument("--gen2-min-wlca", type=float, default=0.28, help="W-LCA 最低阈值")
     ap.add_argument("--gen2-frontier-k", type=int, default=3, help="W-LCA 失败时多根前沿数量")
@@ -338,6 +351,67 @@ def _run_deep_generation(
         "paths": paths,
         "llm": llm_poll,
     }
+
+
+def _estimate_max_generations(
+    graph: UnifiedGraph,
+    mixed_adj: Dict[int, Dict[int, Set[str]]],
+    goal_va: int,
+    user_max: int,
+) -> int:
+    """根据目标函数的图拓扑复杂度，自动推算合适的最大代数。
+
+    决策逻辑：
+    - 节点度 (call + data 邻居数) 越多 → 交叉引用越丰富 → 需要更多代
+    - 函数本身的 caller/callee 越多 → 越处于核心枢纽 → 需要更多代
+    - 但始终不超过 6 代（防止资源爆炸）
+    - user_max > 0 时作为硬上限
+    """
+    MAX_CAP = 6
+    MIN_GEN = 2
+
+    node = graph.nodes.get(int(goal_va))
+    if not node:
+        return min(MIN_GEN, MAX_CAP) if user_max <= 0 else min(MIN_GEN, user_max)
+
+    neighbors = len(mixed_adj.get(int(goal_va), {}))
+    callees = len(node.internal_callee_vas)
+    callers = len(node.caller_vas)
+    externals = len(node.external_callee_names)
+    strings = len(node.string_refs)
+
+    complexity = (
+        neighbors * 2
+        + callees * 3
+        + callers * 2
+        + externals * 1
+        + strings * 1
+    )
+
+    if complexity >= 120:
+        auto = 5
+    elif complexity >= 60:
+        auto = 4
+    elif complexity >= 25:
+        auto = 3
+    else:
+        auto = 2
+
+    result = min(auto, MAX_CAP)
+    if user_max > 0:
+        result = min(result, user_max)
+    return max(MIN_GEN, result)
+
+
+def _estimate_pseudo_tokens(graph: UnifiedGraph, node_set: Set[int]) -> int:
+    """估算一组节点的伪代码 Token 总量（按 4 字符 = 1 Token 粗估）。"""
+    total = 0
+    for va in node_set:
+        node = graph.nodes.get(int(va))
+        if node:
+            for code in node.pseudocodes.values():
+                total += len(code or "")
+    return total // 4
 
 
 def _pick_anchor_nodes(
@@ -721,6 +795,9 @@ def main() -> int:
             except Exception:
                 continue
 
+        gen_stop_new_ratio = float(args.gen_stop_new_ratio)
+        gen_token_budget = max(0, int(args.gen_token_budget))
+
         for idx, goal in enumerate(selected_goals, 1):
             if int(idx) in completed_goal_indices:
                 _log_event(layout, "goal_resume_skip", goal_index=int(idx), entry_va=f"0x{int(goal.entry_va):08X}")
@@ -731,6 +808,13 @@ def main() -> int:
             if not goal_node:
                 continue
 
+            max_gen = _estimate_max_generations(
+                graph, mixed_adj, goal_va,
+                user_max=int(args.max_generations),
+            )
+            print(f"[GoalDeep] goal#{idx} 0x{goal_va:08X} max_generations={max_gen}")
+
+            # ── Gen1: 主干子树（始终执行） ──────────────────────────
             gen1_nodes, gen1_dist = _mixed_neighborhood(
                 mixed_adj,
                 start_va=goal_va,
@@ -763,55 +847,152 @@ def main() -> int:
             }
             gen1_deepest_items.append(deepest_item)
 
-            anchors = _pick_anchor_nodes(
-                graph,
-                primary_goal=goal_va,
-                gen1_paths=gen1_paths,
-                neighborhood_nodes=gen1_nodes,
-                goal_structs=list(args.goal_struct or []),
-            )
-
-            wlca = _compute_wlca_roots(
-                graph,
-                anchors,
-                max_depth=max(1, int(args.gen2_ancestor_depth or 1)),
-                min_wlca=float(args.gen2_min_wlca),
-                frontier_k=max(1, int(args.gen2_frontier_k or 1)),
-                alpha=float(args.gen2_alpha),
-                beta=float(args.gen2_beta),
-                gamma=float(args.gen2_gamma),
-            )
-            gen2_roots = list(wlca.get("roots", []) or [])
-
-            gen2_nodes_union: Set[int] = set()
-            for r in gen2_roots:
-                sub_nodes, _sub_dist = _mixed_neighborhood(
-                    mixed_adj,
-                    start_va=int(r),
-                    radius=float(args.lambda_radius),
-                    weights=weights,
-                    max_nodes=180,
-                    adaptive_shrink=True,
-                )
-                gen2_nodes_union.update(sub_nodes)
-
-            gen2 = _run_deep_generation(
-                conn=conn,
-                graph=graph,
-                entries=[int(x) for x in gen2_roots],
-                args=args,
-                llm_settings=llm_settings,
-                llm_mode=str(args.llm_mode),
-                allowed_nodes=gen2_nodes_union if gen2_nodes_union else None,
-                label=f"goal#{idx}_gen2",
-                llm_poll_log_file=str(layout.llm_poll_log_file),
-                log_raw_llm=bool(args.log_raw_llm),
-            )
-
             gen1_path_nodes = _collect_path_nodes(gen1_paths, parse_va)
-            gen2_path_nodes = _collect_path_nodes(list(gen2.get("paths", []) or []), parse_va)
             comparison_candidate_nodes.update(gen1_path_nodes)
-            comparison_candidate_nodes.update(gen2_path_nodes)
+
+            gen1_llm = gen1.get("llm") or {}
+            if isinstance(gen1_llm, dict):
+                for step in gen1_llm.get("steps", []) or []:
+                    if isinstance(step, dict) and step.get("status") == "ok":
+                        populate_from_step_result(
+                            board, step,
+                            source="gen1", generation=1, goal_index=int(idx),
+                        )
+
+            # ── 动态代际循环 (Gen2 .. GenN) ─────────────────────────
+            all_covered_nodes: Set[int] = set(gen1_nodes)
+            cumulative_tokens = _estimate_pseudo_tokens(graph, gen1_nodes)
+            prev_paths = gen1_paths
+            prev_neighborhood = gen1_nodes
+            gen_details: List[Dict[str, Any]] = []
+            gen_details.append({
+                "generation": 1,
+                "lambda_nodes": [f"0x{int(x):08X}" for x in sorted(gen1_nodes)],
+                "lambda_dist": {f"0x{int(k):08X}": round(float(v), 4) for k, v in sorted(gen1_dist.items())},
+                "result": gen1,
+            })
+
+            final_gen_count = 1
+            for gen_idx in range(2, max_gen + 1):
+                anchors = _pick_anchor_nodes(
+                    graph,
+                    primary_goal=goal_va,
+                    gen1_paths=prev_paths,
+                    neighborhood_nodes=prev_neighborhood,
+                    goal_structs=list(args.goal_struct or []),
+                )
+
+                wlca = _compute_wlca_roots(
+                    graph,
+                    anchors,
+                    max_depth=max(1, int(args.gen2_ancestor_depth or 1)),
+                    min_wlca=float(args.gen2_min_wlca),
+                    frontier_k=max(1, int(args.gen2_frontier_k or 1)),
+                    alpha=float(args.gen2_alpha),
+                    beta=float(args.gen2_beta),
+                    gamma=float(args.gen2_gamma),
+                )
+                gen_roots = list(wlca.get("roots", []) or [])
+
+                new_roots = [r for r in gen_roots if int(r) not in all_covered_nodes]
+                if not new_roots and not gen_roots:
+                    print(
+                        f"[GoalDeep] goal#{idx} gen{gen_idx}: "
+                        f"无新根节点，终止扩展 (reached={final_gen_count} generations)"
+                    )
+                    break
+
+                gen_nodes_union: Set[int] = set()
+                for r in (new_roots or gen_roots):
+                    sub_nodes, _ = _mixed_neighborhood(
+                        mixed_adj,
+                        start_va=int(r),
+                        radius=float(args.lambda_radius),
+                        weights=weights,
+                        max_nodes=180,
+                        adaptive_shrink=True,
+                    )
+                    gen_nodes_union.update(sub_nodes)
+
+                genuinely_new = gen_nodes_union - all_covered_nodes
+                new_ratio = len(genuinely_new) / max(1, len(all_covered_nodes))
+
+                gen_tokens = _estimate_pseudo_tokens(graph, genuinely_new)
+                would_exceed_budget = (
+                    gen_token_budget > 0
+                    and (cumulative_tokens + gen_tokens) > gen_token_budget
+                )
+
+                if new_ratio < gen_stop_new_ratio and gen_idx > 2:
+                    print(
+                        f"[GoalDeep] goal#{idx} gen{gen_idx}: "
+                        f"新节点比例过低 ({new_ratio:.1%} < {gen_stop_new_ratio:.0%})，"
+                        f"覆盖饱和终止 (reached={final_gen_count} generations)"
+                    )
+                    break
+
+                if would_exceed_budget:
+                    print(
+                        f"[GoalDeep] goal#{idx} gen{gen_idx}: "
+                        f"Token 预算即将超出 ({cumulative_tokens + gen_tokens} > {gen_token_budget})，"
+                        f"终止扩展 (reached={final_gen_count} generations)"
+                    )
+                    break
+
+                gen_result = _run_deep_generation(
+                    conn=conn,
+                    graph=graph,
+                    entries=[int(x) for x in (new_roots or gen_roots)],
+                    args=args,
+                    llm_settings=llm_settings,
+                    llm_mode=str(args.llm_mode),
+                    allowed_nodes=gen_nodes_union if gen_nodes_union else None,
+                    label=f"goal#{idx}_gen{gen_idx}",
+                    llm_poll_log_file=str(layout.llm_poll_log_file),
+                    log_raw_llm=bool(args.log_raw_llm),
+                )
+
+                gen_path_nodes = _collect_path_nodes(
+                    list(gen_result.get("paths", []) or []), parse_va,
+                )
+                comparison_candidate_nodes.update(gen_path_nodes)
+                all_covered_nodes.update(gen_nodes_union)
+                cumulative_tokens += gen_tokens
+                final_gen_count = gen_idx
+
+                gen_llm = gen_result.get("llm") or {}
+                if isinstance(gen_llm, dict):
+                    for step in gen_llm.get("steps", []) or []:
+                        if isinstance(step, dict) and step.get("status") == "ok":
+                            populate_from_step_result(
+                                board, step,
+                                source=f"gen{gen_idx}",
+                                generation=gen_idx,
+                                goal_index=int(idx),
+                            )
+
+                gen_details.append({
+                    "generation": gen_idx,
+                    "roots": [f"0x{int(x):08X}" for x in (new_roots or gen_roots)],
+                    "anchors": [f"0x{int(x):08X}" for x in anchors],
+                    "wlca": wlca,
+                    "new_nodes": len(genuinely_new),
+                    "new_ratio": round(new_ratio, 4),
+                    "cumulative_tokens": cumulative_tokens,
+                    "lambda_nodes_union": [f"0x{int(x):08X}" for x in sorted(gen_nodes_union)],
+                    "result": gen_result,
+                })
+
+                prev_paths = list(gen_result.get("paths", []) or [])
+                prev_neighborhood = gen_nodes_union
+
+                print(
+                    f"[GoalDeep] goal#{idx} gen{gen_idx}: "
+                    f"roots={len(new_roots or gen_roots)} new_nodes={len(genuinely_new)} "
+                    f"new_ratio={new_ratio:.1%} cumulative_tokens={cumulative_tokens}"
+                )
+
+            board.save(blackboard_file)
 
             generation_item = {
                 "goal_index": int(idx),
@@ -823,39 +1004,13 @@ def main() -> int:
                     "richness": int(goal.richness),
                     "manual_score": int(goal.manual_score),
                 },
-                "gen1": {
-                    "lambda_nodes": [f"0x{int(x):08X}" for x in sorted(gen1_nodes)],
-                    "lambda_dist": {f"0x{int(k):08X}": round(float(v), 4) for k, v in sorted(gen1_dist.items())},
-                    "result": gen1,
-                },
-                "gen2": {
-                    "anchors": [f"0x{int(x):08X}" for x in anchors],
-                    "wlca": wlca,
-                    "lambda_nodes_union": [f"0x{int(x):08X}" for x in sorted(gen2_nodes_union)],
-                    "result": gen2,
-                },
+                "max_generations": max_gen,
+                "actual_generations": final_gen_count,
+                "generations": gen_details,
             }
             generation_results.append(generation_item)
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.json", generation_item)
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.deepest.json", deepest_item)
-
-            gen1_llm = gen1.get("llm") or {}
-            if isinstance(gen1_llm, dict):
-                for step in gen1_llm.get("steps", []) or []:
-                    if isinstance(step, dict) and step.get("status") == "ok":
-                        populate_from_step_result(
-                            board, step,
-                            source="gen1", generation=1, goal_index=int(idx),
-                        )
-            gen2_llm = gen2.get("llm") or {}
-            if isinstance(gen2_llm, dict):
-                for step in gen2_llm.get("steps", []) or []:
-                    if isinstance(step, dict) and step.get("status") == "ok":
-                        populate_from_step_result(
-                            board, step,
-                            source="gen2", generation=2, goal_index=int(idx),
-                        )
-            board.save(blackboard_file)
 
             state["generation_results"] = generation_results
             state["gen1_deepest_items"] = gen1_deepest_items
@@ -866,17 +1021,18 @@ def main() -> int:
                 "goal_completed",
                 goal_index=int(idx),
                 entry_va=f"0x{goal_va:08X}",
-                gen1_paths=len(gen1_paths),
-                gen2_paths=len(list(gen2.get("paths", []) or [])),
+                total_generations=final_gen_count,
+                max_generations=max_gen,
+                total_covered_nodes=len(all_covered_nodes),
+                cumulative_tokens=cumulative_tokens,
                 blackboard_entries=board.total_entries,
             )
 
         if not comparison_candidate_nodes:
             for g in generation_results:
-                g1_paths = (((g.get("gen1") or {}).get("result") or {}).get("paths", []) or [])
-                g2_paths = (((g.get("gen2") or {}).get("result") or {}).get("paths", []) or [])
-                comparison_candidate_nodes.update(_collect_path_nodes(g1_paths, parse_va))
-                comparison_candidate_nodes.update(_collect_path_nodes(g2_paths, parse_va))
+                for gd in (g.get("generations") or []):
+                    gd_paths = ((gd.get("result") or {}).get("paths", []) or [])
+                    comparison_candidate_nodes.update(_collect_path_nodes(gd_paths, parse_va))
             state["comparison_candidate_nodes"] = sorted(comparison_candidate_nodes)
 
         cached_compare_nodes = list(state.get("compare_nodes", []) or [])
@@ -1119,7 +1275,10 @@ def main() -> int:
                 "manual_goal_struct": list(args.goal_struct or []),
                 "lambda_radius": float(args.lambda_radius),
                 "weights": weights,
-                "gen2": {
+                "max_generations": int(args.max_generations),
+                "gen_stop_new_ratio": float(args.gen_stop_new_ratio),
+                "gen_token_budget": int(args.gen_token_budget),
+                "wlca_params": {
                     "ancestor_depth": int(args.gen2_ancestor_depth),
                     "min_wlca": float(args.gen2_min_wlca),
                     "frontier_k": int(args.gen2_frontier_k),

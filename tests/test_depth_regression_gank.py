@@ -643,6 +643,116 @@ class TestT11StrategyEvaluation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# T12: 动态代际机制
+# ═══════════════════════════════════════════════════════════════════════════
+
+@needs_gank
+class TestT12DynamicGenerations:
+    """验证子树代数根据目标复杂度动态决定。"""
+
+    def test_estimate_max_generations_complex_node(self, graph, mixed_graph):
+        """高复杂度节点（server_file_transfer_handler）应分配更多代。"""
+        from depth.engine import _estimate_max_generations
+        adj, _, _ = mixed_graph
+        max_gen = _estimate_max_generations(graph, adj, 0x000102D8, user_max=0)
+        print(f"\n[动态代际] server_file_transfer_handler: auto max_gen={max_gen}")
+        assert max_gen >= 3, f"高复杂度节点应至少分配 3 代，实际 {max_gen}"
+        assert max_gen <= 6, f"不应超过硬上限 6，实际 {max_gen}"
+
+    def test_estimate_max_generations_simple_node(self, graph, mixed_graph):
+        """低复杂度节点（handle_state_transition）应少分配代。"""
+        from depth.engine import _estimate_max_generations
+        adj, _, _ = mixed_graph
+        max_gen = _estimate_max_generations(graph, adj, 0x00021094, user_max=0)
+        print(f"\n[动态代际] handle_state_transition: auto max_gen={max_gen}")
+        assert max_gen == 2, f"低复杂度节点应分配 2 代，实际 {max_gen}"
+
+    def test_user_max_overrides(self, graph, mixed_graph):
+        """用户指定 max_generations 应作为上限。"""
+        from depth.engine import _estimate_max_generations
+        adj, _, _ = mixed_graph
+        auto = _estimate_max_generations(graph, adj, 0x000102D8, user_max=0)
+        capped = _estimate_max_generations(graph, adj, 0x000102D8, user_max=2)
+        assert capped <= 2
+        assert auto >= capped
+
+    def test_generation_stop_on_saturation(self, graph, mixed_graph):
+        """验证多代扩展的覆盖饱和检测逻辑。"""
+        from depth.graph_augment import _mixed_neighborhood
+        from depth.engine import _compute_wlca_roots, _pick_anchor_nodes
+        from kp.kp_deep_path import run_deep_path_analysis, estimate_global_deepest_depth
+        adj, _, _ = mixed_graph
+        weights = {"call": 0.45, "data": 0.30, "string": 0.15, "global": 0.10, "indirect": 0.30}
+        goal_va = 0x000102D8
+
+        gen1_nodes, _ = _mixed_neighborhood(
+            adj, goal_va, radius=2.5, weights=weights,
+            max_nodes=180, adaptive_shrink=True,
+        )
+
+        depth = max(1, int(estimate_global_deepest_depth(graph, only_entry_vas=[goal_va])))
+        from kp.kp_deep_path import run_deep_path_analysis
+        result = run_deep_path_analysis(
+            conn=sqlite3.connect(str(GANK_DB)), graph=graph,
+            entries=[goal_va], max_depth=min(depth, 10),
+            max_paths=100, max_branch=6,
+            max_call_sites=3, cond_window=10, max_guards_per_site=3,
+        )
+        gen1_paths = result.get("paths", [])
+
+        all_covered = set(gen1_nodes)
+        generation_sizes = [len(gen1_nodes)]
+
+        for gen_i in range(2, 6):
+            anchors = _pick_anchor_nodes(
+                graph, primary_goal=goal_va,
+                gen1_paths=gen1_paths,
+                neighborhood_nodes=all_covered,
+                goal_structs=[],
+            )
+            wlca = _compute_wlca_roots(
+                graph, anchors,
+                max_depth=5, min_wlca=0.28, frontier_k=3,
+                alpha=0.65, beta=0.08, gamma=0.40,
+            )
+            gen_roots = list(wlca.get("roots", []) or [])
+            gen_nodes: Set[int] = set()
+            for r in gen_roots:
+                sub, _ = _mixed_neighborhood(
+                    adj, int(r), radius=2.5, weights=weights,
+                    max_nodes=180, adaptive_shrink=True,
+                )
+                gen_nodes.update(sub)
+
+            new_nodes = gen_nodes - all_covered
+            new_ratio = len(new_nodes) / max(1, len(all_covered))
+            generation_sizes.append(len(new_nodes))
+            print(
+                f"  gen{gen_i}: roots={len(gen_roots)} "
+                f"new={len(new_nodes)} ratio={new_ratio:.1%}"
+            )
+            all_covered.update(gen_nodes)
+
+            if new_ratio < 0.05 and gen_i > 2:
+                print(f"  → 第 {gen_i} 代饱和，自然终止")
+                break
+
+        assert len(generation_sizes) >= 2
+        print(f"\n[动态代际] 代际节点增量: {generation_sizes}")
+
+    def test_estimate_pseudo_tokens(self, graph):
+        """验证 Token 估算函数。"""
+        from depth.engine import _estimate_pseudo_tokens
+        all_vas = set(graph.nodes.keys())
+        total = _estimate_pseudo_tokens(graph, all_vas)
+        assert total > 0, "整个图的 Token 估算不应为 0"
+        single = _estimate_pseudo_tokens(graph, {0x000102D8})
+        assert single < total
+        empty = _estimate_pseudo_tokens(graph, set())
+        assert empty == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 清理临时文件
 # ═══════════════════════════════════════════════════════════════════════════
 
