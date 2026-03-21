@@ -14,8 +14,8 @@ if [ -z "$GHIDRA_CMD" ] || [ ! -e "$GHIDRA_CMD" ]; then
     echo "Warning: GHIDRA_CMD 路径无效，将尝试自动检测: $GHIDRA_CMD"
   fi
   GHIDRA_CMD=""
-  [ -e "$GHIDRA_11_PATH" ] && GHIDRA_CMD="$GHIDRA_11_PATH" && echo "使用 Ghidra 11"
-  [ -z "$GHIDRA_CMD" ] && [ -e "$GHIDRA_12_PATH" ] && GHIDRA_CMD="$GHIDRA_12_PATH" && echo "使用 Ghidra 12"
+  [ -e "$GHIDRA_12_PATH" ] && GHIDRA_CMD="$GHIDRA_12_PATH" && echo "使用 Ghidra 12"
+  [ -z "$GHIDRA_CMD" ] && [ -e "$GHIDRA_11_PATH" ] && GHIDRA_CMD="$GHIDRA_11_PATH" && echo "使用 Ghidra 11"
   [ -z "$GHIDRA_CMD" ] && { echo "Error: 未找到 Ghidra，请设置 GHIDRA_CMD"; exit 1; }
 else
   echo "使用: $GHIDRA_CMD"
