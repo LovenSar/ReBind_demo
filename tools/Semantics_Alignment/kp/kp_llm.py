@@ -5,10 +5,11 @@
 目标：让 Phase 层只关心 prompt/结果应用，不关心 OpenAI SDK 兼容与重试细节。
 
 功能特性：
-- 支持多个 API Key（逗号分隔）：在 .env 中设置 OPENAI_API_KEY=key1,key2,key3
-- 启动探测：自动检查并移除已被限流的 keys（不修改 .env）
-- 限流处理（429 错误）：检测到限流时等待 30 秒，然后切换到下一个可用 key
-- 自动降级：如果某个 key 被限流，不会再回到该 key，而是永久排除它
+- 支持多个 API Key：.env 中可写多行 OPENAI_API_KEY=... 或逗号分隔
+- 启动探测：自动检查已被限流的 keys（不修改 .env）
+- 限流处理（429）：立即封禁当前 key 并切换到下一个可用 key（不再等待 30s）
+- 当日封禁：被 429 的 key 标记为当天不可用，次日 04:00 自动解封（不永久删除）
+- 全部耗尽时等待恢复：等待用户回车立即重试，或次日 04:00 自动解封继续
 """
 
 from __future__ import annotations
@@ -37,12 +38,52 @@ _API_KEYS: list[str] = []
 _API_KEY_INDEX: int = 0
 _LAST_PARSED_ENV_KEYS: tuple[str, ...] = ()
 
+# 当日封禁表：{key: blocked_timestamp}，被 429 的 key 不永久删除，而是标记封禁至次日 04:00。
+_BLOCKED_KEYS: dict[str, float] = {}
+
+_DAILY_RESET_HOUR = 4  # 次日凌晨 4 点解封所有 key
+
 
 def _parse_api_keys_from_env(api_key_env: str) -> list:
     """从环境变量中解析逗号分隔的 API keys 列表，并去掉可选的引号（" 或 '）。"""
     val = os.getenv(api_key_env) or ""
     keys = [_strip_optional_quotes(k.strip()) for k in val.split(",") if k.strip()]
     return keys
+
+
+def _next_reset_time() -> float:
+    """计算下一个解封时间点（次日 04:00 的 epoch timestamp）。"""
+    import datetime
+    now = datetime.datetime.now()
+    reset_today = now.replace(hour=_DAILY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if now >= reset_today:
+        reset_today += datetime.timedelta(days=1)
+    return reset_today.timestamp()
+
+
+def _unblock_expired_keys() -> int:
+    """检查并解封已到期的 key（当前时间已过次日 04:00）。返回解封数量。"""
+    global _BLOCKED_KEYS
+    if not _BLOCKED_KEYS:
+        return 0
+    import datetime
+    now = datetime.datetime.now()
+    today_reset = now.replace(hour=_DAILY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    expired = [
+        k for k, ts in _BLOCKED_KEYS.items()
+        if datetime.datetime.fromtimestamp(ts).date() < now.date()
+        or (datetime.datetime.fromtimestamp(ts).date() == now.date() and now >= today_reset
+            and datetime.datetime.fromtimestamp(ts) < today_reset)
+    ]
+    for k in expired:
+        del _BLOCKED_KEYS[k]
+    if expired:
+        logger.info("[LLM] %d 个 API key 已过封禁期，重新启用。", len(expired))
+    return len(expired)
+
+
+def _is_key_blocked(key: str) -> bool:
+    return key in _BLOCKED_KEYS
 
 
 def _get_current_api_key() -> Optional[str]:
@@ -54,34 +95,118 @@ def _get_current_api_key() -> Optional[str]:
     return _API_KEYS[_API_KEY_INDEX]
 
 
-def _rotate_to_next_key() -> bool:
-    """尝试切换到下一个 key；返回 True 表示已切换，False 表示没有更多 key。
+def _block_current_key_and_rotate() -> bool:
+    """将当前 key 标记为当日封禁，然后尝试切换到下一个未封禁的 key。
 
-    注意：该函数仅在不希望删除当前 key 的场景使用。默认场景遇到限流时会删除（discard）当前 key，
-    以保证不会再返回到已经被限流的 key 上。
+    Returns True if a usable key is found, False if all keys are blocked.
     """
+    global _API_KEY_INDEX, _API_KEYS, _BLOCKED_KEYS
+    if not _API_KEYS:
+        return False
+
+    current = _API_KEYS[_API_KEY_INDEX]
+    _BLOCKED_KEYS[current] = time.time()
+    logger.info(
+        "[LLM] API key %s 被标记为当日封禁（429 限流），将在次日 %02d:00 自动解封。",
+        _mask_key(current), _DAILY_RESET_HOUR,
+    )
+
+    for offset in range(1, len(_API_KEYS)):
+        candidate_idx = (_API_KEY_INDEX + offset) % len(_API_KEYS)
+        if not _is_key_blocked(_API_KEYS[candidate_idx]):
+            _API_KEY_INDEX = candidate_idx
+            logger.info(
+                "[LLM] 已切换到 API key %s (index %d/%d)",
+                _mask_key(_API_KEYS[_API_KEY_INDEX]), _API_KEY_INDEX + 1, len(_API_KEYS),
+            )
+            return True
+
+    return False
+
+
+def _rotate_to_next_key() -> bool:
+    """尝试切换到下一个未封禁的 key；返回 True 表示已切换，False 表示没有更多可用 key。"""
     global _API_KEY_INDEX, _API_KEYS
     if len(_API_KEYS) <= 1:
-        return False
-    _API_KEY_INDEX += 1
-    if _API_KEY_INDEX >= len(_API_KEYS):
-        return False
-    return True
+        return not _is_key_blocked(_API_KEYS[0]) if _API_KEYS else False
+    for offset in range(1, len(_API_KEYS)):
+        candidate_idx = (_API_KEY_INDEX + offset) % len(_API_KEYS)
+        if not _is_key_blocked(_API_KEYS[candidate_idx]):
+            _API_KEY_INDEX = candidate_idx
+            return True
+    return False
 
 
 def _discard_current_key() -> bool:
-    """将当前 key 从可用列表中删除并保持索引指向下一个 key（如果有）。
+    """向后兼容：将当前 key 封禁并切换。"""
+    return _block_current_key_and_rotate()
 
-    返回 True 表示删除后仍有下一个 key 可用，False 表示已无可用 key。
+
+def _wait_for_key_recovery() -> bool:
+    """所有 key 被限流后的等待逻辑：等待用户回车或次日 04:00 自动恢复。
+
+    Returns True if keys became available, False if user interrupted.
     """
-    global _API_KEYS, _API_KEY_INDEX
-    if not _API_KEYS:
-        return False
-    # 删除当前 key
-    del _API_KEYS[_API_KEY_INDEX]
-    # 如果删除后索引越界，表示没有更多 key
-    if _API_KEY_INDEX >= len(_API_KEYS):
-        return False
+    import datetime
+
+    _unblock_expired_keys()
+    if any(not _is_key_blocked(k) for k in _API_KEYS):
+        return True
+
+    reset_ts = _next_reset_time()
+    reset_dt = datetime.datetime.fromtimestamp(reset_ts)
+    wait_seconds = max(0, reset_ts - time.time())
+
+    blocked_info = ", ".join(
+        f"{_mask_key(k)}(封禁于 {datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S')})"
+        for k, ts in _BLOCKED_KEYS.items()
+    )
+
+    print(
+        f"\n[LLM] ══════════════════════════════════════════════════════════"
+        f"\n[LLM]  所有 {len(_API_KEYS)} 个 API key 已被限流（429）："
+        f"\n[LLM]    {blocked_info}"
+        f"\n[LLM]  将在 {reset_dt.strftime('%Y-%m-%d %H:%M')} 自动解封（约 {wait_seconds/3600:.1f} 小时后）。"
+        f"\n[LLM]  按回车立即重试所有 key，Ctrl+C 终止流水线。"
+        f"\n[LLM] ══════════════════════════════════════════════════════════\n"
+    )
+
+    interactive = bool(sys.stdin and getattr(sys.stdin, "isatty", lambda: False)())
+
+    try:
+        if interactive:
+            import select as _sel
+            while time.time() < reset_ts:
+                remaining = reset_ts - time.time()
+                hours = int(remaining // 3600)
+                mins = int((remaining % 3600) // 60)
+                sys.stdout.write(
+                    f"\r[LLM] 等待恢复中... {hours:02d}:{mins:02d} 后自动解封 | 按回车立即重试 "
+                )
+                sys.stdout.flush()
+                ready, _, _ = _sel.select([sys.stdin], [], [], 30.0)
+                if ready:
+                    sys.stdin.readline()
+                    print("\n[LLM] 用户触发重试，解除所有 key 封禁。")
+                    _BLOCKED_KEYS.clear()
+                    return True
+                _unblock_expired_keys()
+                if any(not _is_key_blocked(k) for k in _API_KEYS):
+                    print("\n[LLM] 部分 key 已过封禁期，恢复运行。")
+                    return True
+        else:
+            while time.time() < reset_ts:
+                time.sleep(60.0)
+                _unblock_expired_keys()
+                if any(not _is_key_blocked(k) for k in _API_KEYS):
+                    print("[LLM] 部分 key 已过封禁期，恢复运行。")
+                    return True
+    except KeyboardInterrupt:
+        print("\n[LLM] 用户中断等待。")
+        raise
+
+    _BLOCKED_KEYS.clear()
+    print(f"\n[LLM] 已到达 {reset_dt.strftime('%H:%M')}，解除所有 key 封禁，恢复运行。")
     return True
 
 
@@ -101,12 +226,35 @@ def _strip_optional_quotes(value: str) -> str:
 
 
 def _load_dotenv_file(dotenv_path: Path) -> int:
-    """Load KEY=VALUE pairs from a .env file into os.environ (do not override existing)."""
+    """Load KEY=VALUE pairs from a .env file into os.environ.
+
+    Special handling for API keys — supports three .env formats:
+
+    1. 多行同名::
+
+           OPENAI_API_KEY=key1
+           OPENAI_API_KEY=key2
+
+    2. 带数字后缀::
+
+           OPENAI_API_KEY_1=key1
+           OPENAI_API_KEY_2=key2
+
+    3. 逗号分隔::
+
+           OPENAI_API_KEY=key1,key2
+
+    All values are merged into ``OPENAI_API_KEY`` (comma-separated) so that
+    ``_parse_api_keys_from_env`` can see every key.
+    """
 
     try:
         text = dotenv_path.read_text(encoding="utf-8")
     except Exception:
         return 0
+
+    _BASE_KEY = DEFAULT_API_KEY_ENV
+    _numbered_re = re.compile(rf"^{re.escape(_BASE_KEY)}_\d+$")
 
     updated = 0
     for raw_line in text.splitlines():
@@ -126,19 +274,53 @@ def _load_dotenv_file(dotenv_path: Path) -> int:
             continue
 
         value = _strip_optional_quotes(value)
-        if key in os.environ:
-            continue
 
-        os.environ[key] = value
-        updated += 1
+        is_api_key = (key == _BASE_KEY) or bool(_numbered_re.match(key))
+        if is_api_key:
+            existing = os.environ.get(_BASE_KEY, "")
+            if existing:
+                os.environ[_BASE_KEY] = existing + "," + value
+            else:
+                os.environ[_BASE_KEY] = value
+            updated += 1
+        else:
+            if key in os.environ:
+                continue
+            os.environ[key] = value
+            updated += 1
     return updated
 
 
-def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str) -> None:
-    """Best-effort load .env so OPENAI_API_KEY can be provided without manual export."""
+def _normalize_api_keys_env(api_key_env: str) -> list[str]:
+    """对 API key 环境变量做去重归一化（保序），并写回到环境变量。"""
+    parsed = _parse_api_keys_from_env(api_key_env)
+    if not parsed:
+        return []
 
-    if os.getenv(api_key_env):
-        return
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for key in parsed:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+
+    normalized = ",".join(deduped)
+    if os.getenv(api_key_env) != normalized:
+        os.environ[api_key_env] = normalized
+    return deduped
+
+
+def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str) -> None:
+    """Best-effort load .env and merge API keys for rotation.
+
+    行为说明：
+    - 支持已有 ``OPENAI_API_KEY`` 时继续补充加载 .env 中的多 key；
+    - 加载后会做保序去重，避免 ``require_openai`` 重复调用导致 key 累加。
+    """
+
+    # 先做一次归一化，避免外部环境里已有重复 key。
+    _normalize_api_keys_env(api_key_env)
 
     dotenv_candidate = api_settings.get("dotenv_path") or api_settings.get("dotenv")
     if dotenv_candidate:
@@ -147,11 +329,17 @@ def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str
             dotenv_path = (Path(__file__).resolve().parents[1] / dotenv_path).resolve()
         if dotenv_path.exists() and dotenv_path.is_file():
             _load_dotenv_file(dotenv_path)
+            _normalize_api_keys_env(api_key_env)
             return
 
-    default_dotenv = Path(__file__).resolve().parents[1] / ".env"
-    if default_dotenv.exists() and default_dotenv.is_file():
-        _load_dotenv_file(default_dotenv)
+    kp_parent = Path(__file__).resolve().parents[1]
+    for candidate_dir in (kp_parent, kp_parent.parents[1]):
+        candidate = candidate_dir / ".env"
+        if candidate.exists() and candidate.is_file():
+            _load_dotenv_file(candidate)
+            _normalize_api_keys_env(api_key_env)
+            if os.getenv(api_key_env):
+                return
 
 
 _PRUNED_ON_STARTUP: bool = False
@@ -243,7 +431,7 @@ def require_openai(api_settings: Dict[str, Any]) -> Any:
         or DEFAULT_API_KEY_ENV
     )
 
-    # 兼容本项目的 tools/Semantics_Alignment/.env：若没有手动设置环境变量，尝试自动加载。
+    # 兼容本项目的 .env：若已有环境变量，也会尝试补充合并多 key（用于自动轮换）。
     _try_load_api_key_from_dotenv(api_settings, api_key_env)
 
     try:
@@ -488,29 +676,37 @@ def call_llm_analyze_function(
                     logger.error("%s", exit_msg)
                     sys.exit(1)
 
-                # 限流错误（Rate limit）：将当前 key 标记为不可用并切换到下一个可用 key（不会再回到已被限流的 key）。
+                # 限流错误（Rate limit）：立即封禁当前 key 并切换到下一个可用 key。
                 if _is_rate_limit_error(exc):
                     logger.warning(
-                        "检测到限流(429)错误，将等待30秒后尝试切换API key。错误信息: %s",
-                        str(exc)[:200]  # 避免日志过长
+                        "检测到限流(429)错误，立即切换 API key。错误信息: %s",
+                        str(exc)[:200],
                     )
-                    print("[LLM] 检测到限流，等待30秒...")
-                    try:
-                        time.sleep(30)
-                    except KeyboardInterrupt:
-                        logger.warning("用户打断了等待流程")
-                        raise
+                    print(f"[LLM] 检测到限流(429)，封禁当前 key {_mask_key(_get_current_api_key())}...")
 
-                    has_next = _discard_current_key()
+                    has_next = _block_current_key_and_rotate()
                     if has_next:
-                        logger.warning(
-                            "已将当前 API key 标记为不可用并切换到下一个 key（key=%s, index=%d/%d）",
-                            _mask_key(_get_current_api_key()),
-                            _API_KEY_INDEX + 1,
-                            len(_API_KEYS),
+                        print(
+                            f"[LLM] 已切换到 key {_mask_key(_get_current_api_key())}"
+                            f" ({_API_KEY_INDEX + 1}/{len(_API_KEYS)})"
                         )
-                        # 注意：这里 break 而不是 continue，以便进入下一个 attempt
-                        # 新的 attempt 会在顶部重新调用 require_openai 构建新客户端
+                        break
+
+                    # 所有 key 都被限流 → 进入等待恢复模式
+                    print("[LLM] 所有 API key 均被限流。")
+                    try:
+                        recovered = _wait_for_key_recovery()
+                    except KeyboardInterrupt:
+                        raise
+                    if recovered:
+                        _API_KEY_INDEX = next(
+                            (i for i, k in enumerate(_API_KEYS) if not _is_key_blocked(k)),
+                            0,
+                        )
+                        print(
+                            f"[LLM] 恢复运行，使用 key {_mask_key(_get_current_api_key())}"
+                            f" ({_API_KEY_INDEX + 1}/{len(_API_KEYS)})"
+                        )
                         break
                     else:
                         last_error = f"所有 API keys 均被限流或已耗尽({exc})"

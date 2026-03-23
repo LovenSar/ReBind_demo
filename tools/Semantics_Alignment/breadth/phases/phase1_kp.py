@@ -270,7 +270,10 @@ def analyze_one_unified_function(
     max_strings: int = 20,
 ) -> None:
     if ida_sync and ida_url:
-        wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
+        ok = wait_for_ida_server(ida_url or "http://127.0.0.1:12345", max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[Phase1] IDA 不可达（单函数分析），降级为离线模式。 entry_va=0x%08X", entry_va)
+            ida_sync = False
 
     node = graph.nodes[entry_va]
 
@@ -387,7 +390,10 @@ def analyze_unified_batch(
         print(f"[TARGET-BATCH] 预估 prompt tokens ≈ {estimated_tokens}, max_tokens={llm_settings.max_tokens}")
 
     if ida_sync and ida_url:
-        wait_for_ida_server(ida_url or "http://127.0.0.1:12345")
+        ok = wait_for_ida_server(ida_url or "http://127.0.0.1:12345", max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[Phase1] IDA 不可达（批量分析），降级为离线模式。")
+            ida_sync = False
 
     if dry_run:
         print("\n[DRY-RUN] 本轮不会调用 LLM。以下是请求参数：\n")

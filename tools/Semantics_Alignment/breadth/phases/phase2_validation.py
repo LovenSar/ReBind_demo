@@ -445,7 +445,10 @@ def validate_one_function(
     context_cache: Optional[Dict[int, str]] = None,
 ) -> Optional[float]:
     if ida_sync and ida_url:
-        wait_for_ida_server(ida_url)
+        ok = wait_for_ida_server(ida_url, max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[Phase2] IDA 不可达（单函数验证），降级为离线模式。 entry_va=0x%08X", entry_va)
+            ida_sync = False
 
     node = graph.nodes[entry_va]
     display_name = next(iter(sorted(node.names)), f"sub_{entry_va:08X}") if node.names else f"sub_{entry_va:08X}"
@@ -494,7 +497,10 @@ def run_validation_phase(
     batch_size: int = 10,
 ) -> None:
     if ida_sync and ida_url:
-        wait_for_ida_server(ida_url)
+        ok = wait_for_ida_server(ida_url, max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[Phase2] IDA 不可达，Phase2 将以离线模式运行（仅更新 DB）。")
+            ida_sync = False
 
     entry_vas = _get_phase2_pending_entry_vas(conn, graph)
     if not entry_vas:

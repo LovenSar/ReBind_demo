@@ -420,7 +420,10 @@ def _sync_global_with_ida_and_update_db(conn: sqlite3.Connection, address_va: in
         return
 
     if ida_url:
-        wait_for_ida_server(ida_url)
+        ok = wait_for_ida_server(ida_url, max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[IDA-Sync] IDA 不可达，跳过全局变量实时同步。 addr=0x%08X", address_va)
+            return
 
     payload = {"action": "rename_global", "ea": address_va, "name": new_name, "type": type_str or ""}
 
@@ -506,7 +509,10 @@ def run_global_var_phase(
     batch_size: int = 10,
 ) -> None:
     if ida_sync and ida_url:
-        wait_for_ida_server(ida_url)
+        ok = wait_for_ida_server(ida_url, max_wait_seconds=30.0)
+        if not ok:
+            logger.warning("[Phase3] IDA 不可达，Phase3 将以离线模式运行（仅更新 DB）。")
+            ida_sync = False
 
     globals_by_addr = build_global_var_graph(conn, graph.binary_id, graph)
     if not globals_by_addr:

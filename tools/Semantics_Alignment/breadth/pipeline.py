@@ -27,7 +27,7 @@ import signal
 import sqlite3
 import subprocess
 import time
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set
 
 from dynamic_batching import yield_dynamic_batch
 from kp.kp_config import get_cfg_bool, get_cfg_int
@@ -55,6 +55,7 @@ from ida_launcher import (
     exit_if_library_init_failed,
     install_ctrl_c_handler,
     launch_idat_server,
+    log_indicates_library_failure,
     run_alignment_loader,
     send_ida_save_and_exit,
     wait_for_ida_process_exit,
@@ -165,6 +166,26 @@ def _phase1_node_pending(node: UnifiedFunctionNode, analysis_info: Dict[int, dic
     return True
 
 
+def _phase1_node_has_history(node: UnifiedFunctionNode, analysis_info: Dict[int, dict]) -> bool:
+    """Return True if node has prior Phase1 trace in analysis_status.
+
+    用于恢复运行时的总体进度展示（已完成 / 总量）：
+    - analysis_state in (ANALYZED, LOCKED) 视为已处理；
+    - phase1_pending=1 视为至少进入过 Phase1 队列。
+    """
+    for fid in node.function_ids:
+        info = analysis_info.get(int(fid)) or {}
+        state = (info.get("analysis_state") or "PENDING").upper()
+        if state in ("ANALYZED", "LOCKED"):
+            return True
+        try:
+            if int(info.get("phase1_pending") or 0) != 0:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _node_has_ida_subfunc_candidate(node: UnifiedFunctionNode, graph: UnifiedGraph) -> bool:
     """Only keep nodes backed by IDA's default sub_/fun_/loc_ entries."""
     ida_present = any(graph.func_tool.get(fid, "").lower() == "ida" for fid in node.function_ids)
@@ -187,6 +208,7 @@ def run_semantic_pipeline(
     dump_txt: Optional[Path] = None,
     dump_xlsx: Optional[Path] = None,
     graph_mode: str = "auto",
+    ida_restart_fn: Optional[Callable[[], bool]] = None,
 ) -> None:
     """Run selected phases in-process (no subprocess) and optionally dump DB snapshots."""
 
@@ -212,6 +234,36 @@ def run_semantic_pipeline(
     )
 
     ida = IDAService(ida_url, enabled=ida_sync)
+
+    def _ida_health_check_between_phases(phase_just_finished: int) -> None:
+        """Phase 间看门狗：检测 IDA 是否存活，尝试重启并恢复同步。"""
+        nonlocal ida_sync
+        if not ida_sync and not ida.degraded:
+            return
+        if ida.degraded and ida_restart_fn is not None:
+            print(f"[IDA-Watchdog] Phase {phase_just_finished} 结束，IDA 处于离线状态，尝试重启...")
+            try:
+                restarted = ida_restart_fn()
+            except Exception as exc:
+                logger.error("[IDA-Watchdog] 重启 IDA 失败: %s", exc)
+                restarted = False
+
+            if restarted:
+                from kp.kp_ida import wait_for_ida_server
+                ok = wait_for_ida_server(ida_url, max_wait_seconds=30.0)
+                if ok:
+                    ida._record_success()
+                    ida_sync = True
+                    print("[IDA-Watchdog] IDA 重启成功，后续阶段恢复实时同步。")
+                else:
+                    print("[IDA-Watchdog] IDA 重启后仍无法连接，继续离线运行。")
+            else:
+                print("[IDA-Watchdog] IDA 重启未成功，继续离线运行。")
+        elif ida.degraded:
+            ida.try_recover()
+            if not ida.degraded:
+                ida_sync = True
+                print("[IDA-Watchdog] IDA 自行恢复，后续阶段恢复实时同步。")
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -286,11 +338,25 @@ def run_semantic_pipeline(
                 if int(node.entry_va) not in phase1_attempted
             ]
             phase1_total_targets = len(phase1_targets)
+            phase1_done_count = sum(
+                1
+                for node in unified_graph.nodes.values()
+                if (not _phase1_node_pending(node, analysis_info)) and _phase1_node_has_history(node, analysis_info)
+            )
+            phase1_overall_total = phase1_done_count + phase1_total_targets
             phase1_progress: Optional[tqdm] = None
             if phase1_total_targets:
                 preview_cap = max(0, get_cfg_int(semantics_config, ("pipeline", "phase1", "target_preview_max"), 20))
                 sorted_targets = sorted(phase1_targets, key=lambda n: n.entry_va)
-                print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数。")
+                if phase1_overall_total > 0:
+                    percent = (phase1_done_count / phase1_overall_total) * 100.0
+                    print(
+                        f"[SemanticAlign] Phase 1 进度恢复："
+                        f"{phase1_done_count}/{phase1_overall_total} ({percent:.1f}%)，"
+                        f"本轮待处理 {phase1_total_targets} 个函数。"
+                    )
+                else:
+                    print(f"[SemanticAlign] Phase 1 即将重命名 {phase1_total_targets} 个函数。")
                 if preview_cap > 0:
                     preview = sorted_targets[:preview_cap]
                     for node in preview:
@@ -307,13 +373,20 @@ def run_semantic_pipeline(
                         ", ".join(f"0x{int(n.entry_va):08X}" for n in sorted_targets),
                     )
                 phase1_progress = tqdm(
-                    total=phase1_total_targets,
+                    total=phase1_overall_total if phase1_overall_total > 0 else phase1_total_targets,
+                    initial=phase1_done_count if phase1_overall_total > 0 else 0,
                     desc="[SemanticAlign] Phase 1",
                     unit="func",
                     leave=True,
                 )
             else:
-                print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
+                if phase1_overall_total > 0:
+                    print(
+                        f"[SemanticAlign] Phase 1 当前无需要重命名的函数，"
+                        f"累计进度 {phase1_done_count}/{phase1_overall_total} (100.0%)。"
+                    )
+                else:
+                    print("[SemanticAlign] Phase 1 当前无需要重命名的函数。")
 
             phase1_nodes_by_va: Dict[int, UnifiedFunctionNode] = {int(n.entry_va): n for n in phase1_targets}
             phase1_score_heap: List[tuple[int, int, int]] = []
@@ -559,6 +632,9 @@ def run_semantic_pipeline(
         else:
             print("[SemanticAlign] 跳过 Phase 1（未选中）。")
 
+        if 1 in phases_to_run:
+            _ida_health_check_between_phases(1)
+
         # ---------------------
         # Phase 2: Top-down validation
         # ---------------------
@@ -575,6 +651,9 @@ def run_semantic_pipeline(
             )
         else:
             print("[SemanticAlign] 跳过 Phase 2（未选中）。")
+
+        if 2 in phases_to_run:
+            _ida_health_check_between_phases(2)
 
         # ---------------------
         # Phase 3: Globals
@@ -593,6 +672,9 @@ def run_semantic_pipeline(
             )
         else:
             print("[SemanticAlign] 跳过 Phase 3（未选中）。")
+
+        if 3 in phases_to_run:
+            _ida_health_check_between_phases(3)
 
         # ---------------------
         # Phase 4: Local vars
@@ -618,6 +700,9 @@ def run_semantic_pipeline(
             )
         else:
             print("[SemanticAlign] 跳过 Phase 4（未选中）。")
+
+        if 4 in phases_to_run:
+            _ida_health_check_between_phases(4)
 
         phase5_ran = False
 
@@ -668,7 +753,8 @@ def run_semantic_pipeline(
     if ida_sync:
         try:
             print(f"[SemanticAlign] 请求 IDA 保存并退出: {ida_url}")
-            ida.save_and_exit(timeout=2.0)
+            # 大库保存可能较慢；与 ida_launcher.send_ida_save_and_exit 默认超时对齐
+            ida.save_and_exit(timeout=45.0)
         except Exception:
             # 连接中断通常是 IDA 正在关闭，属于预期
             pass
@@ -1047,6 +1133,41 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
         exit_if_library_init_failed(ida_log, ida_proc)
 
+        # IDA 重启闭包：看门狗检测到 IDA 崩溃时自动调用
+        _ida_proc_ref = [ida_proc]
+
+        def _restart_ida() -> bool:
+            """Kill stale IDA (if any) and launch a fresh one. Returns True on success."""
+            old = _ida_proc_ref[0]
+            if old is not None and old.poll() is None:
+                try:
+                    old.terminate()
+                    old.wait(timeout=5)
+                except Exception:
+                    try:
+                        old.kill()
+                    except Exception:
+                        pass
+            print("[IDA-Watchdog] 正在重新启动 IDA(idat)...")
+            try:
+                new_proc = launch_idat_server(
+                    idat_exe=idat_exe,
+                    ida_script=ida_script,
+                    sample_path=sample_path,
+                    log_path=ida_log,
+                )
+            except SystemExit as exc:
+                print(f"[IDA-Watchdog] IDA 启动失败: {exc}")
+                return False
+            _ida_proc_ref[0] = new_proc
+            if ida_start_delay > 0:
+                print(f"[IDA-Watchdog] 等待 {ida_start_delay:.1f}s 以便 IDA 启动...")
+                time.sleep(float(ida_start_delay))
+            if log_indicates_library_failure(ida_log):
+                print("[IDA-Watchdog] IDA 库初始化失败，放弃重启。")
+                return False
+            return True
+
         # 运行语义传播 Phase1-5（会在内部与 idat_server 建立连接）
         try:
             run_semantic_pipeline(
@@ -1059,16 +1180,17 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 dump_txt=dump_txt,
                 dump_xlsx=dump_xlsx,
                 graph_mode=graph_mode,
+                ida_restart_fn=_restart_ida,
             )
         except Exception:
             print("[SemanticAlign] 语义流水线异常终止，正在请求 IDA(save_and_exit)...")
             send_ida_save_and_exit()
-            wait_for_ida_process_exit(ida_proc, timeout=30.0)
+            wait_for_ida_process_exit(_ida_proc_ref[0], timeout=30.0)
             raise
 
         # 运行成功后等待 IDA 进程退出
         print("[SemanticAlign] 等待 IDA(idat) 进程退出...")
-        wait_for_ida_process_exit(ida_proc)
+        wait_for_ida_process_exit(_ida_proc_ref[0])
 
     # Phase 6: refresh IDA headless outputs from finalized IDA database
     if phase6_selected:

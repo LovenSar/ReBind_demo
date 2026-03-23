@@ -227,6 +227,7 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
         return
 
     def do_POST(self) -> None:
+        self._pending_save_and_exit = False
         length_str = self.headers.get("Content-Length") or "0"
         try:
             length = int(length_str)
@@ -290,10 +291,11 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
                 resp = {"status": "ok", "msg": "pong"}
                 status_code = 200
             elif action == "save_and_exit":
-                # 处理远程退出指令
-                self._handle_save_and_exit_request(payload)
+                # 先构造响应，在发送完 HTTP 200 并 flush 后再在主线程执行保存+qexit，
+                # 避免进程过早退出导致客户端连接被重置 / SIGPIPE(-13)。
                 resp = {"status": "ok", "msg": "Server is saving and shutting down..."}
                 status_code = 200
+                self._pending_save_and_exit = True
             else:
                 resp = {"status": "error", "msg": f"unknown action: {action!r}"}
                 status_code = 400
@@ -309,8 +311,32 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
         except Exception:
             pass
+
+        if getattr(self, "_pending_save_and_exit", False):
+            self._invoke_graceful_shutdown_after_http()
+
+    def _invoke_graceful_shutdown_after_http(self) -> None:
+        """HTTP 响应已发出后再执行保存与退出（必须在 IDA 主线程）。"""
+        print("[IDAT-Server] save_and_exit: scheduling shutdown after HTTP response...")
+
+        def _shutdown() -> int:
+            perform_cleanup_and_exit()
+            return 0
+
+        try:
+            ida_kernwin.execute_sync(_shutdown, ida_kernwin.MFF_WRITE)
+        except Exception as exc:
+            print(f"[IDAT-Server] execute_sync(perform_cleanup_and_exit) failed: {exc}; trying direct call...")
+            try:
+                perform_cleanup_and_exit()
+            except Exception as exc2:
+                print(f"[IDAT-Server] Fallback shutdown failed: {exc2}")
 
     # =========================
     # 线程调度辅助
@@ -1377,17 +1403,6 @@ class IDATRequestHandler(http.server.BaseHTTPRequestHandler):
             "count": len(normalized),
             "method": method,
         }
-
-    def _handle_save_and_exit_request(self, payload: dict):
-        """
-        处理远程的 save_and_exit 请求。
-        直接触发清理，避免遗漏。
-        """
-        global _RUNNING
-        print("[IDAT-Server] Received remote save_and_exit command.")
-        _RUNNING = False
-        perform_cleanup_and_exit()
-        
 
 def _run_server():
     """

@@ -15,6 +15,7 @@ import platform
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -53,8 +54,32 @@ def set_ctrl_c_exit_url(url: str) -> None:
     _CTRL_C_EXIT_URL = normalized if normalized else DEFAULT_IDA_URL
 
 
-def send_ida_save_and_exit(timeout_s: float = 2.0) -> None:
-    """向已配置的 IDA HTTP 地址 POST ``{'action': 'save_and_exit'}``。"""
+def format_subprocess_exit_code(code: Optional[int]) -> str:
+    """将 subprocess 返回码转为可读说明（含 POSIX 信号名）。"""
+    if code is None:
+        return "None"
+    if code < 0:
+        # Python: negative return code means killed by signal (-SIGNUM)
+        signum = -int(code)
+        name = ""
+        try:
+            name = signal.Signals(signum).name  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                name = signal.strsignal(signum) or ""
+            except Exception:
+                name = ""
+        extra = f" (signal {signum}{', ' + name if name else ''})"
+        return f"{code}{extra}"
+    return str(code)
+
+
+def send_ida_save_and_exit(timeout_s: float = 30.0, *, max_attempts: int = 3) -> None:
+    """向已配置的 IDA HTTP 地址 POST ``{'action': 'save_and_exit'}``。
+
+    大库保存时 idat 可能较慢；默认超时 30s，并带有限次重试。
+    连接被对端提前关闭（IDA 已开始退出）在部分情况下可视为预期。
+    """
     url = _CTRL_C_EXIT_URL
     if not url:
         return
@@ -74,21 +99,53 @@ def send_ida_save_and_exit(timeout_s: float = 2.0) -> None:
         "Content-Length": str(len(payload)),
     }
     conn_cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
-    conn = None
-    try:
-        conn = conn_cls(host, port, timeout=float(timeout_s))
-        conn.request("POST", path, body=payload, headers=headers)
-        resp = conn.getresponse()
-        resp.read()
-        print(f"[IDALauncher] 已向 {url} 发送 save_and_exit 请求 (HTTP {resp.status}).")
-    except Exception as exc:
-        print(f"[IDALauncher] 发送 save_and_exit 请求失败: {exc}")
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        conn = None
+        try:
+            conn = conn_cls(host, port, timeout=float(timeout_s))
+            conn.request("POST", path, body=payload, headers=headers)
+            resp = conn.getresponse()
+            resp.read()
+            print(
+                f"[IDALauncher] 已向 {url} 发送 save_and_exit 请求 "
+                f"(HTTP {resp.status}, attempt {attempt}/{max_attempts})."
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            # 对端在返回前关闭连接：常见于 save 完成后立即 qexit
+            if any(
+                k in msg
+                for k in (
+                    "connection reset",
+                    "broken pipe",
+                    "remote end closed",
+                    "connection aborted",
+                    "timed out",
+                )
+            ):
+                print(
+                    f"[IDALauncher] save_and_exit 连接异常（可能 IDA 已在退出）: {exc} "
+                    f"(attempt {attempt}/{max_attempts})"
+                )
+                if attempt < max_attempts:
+                    time.sleep(0.5 * attempt)
+                    continue
+            print(f"[IDALauncher] 发送 save_and_exit 请求失败: {exc} (attempt {attempt}/{max_attempts})")
+            if attempt < max_attempts:
+                time.sleep(0.5 * attempt)
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    if last_exc is not None:
+        print(f"[IDALauncher] save_and_exit 最终失败: {last_exc}")
 
 
 def handle_ctrl_c(signum, frame) -> None:
@@ -210,11 +267,22 @@ def exit_if_library_init_failed(log_path: Path, ida_proc: subprocess.Popen) -> N
 def wait_for_ida_process_exit(proc: subprocess.Popen, *, timeout: float = 300.0) -> None:
     """等待 IDA(idat) 进程退出，超时后输出提示（不强制 kill）。"""
     if proc.poll() is not None:
-        print(f"[IDALauncher] IDA(idat) 进程已退出，退出码={proc.returncode}")
+        print(
+            f"[IDALauncher] IDA(idat) 进程已退出，退出码={format_subprocess_exit_code(proc.returncode)}"
+        )
         return
     try:
         exit_code = proc.wait(timeout=timeout)
-        print(f"[IDALauncher] IDA(idat) 进程已退出，退出码={exit_code}")
+        print(
+            f"[IDALauncher] IDA(idat) 进程已退出，退出码={format_subprocess_exit_code(exit_code)}"
+        )
+        if isinstance(exit_code, int) and exit_code < 0:
+            sig = -exit_code
+            sigpipe = int(getattr(signal, "SIGPIPE", 13))
+            if sig == sigpipe:
+                print(
+                    "[IDALauncher] 提示: SIGPIPE 常见于管道/连接在进程收尾时关闭，若 DB 已保存通常可忽略。"
+                )
     except subprocess.TimeoutExpired:
         print("[IDALauncher] 等待 IDA(idat) 进程退出超时，如需强制终止请手动结束 idat 进程。")
         try:

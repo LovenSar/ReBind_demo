@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import select as _select_mod
 import shutil
 import shlex
 import signal
@@ -20,7 +21,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlparse
 
 import yaml
@@ -159,6 +160,48 @@ def _expected_output_dir(sample_path: Path, dir_suffix: str) -> Path:
     return _rebind_workspace_dir(sample_path) / f"{base_name}{dir_suffix}"
 
 
+def _export_dir_has_content(output_dir: Path) -> bool:
+    """Return True if *output_dir* looks like a completed Ghidra/IDA export
+    (exists and contains at least one sub-directory such as ``*_output``)."""
+    if not output_dir.is_dir():
+        return False
+    return any(child.is_dir() for child in output_dir.iterdir())
+
+
+def _prompt_use_cache(cached_labels: List[str], timeout: int = 5) -> bool:
+    """倒计时交互提示：检测到缓存时询问用户是否继续使用。
+
+    Returns True to reuse cache, False to re-export.
+    """
+    print(f"\n[ReBindDemo] 检测到以下样本已有导出缓存:")
+    for label in cached_labels:
+        print(f"  - {label}")
+    print(f"\n[ReBindDemo] {timeout} 秒后将自动使用缓存继续。输入 no 回车可重新导出。")
+
+    try:
+        if not sys.stdin.isatty():
+            raise OSError("non-interactive")
+
+        for remaining in range(timeout, 0, -1):
+            sys.stdout.write(f"\r  使用缓存继续？({remaining}s) [Y/no]: ")
+            sys.stdout.flush()
+            ready, _, _ = _select_mod.select([sys.stdin], [], [], 1.0)
+            if ready:
+                user_input = sys.stdin.readline().strip().lower()
+                if user_input in ("no", "n"):
+                    print("[ReBindDemo] 用户选择重新导出。\n")
+                    return False
+                print("[ReBindDemo] 使用缓存继续。\n")
+                return True
+
+        sys.stdout.write(f"\r  使用缓存继续？     [Y/no]: Y (自动)\n")
+        sys.stdout.flush()
+        return True
+    except (OSError, ValueError):
+        print("[ReBindDemo] 非交互模式，自动使用缓存。\n")
+        return True
+
+
 def _phase7_workspace_dir(input_path: Path) -> Path:
     if str(input_path.parent.name or "").endswith("_goal_deep"):
         return input_path.parent
@@ -230,6 +273,7 @@ def run_semantic_align(
     dump_db_only: bool = False,
     sync_ida_before_dump: bool = False,
     unlock_locked_on_sync: bool = False,
+    reuse_aligned_db_samples: Optional[Set[Path]] = None,
 ) -> None:
     """Call semantic_align.py for each sample after both headless tools finish."""
 
@@ -237,6 +281,7 @@ def run_semantic_align(
         return
 
     runtime = semantics_runtime or {}
+    reuse_samples: Set[Path] = {Path(p).resolve() for p in (reuse_aligned_db_samples or set())}
 
     for sample_path in sample_paths:
         cmd = [sys.executable, str(SEMANTIC_ALIGN_SCRIPT), "--sample", str(sample_path)]
@@ -284,6 +329,23 @@ def run_semantic_align(
             cmd.extend(["--ghidra-dir", str(ghidra_dir), "--ida-dir", str(ida_dir)])
             if db_for_sample:
                 cmd.extend(["--db", str(db_for_sample)])
+
+            # 若该样本选择了“导出缓存继续”，且存在对齐 DB，则复用 DB 跳过 alignment_loader。
+            # 这样可避免每次都从对齐构建重新开始，保持语义阶段进度可续跑。
+            reuse_db_candidate = db_for_sample or default_db_path
+            if sample_path.resolve() in reuse_samples and reuse_db_candidate.exists():
+                if not db_for_sample:
+                    cmd.extend(["--db", str(reuse_db_candidate)])
+                cmd.append("--no-align")
+                print(
+                    f"[ReBindDemo] 检测到 {sample_path.name} 已有对齐 DB，"
+                    f"将复用并跳过 alignment_loader: {reuse_db_candidate}"
+                )
+            elif sample_path.resolve() in reuse_samples:
+                print(
+                    f"[ReBindDemo] {sample_path.name} 选择了导出缓存，但未找到可复用对齐 DB，"
+                    "将执行 alignment_loader 重建。"
+                )
 
         if semantics_config_path:
             cmd.extend(["--config", str(semantics_config_path)])
@@ -890,6 +952,11 @@ def main():
         help="启用详细输出"
     )
     parser.add_argument(
+        "--force-export",
+        action="store_true",
+        help="强制重新运行 Ghidra/IDA 导出，即使输出目录已存在。",
+    )
+    parser.add_argument(
         "--phase5-only",
         action="store_true",
         help="跳过 Ghidra/IDA headless 分析，直接运行语义对齐 Phase 5（要求已存在 <sample>.db）。",
@@ -1224,71 +1291,147 @@ def main():
                     handler.setLevel(10)
         
         # 确定使用的工具
+        force_export = bool(args.force_export)
+
         if args.ghidra:
             if not demo.ghidra_adapter:
                 print("错误: Ghidra 适配器不可用", file=sys.stderr)
                 sys.exit(1)
-            
-            output_dirs = demo.analyze_with_ghidra(args.input_files)
-            
-            print("\n" + "="*60)
-            print("Ghidra 分析完成!")
-            print("输出目录:")
-            for output_dir in output_dirs:
-                print(f"  - {output_dir}")
-            print("="*60)
-            
+
+            ghidra_suffix = (
+                demo.ghidra_adapter.config.get("output", {}) or {}
+            ).get("dir_suffix", "_ghidemo")
+
+            cached, uncached = [], []
+            for sp, raw in zip(sample_paths, args.input_files):
+                out = _expected_output_dir(sp, ghidra_suffix)
+                if _export_dir_has_content(out):
+                    cached.append((sp, raw, out))
+                else:
+                    uncached.append(raw)
+
+            files_to_run = list(uncached)
+            if cached and not force_export:
+                use_cache = _prompt_use_cache(
+                    [f"{sp.name}  (Ghidra: {out})" for sp, _, out in cached]
+                )
+                if not use_cache:
+                    files_to_run.extend(raw for _, raw, _ in cached)
+            elif force_export and cached:
+                files_to_run.extend(raw for _, raw, _ in cached)
+
+            if files_to_run:
+                output_dirs = demo.analyze_with_ghidra(files_to_run)
+                print("\n" + "="*60)
+                print("Ghidra 分析完成!")
+                print("输出目录:")
+                for output_dir in output_dirs:
+                    print(f"  - {output_dir}")
+                print("="*60)
+
         elif args.ida:
             if not demo.ida_adapter:
                 print("错误: IDA 适配器不可用", file=sys.stderr)
                 sys.exit(1)
-            
-            output_dirs = demo.analyze_with_ida(args.input_files)
-            
-            print("\n" + "="*60)
-            print("IDA 分析完成!")
-            print("输出目录:")
-            for output_dir in output_dirs:
-                print(f"  - {output_dir}")
-            print("="*60)
-            
+
+            ida_suffix = (
+                demo.ida_adapter.config.get("output", {}) or {}
+            ).get("dir_suffix", "_idademo")
+
+            cached, uncached = [], []
+            for sp, raw in zip(sample_paths, args.input_files):
+                out = _expected_output_dir(sp, ida_suffix)
+                if _export_dir_has_content(out):
+                    cached.append((sp, raw, out))
+                else:
+                    uncached.append(raw)
+
+            files_to_run = list(uncached)
+            if cached and not force_export:
+                use_cache = _prompt_use_cache(
+                    [f"{sp.name}  (IDA: {out})" for sp, _, out in cached]
+                )
+                if not use_cache:
+                    files_to_run.extend(raw for _, raw, _ in cached)
+            elif force_export and cached:
+                files_to_run.extend(raw for _, raw, _ in cached)
+
+            if files_to_run:
+                output_dirs = demo.analyze_with_ida(files_to_run)
+                print("\n" + "="*60)
+                print("IDA 分析完成!")
+                print("输出目录:")
+                for output_dir in output_dirs:
+                    print(f"  - {output_dir}")
+                print("="*60)
+
         else:
             # 默认使用两个工具
             if not demo.ghidra_adapter and not demo.ida_adapter:
                 print("错误: 没有可用的分析适配器", file=sys.stderr)
                 sys.exit(1)
-            
-            results = demo.analyze_with_both(args.input_files)
-            
-            print("\n" + "="*60)
-            print("分析完成!")
-            
-            if results.get('ghidra'):
-                print("\nGhidra 输出目录:")
-                for output_dir in results['ghidra']:
-                    print(f"  - {output_dir}")
-            
-            if results.get('ida'):
-                print("\nIDA 输出目录:")
-                for output_dir in results['ida']:
-                    print(f"  - {output_dir}")
-            
-            print("="*60)
+
+            ghidra_suffix = (
+                (demo.ghidra_adapter.config.get("output", {}) or {}).get("dir_suffix", "_ghidemo")
+                if demo.ghidra_adapter else "_ghidemo"
+            )
+            ida_suffix = (
+                (demo.ida_adapter.config.get("output", {}) or {}).get("dir_suffix", "_idademo")
+                if demo.ida_adapter else "_idademo"
+            )
+
+            cached, uncached = [], []
+            for sp, raw in zip(sample_paths, args.input_files):
+                ghidra_out = _expected_output_dir(sp, ghidra_suffix)
+                ida_out = _expected_output_dir(sp, ida_suffix)
+                ghidra_ok = _export_dir_has_content(ghidra_out) if demo.ghidra_adapter else True
+                ida_ok = _export_dir_has_content(ida_out) if demo.ida_adapter else True
+                if ghidra_ok and ida_ok:
+                    cached.append((sp, raw))
+                else:
+                    uncached.append(raw)
+
+            files_needing_export = list(uncached)
+            reuse_aligned_db_samples: Set[Path] = set()
+            if cached and not force_export:
+                use_cache = _prompt_use_cache(
+                    [f"{sp.name}  (Ghidra + IDA 导出)" for sp, _ in cached]
+                )
+                if not use_cache:
+                    files_needing_export.extend(raw for _, raw in cached)
+                else:
+                    reuse_aligned_db_samples.update(sp.resolve() for sp, _ in cached)
+            elif force_export and cached:
+                files_needing_export.extend(raw for _, raw in cached)
+
+            if files_needing_export:
+                results = demo.analyze_with_both(files_needing_export)
+
+                print("\n" + "="*60)
+                print("分析完成!")
+
+                if results.get('ghidra'):
+                    print("\nGhidra 输出目录:")
+                    for output_dir in results['ghidra']:
+                        print(f"  - {output_dir}")
+
+                if results.get('ida'):
+                    print("\nIDA 输出目录:")
+                    for output_dir in results['ida']:
+                        print(f"  - {output_dir}")
+
+                print("="*60)
+
             # 语义对齐仅在同时使用 Ghidra + IDA 后执行
             if args.both and demo.ghidra_adapter and demo.ida_adapter:
-                ghidra_suffix = (
-                    demo.ghidra_adapter.config.get("output", {}) or {}
-                ).get("dir_suffix", "_ghidemo")
-                ida_suffix = (
-                    demo.ida_adapter.config.get("output", {}) or {}
-                ).get("dir_suffix", "_idademo")
                 run_semantic_align(
                     sample_paths,
                     semantics_config_path=demo.semantics_config_path,
-                    ghidra_dir_suffix=str(ghidra_suffix),
-                    ida_dir_suffix=str(ida_suffix),
+                    ghidra_dir_suffix=ghidra_suffix,
+                    ida_dir_suffix=ida_suffix,
                     semantics_runtime=demo.semantics_runtime,
                     db_path_override=db_override,
+                    reuse_aligned_db_samples=reuse_aligned_db_samples,
                 )
                 if args.phase7_after_align:
                     phase7_output = Path(args.phase7_output).expanduser().resolve() if args.phase7_output else None

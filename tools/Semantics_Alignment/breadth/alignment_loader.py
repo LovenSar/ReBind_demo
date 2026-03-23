@@ -55,6 +55,53 @@ from kp.kp_utils import install_print_with_location
 
 install_print_with_location()
 
+# Ghidra 导出文件名使用裸十六进制（如 00406080_init.asm），
+# IDA 使用 0x 前缀（如 0x406080_init_proc.asm），统一匹配。
+_HEX_ADDR_STEM_RE = re.compile(r"^(?:0x)?[0-9A-Fa-f]+_")
+
+
+def _extract_entry_va_from_header(lines: list, max_lines: int = 6) -> Optional[int]:
+    """从 .asm / .c 文件头部注释中提取 entry VA。
+
+    兼容:
+      - Ghidra:  ``; Address: 00406080``  /  ``// Address: 00406080``
+      - IDA:     ``; Start EA: 0x406080`` /  ``// Start EA: 0x406080``
+    """
+    for line in lines[:max_lines]:
+        s = line.strip()
+        for keyword in ("Start EA:", "Address:"):
+            if keyword in s:
+                after = s.split(keyword, 1)[1].strip()
+                token = after.split()[0] if after.split() else after
+                va = _parse_hex_int(token)
+                if va is not None:
+                    return va
+    return None
+
+
+def _extract_func_name_from_header(lines: list, max_lines: int = 6) -> Optional[str]:
+    """从文件头部注释中提取函数名 (``; Function: xxx`` / ``// Function: xxx``)。"""
+    for line in lines[:max_lines]:
+        s = line.strip()
+        if s.startswith("; Function:") or s.startswith("// Function:"):
+            return s.split(":", 1)[1].strip() or None
+    return None
+
+
+def _extract_va_from_stem(stem: str) -> Optional[int]:
+    """从文件名 stem 中提取十六进制入口地址。
+
+    兼容 ``0x406080_main`` 和 ``00406080_init``。
+    """
+    m = re.match(r"(?:0x)?([0-9A-Fa-f]+)_", stem)
+    return _parse_hex_int(m.group(1)) if m else None
+
+
+def _extract_name_from_stem(stem: str) -> Optional[str]:
+    """从文件名 stem 中提取函数名部分（地址之后的内容）。"""
+    m = re.match(r"(?:0x)?[0-9A-Fa-f]+_(.+)", stem)
+    return m.group(1) if m else None
+
 
 @dataclass
 class ToolInfo:
@@ -614,6 +661,7 @@ def _parse_segments_ghidra(
     - 如果 view_id < 0，则仅做“干跑”（dry run）：计算 image_base，但不写入数据库。
     """
     image_base: Optional[int] = None
+    min_start_va: Optional[int] = None
     dry_run = view_id < 0
 
     for row in _read_csv(csv_path):
@@ -648,9 +696,15 @@ def _parse_segments_ghidra(
                 (view_id, name, start_va, end_va, length, perm_r, perm_w, perm_x, raw_perm),
             )
 
-        # Ghidra 中 Headers 段通常从 ImageBase 开始
         if name == "Headers":
             image_base = start_va
+        if min_start_va is None or start_va < min_start_va:
+            min_start_va = start_va
+
+    # Fallback: 若 Ghidra 导出无 Headers 段（某些版本/架构），
+    # 与 IDA 策略一致，取所有段的最小 start_va。
+    if image_base is None:
+        image_base = min_start_va
 
     if not dry_run:
         conn.commit()
@@ -1006,30 +1060,19 @@ def _parse_asm_functions_and_instructions(
     if not disasm_dir.is_dir():
         return
 
-    # 只处理以 0x 开头的函数级文件，忽略其他杂项
-    asm_files = sorted(f for f in disasm_dir.glob("*.asm") if f.stem.startswith("0x"))
+    asm_files = sorted(
+        f for f in disasm_dir.glob("*.asm") if _HEX_ADDR_STEM_RE.match(f.stem)
+    )
 
     for asm_path in asm_files:
         with asm_path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        # 解析头部注释，获取函数名和入口地址
-        func_name = None
-        entry_va = None
-        for line in lines[:5]:  # 前几行足够
-            s = line.strip()
-            if s.startswith("; Function:"):
-                # 统一截取冒号后部分
-                func_name = s.split(":", 1)[1].strip()
-            if "Address:" in s or "Start EA:" in s:
-                m = re.search(r"0x[0-9A-Fa-f]+", s)
-                if m:
-                    entry_va = _parse_hex_int(m.group(0))
-        # 如果头部未解析出函数信息，尝试从文件名中解析地址
+        func_name = _extract_func_name_from_header(lines, max_lines=5)
+        entry_va = _extract_entry_va_from_header(lines, max_lines=5)
+
         if entry_va is None:
-            m = re.match(r"0x([0-9A-Fa-f]+)_", asm_path.stem)
-            if m:
-                entry_va = _parse_hex_int(m.group(1))
+            entry_va = _extract_va_from_stem(asm_path.stem)
         if entry_va is None:
             continue
         if address_offset:
@@ -1038,12 +1081,7 @@ def _parse_asm_functions_and_instructions(
         if entry_va < -(1 << 63) or entry_va > ((1 << 63) - 1):
             continue
         if func_name is None:
-            # 从文件名中截取函数名部分
-            m = re.match(r"0x[0-9A-Fa-f]+_(.+)", asm_path.stem)
-            if m:
-                func_name = m.group(1)
-            else:
-                func_name = asm_path.stem
+            func_name = _extract_name_from_stem(asm_path.stem) or asm_path.stem
 
         # 查找或插入 functions 记录
         cur = conn.execute(
@@ -1158,28 +1196,18 @@ def _parse_pseudocode_functions(
     c_files = sorted(
         f
         for f in pseudo_dir.glob("*.c")
-        if re.match(r"0x[0-9A-Fa-f]+_.*\.c$", f.name)
+        if _HEX_ADDR_STEM_RE.match(f.stem)
     )
 
     for c_path in c_files:
         with c_path.open("r", encoding="utf-8") as f:
             lines = f.readlines()
 
-        func_name = None
-        entry_va = None
-        # 解析前几行注释
-        for line in lines[:6]:
-            s = line.strip()
-            if s.startswith("// Function:"):
-                func_name = s.split(":", 1)[1].strip()
-            if "Address:" in s or "Start EA:" in s:
-                m = re.search(r"0x[0-9A-Fa-f]+", s)
-                if m:
-                    entry_va = _parse_hex_int(m.group(0))
+        func_name = _extract_func_name_from_header(lines, max_lines=6)
+        entry_va = _extract_entry_va_from_header(lines, max_lines=6)
+
         if entry_va is None:
-            m = re.match(r"0x([0-9A-Fa-f]+)_", c_path.stem)
-            if m:
-                entry_va = _parse_hex_int(m.group(1))
+            entry_va = _extract_va_from_stem(c_path.stem)
         if entry_va is None:
             continue
         if address_offset:
@@ -1188,11 +1216,7 @@ def _parse_pseudocode_functions(
         if entry_va < -(1 << 63) or entry_va > ((1 << 63) - 1):
             continue
         if func_name is None:
-            m = re.match(r"0x[0-9A-Fa-f]+_(.+)\.c", c_path.name)
-            if m:
-                func_name = m.group(1)
-            else:
-                func_name = c_path.stem
+            func_name = _extract_name_from_stem(c_path.stem) or c_path.stem
 
         # 查找或创建对应的 functions 记录
         cur = conn.execute(
@@ -1530,6 +1554,188 @@ def _unique_sheet_title(base: str, used: Set[str]) -> str:
     return candidate
 
 
+def cross_validate_views(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """加载完成后的交叉验证：对比 Ghidra/IDA 两个视图的覆盖率和一致性。
+
+    返回包含验证结果的字典，同时向 stdout 打印人类可读的摘要。
+    """
+    cur = conn.cursor()
+    report: Dict[str, Any] = {"ok": True, "warnings": []}
+
+    # 收集每个 view 的工具名和 ID
+    cur.execute(
+        "SELECT bv.id, t.name FROM binary_views bv JOIN tools t ON bv.tool_id = t.id ORDER BY bv.id;"
+    )
+    views = cur.fetchall()
+    if len(views) < 2:
+        msg = f"[CrossValidation] 仅有 {len(views)} 个视图，跳过交叉验证。"
+        print(msg)
+        report["warnings"].append(msg)
+        return report
+
+    view_info = {int(vid): str(tname) for vid, tname in views}
+    view_ids = list(view_info.keys())
+
+    print("\n" + "=" * 72)
+    print("[CrossValidation] Ghidra/IDA 对齐数据交叉验证")
+    print("=" * 72)
+
+    # (A) 每个视图的数据量
+    table_names = ["segments", "sections", "symbols", "functions", "instructions", "pseudo_functions", "xrefs", "strings"]
+    print(f"\n{'表名':<22s}", end="")
+    for vid in view_ids:
+        print(f"  {view_info[vid]:>10s}(v{vid})", end="")
+    print()
+    print("-" * (22 + 16 * len(view_ids)))
+
+    view_func_counts: Dict[int, int] = {}
+    for tbl in table_names:
+        print(f"{tbl:<22s}", end="")
+        for vid in view_ids:
+            cnt = cur.execute(
+                f"SELECT COUNT(*) FROM \"{tbl}\" WHERE view_id = ?;", (vid,)
+            ).fetchone()[0]
+            print(f"  {cnt:>16d}", end="")
+            if tbl == "functions":
+                view_func_counts[vid] = cnt
+        print()
+
+    # (B) 检查是否有视图函数数为 0
+    for vid, cnt in view_func_counts.items():
+        if cnt == 0:
+            msg = (
+                f"[CrossValidation] 警告: {view_info[vid]}(view_id={vid}) 的 functions 表为空！"
+                "这意味着该视图的 .asm/.c 文件未被正确加载。"
+            )
+            print(f"\n  *** {msg}")
+            report["warnings"].append(msg)
+            report["ok"] = False
+
+    # (C) 函数 entry_va 交叉匹配
+    if all(c > 0 for c in view_func_counts.values()):
+        v1, v2 = view_ids[0], view_ids[1]
+        t1, t2 = view_info[v1], view_info[v2]
+
+        set1 = {
+            int(r[0]) for r in cur.execute(
+                "SELECT DISTINCT entry_va FROM functions WHERE view_id = ?;", (v1,)
+            )
+        }
+        set2 = {
+            int(r[0]) for r in cur.execute(
+                "SELECT DISTINCT entry_va FROM functions WHERE view_id = ?;", (v2,)
+            )
+        }
+
+        matched = set1 & set2
+        only1 = set1 - set2
+        only2 = set2 - set1
+        match_rate1 = len(matched) / len(set1) * 100 if set1 else 0
+        match_rate2 = len(matched) / len(set2) * 100 if set2 else 0
+
+        print(f"\n[CrossValidation] 函数 entry_va 交叉匹配:")
+        print(f"  {t1} 函数数: {len(set1)}")
+        print(f"  {t2} 函数数: {len(set2)}")
+        print(f"  匹配函数数 (entry_va 相同): {len(matched)}")
+        print(f"  匹配率: {t1}={match_rate1:.1f}%, {t2}={match_rate2:.1f}%")
+        print(f"  {t1} 独有: {len(only1)},  {t2} 独有: {len(only2)}")
+
+        report["matched"] = len(matched)
+        report["total_v1"] = len(set1)
+        report["total_v2"] = len(set2)
+        report["match_rate_v1"] = match_rate1
+        report["match_rate_v2"] = match_rate2
+
+        if match_rate1 < 30 or match_rate2 < 30:
+            msg = (
+                f"[CrossValidation] 警告: 函数匹配率过低 ({t1}={match_rate1:.1f}%, {t2}={match_rate2:.1f}%)，"
+                "可能存在基址偏移不正确或导出格式不一致的问题。"
+            )
+            print(f"  *** {msg}")
+            report["warnings"].append(msg)
+            report["ok"] = False
+
+        # (D) 匹配函数中的伪代码覆盖率
+        if matched:
+            pseudo_vas_v1 = {
+                int(r[0]) for r in cur.execute(
+                    "SELECT DISTINCT entry_va FROM pseudo_functions WHERE view_id = ?;", (v1,)
+                )
+            }
+            pseudo_vas_v2 = {
+                int(r[0]) for r in cur.execute(
+                    "SELECT DISTINCT entry_va FROM pseudo_functions WHERE view_id = ?;", (v2,)
+                )
+            }
+            both_pseudo = matched & pseudo_vas_v1 & pseudo_vas_v2
+            either_pseudo = matched & (pseudo_vas_v1 | pseudo_vas_v2)
+            pseudo_rate = len(both_pseudo) / len(matched) * 100 if matched else 0
+
+            print(f"\n[CrossValidation] 匹配函数的伪代码覆盖:")
+            print(f"  双视图均有伪代码: {len(both_pseudo)} / {len(matched)} ({pseudo_rate:.1f}%)")
+            print(f"  至少一方有伪代码: {len(either_pseudo)} / {len(matched)}")
+
+            report["pseudo_both"] = len(both_pseudo)
+            report["pseudo_either"] = len(either_pseudo)
+
+        # (E) 符号名一致性采样
+        if matched:
+            sample_vas = sorted(matched)[:20]
+            placeholders = ",".join("?" for _ in sample_vas)
+            name_by_va_v1: Dict[int, str] = {}
+            name_by_va_v2: Dict[int, str] = {}
+            for va, nm in cur.execute(
+                f"SELECT entry_va, name FROM functions WHERE view_id = ? AND entry_va IN ({placeholders});",
+                [v1, *sample_vas],
+            ):
+                name_by_va_v1[int(va)] = str(nm)
+            for va, nm in cur.execute(
+                f"SELECT entry_va, name FROM functions WHERE view_id = ? AND entry_va IN ({placeholders});",
+                [v2, *sample_vas],
+            ):
+                name_by_va_v2[int(va)] = str(nm)
+
+            name_agree = 0
+            for va in sample_vas:
+                n1 = name_by_va_v1.get(va, "")
+                n2 = name_by_va_v2.get(va, "")
+                if n1 and n2 and n1.lower() == n2.lower():
+                    name_agree += 1
+
+            print(f"\n[CrossValidation] 匹配函数名一致性 (采样 {len(sample_vas)} 个):")
+            print(f"  名称完全一致: {name_agree} / {len(sample_vas)}")
+            if name_agree < len(sample_vas):
+                diffs = []
+                for va in sample_vas:
+                    n1 = name_by_va_v1.get(va, "?")
+                    n2 = name_by_va_v2.get(va, "?")
+                    if n1.lower() != n2.lower():
+                        diffs.append(f"    0x{va:08X}: {t1}={n1}  vs  {t2}={n2}")
+                if diffs:
+                    print("  名称差异（正常，不同工具可能有不同命名）:")
+                    for d in diffs[:10]:
+                        print(d)
+
+    # (F) image_base 一致性
+    cur.execute("SELECT id, image_base FROM binary_views ORDER BY id;")
+    bases = cur.fetchall()
+    if len(bases) >= 2:
+        b1, b2 = bases[0][1], bases[1][1]
+        print(f"\n[CrossValidation] Image base: {view_info[bases[0][0]]}=0x{b1 or 0:X}, {view_info[bases[1][0]]}=0x{b2 or 0:X}")
+        if b1 is not None and b2 is not None and b1 != b2:
+            msg = f"[CrossValidation] 提示: image_base 不一致 (0x{b1:X} vs 0x{b2:X})，请确认基址偏移设置。"
+            print(f"  *** {msg}")
+            report["warnings"].append(msg)
+
+    status = "PASS" if report["ok"] else "NEEDS ATTENTION"
+    print(f"\n[CrossValidation] 状态: {status}")
+    if report["warnings"]:
+        print(f"[CrossValidation] 共 {len(report['warnings'])} 条警告。")
+    print("=" * 72 + "\n")
+
+    return report
+
+
 def _quote_sqlite_identifier(name: str) -> str:
     """对 SQLite 标识符加双引号以防注入。"""
 
@@ -1811,9 +2017,13 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                         f"[AlignmentLoader] 检测到 Ghidra/IDA 基址偏移: "
                         f"offset=0x{offset:X} ({offset})，将在写入数据库前对 Ghidra VA 执行 va-offset 对齐到 IDA 坐标系。"
                     )
+                elif offset == 0:
+                    print(
+                        "[AlignmentLoader] Ghidra/IDA 基址一致 (offset=0)，无需偏移调整。"
+                    )
                 else:
                     print(
-                        "[AlignmentLoader] 未能可靠推断 Ghidra/IDA 基址偏移，使用默认 offset=0。"
+                        "[AlignmentLoader] 未能可靠推断 Ghidra/IDA 基址偏移（同名函数不足），使用默认 offset=0。"
                     )
         else:
             print(
@@ -1838,6 +2048,9 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
                 config_path=None,
                 tool_version=args.ida_version,
             )
+        # 交叉验证：加载完成后检查两个视图的一致性和覆盖率
+        if ghidra_dir is not None and ida_dir is not None:
+            cross_validate_views(conn)
     finally:
         conn.close()
 

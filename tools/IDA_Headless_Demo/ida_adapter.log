@@ -1453,3 +1453,24 @@
 2026-03-21 16:12:39,651 - ida_adapter - INFO - 所有脚本执行完成
 2026-03-21 16:12:39,651 - ida_adapter - INFO - 处理输出文件...
 2026-03-21 16:12:39,651 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-21 22:56:53,040 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b
+2026-03-21 22:56:53,040 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-21 22:56:53,045 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-21 22:57:04,197 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-21 22:57:04,197 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-21 22:57:04,198 - ida_adapter - INFO - 处理输出文件...
+2026-03-21 22:57:04,198 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-21 23:31:17,141 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b
+2026-03-21 23:31:17,142 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-21 23:31:17,146 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-21 23:31:28,512 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-21 23:31:28,512 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-21 23:31:28,513 - ida_adapter - INFO - 处理输出文件...
+2026-03-21 23:31:28,513 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-22 00:14:10,342 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b
+2026-03-22 00:14:10,344 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-03-22 00:14:10,349 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-03-22 00:14:21,494 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-03-22 00:14:21,495 - ida_adapter - INFO - 所有脚本执行完成
+2026-03-22 00:14:21,495 - ida_adapter - INFO - 处理输出文件...
+2026-03-22 00:14:21,495 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo

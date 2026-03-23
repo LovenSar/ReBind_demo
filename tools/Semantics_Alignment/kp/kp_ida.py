@@ -122,23 +122,106 @@ def wait_for_ida_server(
 
 
 class IDAService:
-    """封装与 idat_server 的 HTTP 通信与错误处理。"""
+    """封装与 idat_server 的 HTTP 通信与错误处理。
 
-    def __init__(self, url: Optional[str], enabled: bool = False):
+    内置看门狗（watchdog）：连续 *max_consecutive_fails* 次连接失败后自动降级为
+    离线模式（``degraded=True``），流水线继续运行但跳过所有 IDA 同步。
+    降级后每 *recover_interval_s* 秒尝试 ping 一次，若 IDA 恢复则自动重新启用。
+    """
+
+    def __init__(
+        self,
+        url: Optional[str],
+        enabled: bool = False,
+        *,
+        max_consecutive_fails: int = 3,
+        connect_timeout_s: float = 60.0,
+        recover_interval_s: float = 120.0,
+    ):
         self.url = (url or "").strip() or "http://127.0.0.1:12345"
         self.enabled = bool(enabled) and (requests is not None) and bool(self.url)
         self._checked_online = False
 
+        # --- watchdog state ---
+        self._consecutive_fails: int = 0
+        self._max_consecutive_fails: int = max(1, int(max_consecutive_fails))
+        self._degraded: bool = False
+        self._degraded_count: int = 0
+        self._connect_timeout_s: float = float(connect_timeout_s)
+        self._recover_interval_s: float = float(recover_interval_s)
+        self._last_recover_attempt: float = 0.0
+
+    # ── watchdog helpers ──────────────────────────────────────
+
+    @property
+    def degraded(self) -> bool:
+        """True when IDA has been auto-disabled due to consecutive failures."""
+        return self._degraded
+
+    def _record_success(self) -> None:
+        if self._consecutive_fails > 0 or self._degraded:
+            was_degraded = self._degraded
+            self._consecutive_fails = 0
+            self._degraded = False
+            if was_degraded:
+                msg = "[IDA-Watchdog] IDA 连接已恢复，重新启用实时同步模式。"
+                print(msg)
+                logger.info(msg)
+
+    def _record_failure(self) -> None:
+        self._consecutive_fails += 1
+        if not self._degraded and self._consecutive_fails >= self._max_consecutive_fails:
+            self._degraded = True
+            self._degraded_count += 1
+            self._last_recover_attempt = time.time()
+            msg = (
+                f"[IDA-Watchdog] 连续 {self._consecutive_fails} 次连接 IDA 失败，"
+                f"自动降级为离线模式（仅写入 DB，跳过 IDA 同步）。"
+                f" 将每 {self._recover_interval_s:.0f}s 尝试重连。"
+            )
+            print(msg)
+            logger.warning(msg)
+
+    def _should_try_recover(self) -> bool:
+        if not self._degraded:
+            return False
+        return (time.time() - self._last_recover_attempt) >= self._recover_interval_s
+
+    def try_recover(self) -> bool:
+        """Attempt to ping IDA and exit degraded mode if successful."""
+        if not self.enabled or not self._degraded:
+            return not self._degraded
+        self._last_recover_attempt = time.time()
+        try:
+            resp = requests.post(self.url, json={"action": "ping"}, timeout=3.0)  # type: ignore[union-attr]
+            if resp.status_code == 200:
+                self._record_success()
+                self._checked_online = True
+                return True
+        except Exception:
+            pass
+        logger.debug("[IDA-Watchdog] 恢复尝试失败，继续离线模式。")
+        return False
+
+    # ── public API ────────────────────────────────────────────
+
     def ensure_online(self) -> None:
-        if not self.enabled:
+        if not self.enabled or self._degraded:
             return
         if self._checked_online:
             return
         try:
-            ok = wait_for_ida_server(self.url)
+            ok = wait_for_ida_server(
+                self.url, max_wait_seconds=self._connect_timeout_s,
+            )
             self._checked_online = bool(ok)
+            if ok:
+                self._record_success()
+            else:
+                self._record_failure()
         except Exception:
             self._checked_online = False
+            self._record_failure()
 
     def request(
         self,
@@ -150,8 +233,17 @@ class IDAService:
         if not self.enabled:
             return None
 
+        if self._degraded:
+            if self._should_try_recover():
+                if not self.try_recover():
+                    return None
+            else:
+                return None
+
         if ensure_online:
             self.ensure_online()
+            if self._degraded:
+                return None
 
         full_payload: Dict[str, Any] = {"action": action}
         if payload:
@@ -161,6 +253,7 @@ class IDAService:
             resp = requests.post(self.url, json=full_payload, timeout=float(timeout))  # type: ignore[union-attr]
         except Exception as exc:
             self._checked_online = False
+            self._record_failure()
             logger.error("[IDA-Sync] %s failed: %s", action, exc)
             return None
 
@@ -188,6 +281,7 @@ class IDAService:
             logger.warning("[IDA-Sync] %s remote error: %s", action, data)
             return None
 
+        self._record_success()
         return data
 
     def rename_global(self, ea: int, name: str, type_str: str = "") -> Optional[Dict[str, Any]]:
@@ -265,7 +359,38 @@ class IDAService:
             )
         )
 
-    def save_and_exit(self, timeout: float = 2.0) -> None:
+    def save_and_exit(self, timeout: float = 45.0) -> None:
         if not self.enabled:
             return
-        requests.post(self.url, json={"action": "save_and_exit"}, timeout=float(timeout))  # type: ignore[union-attr]
+        if requests is None:
+            return
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(
+                    self.url,
+                    json={"action": "save_and_exit"},
+                    timeout=float(timeout),
+                )
+                if resp.status_code and 200 <= resp.status_code < 300:
+                    return
+                last_exc = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            except Exception as exc:
+                last_exc = exc
+                msg = str(exc).lower()
+                if any(
+                    k in msg
+                    for k in (
+                        "connection reset",
+                        "broken pipe",
+                        "remote end closed",
+                        "connection aborted",
+                    )
+                ):
+                    logger.info(
+                        "[IDA] save_and_exit 连接中断（可能 IDA 已在保存后退出）: %s", exc
+                    )
+                    return
+            time.sleep(0.4 * attempt)
+        if last_exc is not None:
+            logger.warning("[IDA] save_and_exit 失败: %s", last_exc)
