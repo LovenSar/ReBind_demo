@@ -68,6 +68,8 @@ python scripts/phase7_stress.py \
 
 一份样本使用 `balanced` 时会产生 8 次运行：legacy 运行 2 次，三个 practical 预算各运行 2 次。
 
+清单中的 `defaults.repeat` 和 `defaults.practical_budgets` 可以覆盖预设。命令行的 `--repeat` 和 `--practical-budgets` 优先级最高。脚本默认拒绝超过 100 次的矩阵，需要明确提高 `--max-runs` 才会继续。
+
 ## 4. 无 API 成本检查
 
 ```bash
