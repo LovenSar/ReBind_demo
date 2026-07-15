@@ -1,0 +1,32 @@
+{
+  "defaults": {
+    "timeout_seconds": 7200,
+    "engines": ["legacy", "practical"],
+    "practical_budgets": [12, 24, 40],
+    "common_args": [
+      "--goal-limit", "3",
+      "--max-generations", "2",
+      "--max-paths", "120",
+      "--max-compare-nodes", "12"
+    ]
+  },
+  "samples": [
+    {
+      "name": "gank",
+      "input": "../tmp/gank/gank.apk",
+      "db": "../tmp/gank/gank.db",
+      "binary_id": 1,
+      "ida_dir": "../tmp/gank/gank_idademo",
+      "goal_keywords": ["auth", "network"],
+      "expectations": {
+        "goal_vas": ["0x00101000"],
+        "path_subsequences": [
+          ["0x00100000", "0x00100500", "0x00101000"]
+        ],
+        "profile_tokens": {
+          "0x00101000": ["auth", "packet"]
+        }
+      }
+    }
+  ]
+}
