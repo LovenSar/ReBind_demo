@@ -20,6 +20,7 @@ if str(_SA_ROOT) not in sys.path:
 
 from depth import engine
 from depth.practical_accuracy import PracticalSettings, install_practical_patches
+from depth.practical_evidence import install_evidence_extensions
 
 
 def _parse_practical_args(argv: List[str]) -> tuple[argparse.Namespace, List[str]]:
@@ -41,6 +42,7 @@ def main() -> int:
         min_profile_confidence=max(0, min(100, int(practical.practical_min_profile_confidence))),
     )
     install_practical_patches(engine, settings)
+    install_evidence_extensions()
 
     # The legacy parser still owns all standard Phase7 options. The practical
     # neighborhood interprets lambda as a node budget, so append the selected
