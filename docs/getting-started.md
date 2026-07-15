@@ -36,6 +36,7 @@ python rebind_demo.py /path/to/sample.bin
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
+python -m pytest -q
 ```
 
 ## 文档索引

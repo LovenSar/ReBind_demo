@@ -9,8 +9,8 @@
 | `tools/Ghidra_Headless_Demo/` | Ghidra：`ExtractAll.py` 单次导出（`*_output` / `*_disassembly` / `*_pseudocode`）+ `ghidra_adapter.py` |
 | `tools/IDA_Headless_Demo/` | IDA：`ExtractAll_IDA.py` 单次会话全量导出 + `ida_adapter.py` |
 | `tools/Semantics_Alignment/` | 对齐数据库构建、Phase1–7 流水线、`kp/` 公共库、`phases/` 分阶段实现 |
-| `tests/` | `unittest` 用例（按模块路径加载 `tools/...` 下脚本） |
-| `scripts/` | 与主流程无关的示例/调试脚本（如第三方 Chat API 探测） |
+| `tests/` | `unittest` 与可选真实样本 `pytest` 回归（按模块路径加载 `tools/...` 下脚本） |
+| `scripts/` | 自检与预处理入口，包括 `self_check.py`、`phase7_preprocess.py` |
 | `docs/` | 架构说明、深度引擎规范、本目录索引 |
 | `tmp/` | 本地临时产物（默认被 `.gitignore` 忽略） |
 | `deep_llm_runs/` | 深度引擎运行输出目录（建议仅本地使用，已加入 `.gitignore`） |
@@ -20,7 +20,7 @@
 | 文件 | 角色 |
 |------|------|
 | `tools/Semantics_Alignment/breadth/` | **广度优先**：`pipeline.py`（6 步流水线入口）、`alignment_loader.py`、`phases/`（Phase1–6） |
-| `tools/Semantics_Alignment/depth/` | **深度优先**：`engine.py`（深度分析入口）、`deep_path_dfs.py`、`strict_align.py`、`deep_path_step.py` |
+| `tools/Semantics_Alignment/depth/` | **深度优先**：`engine.py`、`deep_path_dfs.py`、`strict_align.py`、`deep_path_step.py`、`phase7_task_config.py`、`phase7_preprocess.py`、`gen_observability.py` |
 | `tools/Semantics_Alignment/kp/`、`pmt/` 等 | 共享能力（两种工作流共用） |
 | `tools/Semantics_Alignment/deep_path_dfs.py` | 深路径 DFS 分析 |
 

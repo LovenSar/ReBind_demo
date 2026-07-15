@@ -52,7 +52,12 @@ def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[st
     return merged
 
 
-def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Optional[Path] = None) -> Dict[str, Any]:
+def load_semantics_config(
+    config_path: Optional[str] = None,
+    *,
+    base_dir: Optional[Path] = None,
+    platform_key: Optional[str] = None,
+) -> Dict[str, Any]:
     """加载语义流水线配置。
 
     - 默认读取仓库根目录 ``config.yaml``（唯一配置源）。
@@ -79,8 +84,8 @@ def load_semantics_config(config_path: Optional[str] = None, *, base_dir: Option
         raise RuntimeError(f"无法解析配置文件 {path}：{exc}") from exc
 
     if "semantics" in data or "platforms" in data:
-        platform_key = project_config.detect_platform_key()
-        return project_config.merge_semantics_config_dict(data, platform_key)
+        effective_platform = platform_key or project_config.detect_platform_key()
+        return project_config.merge_semantics_config_dict(data, effective_platform)
 
     return data
 

@@ -112,6 +112,18 @@ def _load_backup_profile(
 # LLM 调用（带 trace 日志）
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _redact_request_data(value: Any, key: str = "") -> Any:
+    """递归脱敏请求参数，原始 LLM 日志也绝不写入认证信息。"""
+    key_lower = str(key or "").lower()
+    if any(token in key_lower for token in ("api_key", "authorization", "token", "secret", "password")):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {str(k): _redact_request_data(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_request_data(item) for item in value]
+    return value
+
+
 def _call_llm_with_trace(
     *,
     prompt: str,
@@ -144,7 +156,7 @@ def _call_llm_with_trace(
         if log_raw_llm:
             event["prompt"] = prompt_text
             event["conversation"] = conversation
-            event["request_kwargs"] = request_kwargs
+            event["request_kwargs"] = _redact_request_data(request_kwargs)
         else:
             event["request_keys"] = sorted(request_kwargs.keys())
         _append_jsonl(llm_trace_file, event)

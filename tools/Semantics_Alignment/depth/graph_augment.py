@@ -327,6 +327,7 @@ def _mixed_neighborhood(
     weights: Dict[str, float],
     max_nodes: int = 0,
     adaptive_shrink: bool = True,
+    trace_out: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Set[int], Dict[int, float]]:
     """用 Dijkstra 在混合图中计算 start_va 的 radius 内邻域。
 
@@ -367,5 +368,33 @@ def _mixed_neighborhood(
             if nd + 1e-9 < dist.get(nb, float("inf")):
                 dist[int(nb)] = float(nd)
                 heapq.heappush(pq, (float(nd), int(nb)))
+
+    if trace_out is not None:
+        vals = [float(x) for x in dist.values()]
+        trace_out.clear()
+        trace_out.update(
+            {
+                "algorithm": "dijkstra_on_mixed_undirected_graph",
+                "description": (
+                    "混合图由 call/data/string/global/indirect 五类无向边构成；"
+                    "每条边代价为与该边类型集合对应权重中的最小值；"
+                    "从起点做最短路扩展，累计距离不超过 radius（及自适应收缩后的有效半径）；"
+                    "节点数达到硬上限 max_nodes 时停止。"
+                ),
+                "start_va_hex": f"0x{int(start):08X}",
+                "radius_requested": float(radius),
+                "effective_radius_terminal": float(effective_radius),
+                "weights_used": {str(k): float(v) for k, v in sorted(weights.items())},
+                "max_nodes_hard_cap": int(hard_limit),
+                "soft_limit_for_adaptive_shrink": int(soft_limit),
+                "adaptive_shrink_applied": bool(shrunk),
+                "nodes_in_neighborhood": int(len(dist)),
+                "distance_stats": {
+                    "min": min(vals) if vals else None,
+                    "max": max(vals) if vals else None,
+                    "mean": round(sum(vals) / len(vals), 6) if vals else None,
+                },
+            }
+        )
 
     return set(dist.keys()), dist

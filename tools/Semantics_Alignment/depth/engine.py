@@ -16,76 +16,67 @@ if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
 import argparse
-import json
 import math
 import sqlite3
+import time
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from kp.kp_deep_path import (
     estimate_global_deepest_depth,
     parse_va,
     pick_binary_id,
     resolve_db_path,
+    resolve_entry_points,
     run_deep_path_analysis,
 )
 from kp.kp_graph import build_unified_graph
-from kp.kp_schema import load_analysis_info
 from kp.kp_settings import build_llm_settings, load_semantics_config
-from kp.kp_types import CALL_REF_TYPES, UnifiedGraph, UnifiedFunctionNode
-from depth.deep_path_step import run_llm_poll_on_deepest_path
+from kp.kp_types import CALL_REF_TYPES, UnifiedGraph
+from depth.deep_path_step import LLMStepCheckpointError, run_llm_poll_on_deepest_path
+from depth.gen_observability import (
+    append_generations_index,
+    generation_dir,
+    write_generation_manifest,
+    write_neighborhood_computation_json,
+    write_subtree_tree_json,
+)
 from depth.strict_align import Phase75StrictAlignError, run_phase7_5_strict_align
 from depth.run_management import (
-    RunLayout,
-    _safe_stem,
-    _build_output_paths,
-    _build_gen1_deepest_output_path,
     _now_iso,
     _write_json_file,
-    _append_jsonl,
     _build_resume_signature,
-    _pick_latest_run_id,
+    _build_resume_signature_payload,
     _build_run_layout,
     _load_checkpoint,
-    _save_checkpoint,
     _write_manifest,
     _log_event,
     _checkpoint_stage,
+    resume_signature_compatible_with_manifest,
+    resume_signature_compatible_with_manifest_semantics,
 )
 from depth.goal_collector import (
-    GoalItem,
     _goal_to_dict,
     _goal_from_dict,
     _load_analysis_info_safe,
-    _node_text_blob,
     _semantic_richness,
-    _extract_tokens,
     _node_name_tokens,
     _pick_manual_goals,
     _pick_auto_goals,
 )
 from depth.graph_augment import (
-    IndirectEdgeStatus,
-    _collect_direct_data_edges,
-    _collect_global_ref_map,
-    _build_name_index,
     _collect_indirect_edges,
-    _add_undirected_edge,
     _build_mixed_graph,
-    _edge_cost,
     _mixed_neighborhood,
 )
 from depth.profile_ops import (
     _load_backup_profile,
-    _call_llm_with_trace,
     _analyze_node_semantics_with_llm,
     _llm_compare_profiles,
     _select_profile,
     _rank_nodes_for_compare,
     _collect_path_nodes,
-    _profile_to_analysis_state,
-    _update_analysis_status_with_fallback,
     _apply_selected_profiles_to_db,
 )
 from depth.blackboard import (
@@ -93,13 +84,54 @@ from depth.blackboard import (
     populate_from_profile,
     populate_from_step_result,
 )
+from depth.phase7_task_config import (
+    apply_task_defaults_to_parser,
+    attach_task_fingerprint_namespace,
+    apply_cli_append_overrides,
+    resolve_phase7_task_file,
+)
 
 
 DEFAULT_DB_COMPARE_THRESHOLD = 0.1
+_PHASE7_5_REUSABLE_STATUSES = frozenset({"aligned", "replaced"})
 
 
-def _parse_args() -> argparse.Namespace:
+def _phase7_5_checkpoint_reusable(report: Any) -> bool:
+    """仅复用已成功完成严格对齐的 checkpoint。"""
+    return (
+        isinstance(report, dict)
+        and str(report.get("status") or "") in _PHASE7_5_REUSABLE_STATUSES
+    )
+
+
+def _add_boolean_pair(
+    parser: argparse.ArgumentParser,
+    *,
+    enabled_flag: str,
+    disabled_flag: str,
+    dest: str,
+    default: bool,
+    help_enabled: str,
+) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(enabled_flag, dest=dest, action="store_true", help=help_enabled)
+    group.add_argument(disabled_flag, dest=dest, action="store_false", help=argparse.SUPPRESS)
+    parser.set_defaults(**{dest: bool(default)})
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="独立目标驱动深度语义分析引擎")
+    ap.add_argument(
+        "--task-config",
+        default=None,
+        help="Phase7 单次任务 JSON；省略时使用根 config.yaml 的 Phase7 默认值。",
+    )
+    ap.add_argument(
+        "--platform",
+        choices=("windows", "macos", "linux"),
+        default=None,
+        help="选择根 config.yaml 的 platforms.<os> 覆盖（默认自动检测）。",
+    )
     ap.add_argument("input_path", nargs="?", default=None, help="输入路径（exe/idb/i64/db）")
     ap.add_argument("--db", default=None, help="显式指定 DB（优先级最高）")
     ap.add_argument("--binary-id", type=int, default=None, help="可选 binary_id")
@@ -109,6 +141,33 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--goal-struct", action="append", default=[], help="人工结构体名/线索，可重复")
     ap.add_argument("--goal-limit", type=int, default=3, help="最终分析目标数量（默认 3）")
     ap.add_argument("--auto-goal-limit", type=int, default=20, help="自动候选池上限（默认 20）")
+    ap.add_argument(
+        "--gen1-subtree-mode",
+        choices=("goal", "entry"),
+        default="entry",
+        help=(
+            "第一代 λ 邻域 + 深路径 DFS 的起点："
+            "entry=以解析到的 top-k 程序入口(main/start/无 caller 根等)为根（默认）；"
+            "goal=以当前分析目标 entry_va 为根。"
+            "若同时指定 --gen1-root-va，则以该地址为准。"
+        ),
+    )
+    ap.add_argument(
+        "--gen1-entry-top-k",
+        "--gen1-entry-auto-limit",
+        dest="gen1_entry_top_k",
+        type=int,
+        default=3,
+        help="gen1-subtree-mode=entry 时参与第一代主干搜索的入口数量（默认 3）。",
+    )
+    ap.add_argument(
+        "--gen1-root-va",
+        default=None,
+        help=(
+            "手动指定第一代 λ 邻域 + 深路径 DFS 的顶层根（如 0x140001000）。"
+            "若设置则优先于 --gen1-subtree-mode（goal/entry 均不生效）。"
+        ),
+    )
 
     ap.add_argument("--lambda-radius", type=float, default=2.5, help="混合距离半径 λ（默认 2.5）")
     ap.add_argument("--w-call", type=float, default=0.45, help="混合距离中 call 权重（默认 0.45）")
@@ -150,20 +209,17 @@ def _parse_args() -> argparse.Namespace:
         help="间接调用补边模式（默认 auto）",
     )
     ap.add_argument("--indirect-edge-budget", type=int, default=25000, help="auto 模式下间接边预算")
-    ap.add_argument(
-        "--incremental-indirect",
-        action="store_true",
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--incremental-indirect",
+        disabled_flag="--no-incremental-indirect",
+        dest="incremental_indirect",
         default=False,
-        help="auto 降级后，是否做间接边增量分析",
+        help_enabled="auto 降级后做间接边增量分析",
     )
     ap.add_argument("--incremental-indirect-topn", type=int, default=3000, help="增量间接边 topN")
 
     ap.add_argument("--llm-mode", choices=("auto", "on", "off"), default="auto", help="LLM 执行模式")
-    ap.add_argument(
-        "--llm-config",
-        default=None,
-        help="LLM/流水线 YAML（默认：仓库根目录 config.yaml 的 semantics 段）",
-    )
     ap.add_argument("--llm-model", default=None)
     ap.add_argument("--llm-temperature", type=float, default=None)
     ap.add_argument("--llm-max-tokens", type=int, default=None)
@@ -178,11 +234,13 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_DB_COMPARE_THRESHOLD,
         help="LLM 选优最小分差阈值（默认 0.1）",
     )
-    ap.add_argument(
-        "--apply-db",
-        action="store_true",
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--apply-db",
+        disabled_flag="--no-apply-db",
+        dest="apply_db",
         default=False,
-        help="将 selected=new 的结果回填到 analysis_status（默认关闭）",
+        help_enabled="将 selected=new 的结果回填到 analysis_status（默认关闭）",
     )
     ap.add_argument(
         "--apply-max-rows",
@@ -197,40 +255,82 @@ def _parse_args() -> argparse.Namespace:
         help="回填最小置信度（0-100，默认 70）",
     )
     ap.add_argument(
-        "--phase7-5-mode",
-        choices=("strict", "off"),
-        default="strict",
-        help="Phase7.5 严格对齐模式：strict/off（默认 strict）",
-    )
-    ap.add_argument(
         "--phase7-5-ida-dir",
         default=None,
         help="Phase7.5 指定 IDA 导出目录(*_idademo)。不传则自动推断。",
     )
-    ap.add_argument(
-        "--phase7-5-keep-rebuilt-db",
-        action="store_true",
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--phase7-5-keep-rebuilt-db",
+        disabled_flag="--no-phase7-5-keep-rebuilt-db",
+        dest="phase7_5_keep_rebuilt_db",
         default=False,
-        help="Phase7.5 保留重建 DB（默认完成后删除）。",
+        help_enabled="Phase7.5 保留重建 DB（默认完成后删除）。",
     )
     ap.add_argument("--runs-root", default=None, help="运行目录根路径（默认: <db_dir>/runs）")
     ap.add_argument("--run-id", default=None, help="运行 ID（默认按时间戳生成）")
-    ap.add_argument("--resume", action="store_true", default=False, help="从 run_id 对应的 checkpoint 断点续跑")
-    ap.add_argument(
-        "--force-resume",
-        action="store_true",
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--resume",
+        disabled_flag="--no-resume",
+        dest="resume",
         default=False,
-        help="允许参数变化后强制恢复（默认禁止）",
+        help_enabled="从 run_id 对应的 checkpoint 断点续跑",
     )
-    ap.add_argument(
-        "--log-raw-llm",
-        action="store_true",
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--force-resume",
+        disabled_flag="--no-force-resume",
+        dest="force_resume",
         default=False,
-        help="落盘 LLM 原始请求/响应文本（默认仅摘要）",
+        help_enabled="允许参数变化后强制恢复（默认禁止）",
     )
-    ap.add_argument("--dry-run", action="store_true", default=False, help="仅输出结构，不调用 LLM")
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--log-raw-llm",
+        disabled_flag="--no-log-raw-llm",
+        dest="log_raw_llm",
+        default=False,
+        help_enabled="落盘 LLM 原始请求/响应文本（默认仅摘要）",
+    )
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--dry-run",
+        disabled_flag="--no-dry-run",
+        dest="dry_run",
+        default=False,
+        help_enabled="仅输出结构，不调用 LLM",
+    )
+    _add_boolean_pair(
+        ap,
+        enabled_flag="--no-console-progress",
+        disabled_flag="--console-progress",
+        dest="no_console_progress",
+        default=False,
+        help_enabled="关闭终端阶段性进度（默认开启：Phase7.5/建图/DFS/LLM 每步会打印简要信息）",
+    )
     ap.add_argument("--output", default=None, help="可选：显式输出 JSON 文件")
-    return ap.parse_args()
+    return ap
+
+
+def _parse_args() -> argparse.Namespace:
+    ap = _build_arg_parser()
+    task_path, task_data, task_fp = resolve_phase7_task_file()
+    if task_data:
+        apply_task_defaults_to_parser(ap, task_data)
+    args = ap.parse_args()
+    apply_cli_append_overrides(args, ap)
+    attach_task_fingerprint_namespace(args, path=task_path, fp=task_fp)
+    return args
+
+
+def _want_console_progress(args: argparse.Namespace) -> bool:
+    return not bool(getattr(args, "no_console_progress", False))
+
+
+def _p7(args: argparse.Namespace, msg: str) -> None:
+    if _want_console_progress(args):
+        print(msg, flush=True)
 
 
 def _best_paths_within(paths: Sequence[Dict[str, Any]], allowed_nodes: Set[int]) -> List[Dict[str, Any]]:
@@ -282,6 +382,8 @@ def _run_deep_generation(
     label: str,
     llm_poll_log_file: Optional[str] = None,
     log_raw_llm: bool = False,
+    llm_resume_state: Optional[Dict[str, Any]] = None,
+    on_llm_step_checkpoint: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     if not entries:
         return {"status": "skipped", "reason": "no_entries", "label": label}
@@ -291,6 +393,12 @@ def _run_deep_generation(
         depth = max(1, int(estimate_global_deepest_depth(graph, only_entry_vas=entries)))
     else:
         depth = req_depth
+
+    _p7(
+        args,
+        f"[Phase7][DFS] {label} 开始: entries={[f'0x{int(x):08X}' for x in entries]} max_depth={depth} "
+        f"max_paths={int(args.max_paths or 200)}",
+    )
 
     result = run_deep_path_analysis(
         conn=conn,
@@ -305,10 +413,17 @@ def _run_deep_generation(
     )
 
     paths = list(result.get("paths", []) or [])
+    raw_n = len(paths)
     if allowed_nodes is not None:
         paths = _best_paths_within(paths, allowed_nodes)
 
+    _p7(
+        args,
+        f"[Phase7][DFS] {label} 完成: raw_paths={raw_n} after_lambda_filter={len(paths)}",
+    )
+
     llm_poll: Optional[Dict[str, Any]] = None
+    _prog = _want_console_progress(args)
     if llm_mode == "off":
         llm_poll = {"status": "skipped", "reason": "llm_mode_off"}
     elif args.dry_run:
@@ -322,7 +437,11 @@ def _run_deep_generation(
             max_steps=max(0, int(args.llm_max_steps or 0)),
             dry_run=True,
             verbose=bool(log_raw_llm),
+            progress=_prog,
+            progress_label=str(label),
             log_file=llm_poll_log_file,
+            resume_state=llm_resume_state,
+            on_step_checkpoint=on_llm_step_checkpoint,
         )
     else:
         try:
@@ -336,9 +455,16 @@ def _run_deep_generation(
                 max_steps=max(0, int(args.llm_max_steps or 0)),
                 dry_run=False,
                 verbose=bool(log_raw_llm),
+                progress=_prog,
+                progress_label=str(label),
                 log_file=llm_poll_log_file,
+                resume_state=llm_resume_state,
+                on_step_checkpoint=on_llm_step_checkpoint,
             )
         except Exception as exc:
+            if isinstance(exc, LLMStepCheckpointError):
+                raise
+            _p7(args, f"[Phase7][LLM] {label} 调用失败（llm_mode=auto 将跳过）: {exc}")
             if llm_mode == "on":
                 raise
             llm_poll = {"status": "skipped", "reason": "llm_failed_auto", "error": str(exc)}
@@ -399,7 +525,8 @@ def _estimate_max_generations(
 
     result = min(auto, MAX_CAP)
     if user_max > 0:
-        result = min(result, user_max)
+        # 显式 --max-generations 1 时只跑第一代（否则 max(MIN_GEN, result) 会强行至少 2 代）
+        return max(1, min(result, user_max))
     return max(MIN_GEN, result)
 
 
@@ -557,7 +684,10 @@ def _compute_wlca_roots(
 
 
 def main() -> int:
+    engine_run_t0 = time.monotonic()
     args = _parse_args()
+    if bool(args.force_resume):
+        args.resume = True
 
     db_path = resolve_db_path(args.input_path, args.db)
     layout = _build_run_layout(
@@ -593,6 +723,7 @@ def main() -> int:
         board.load(blackboard_file)
 
     resume_signature = _build_resume_signature(args, db_path)
+    resume_signature_payload = _build_resume_signature_payload(args, db_path)
     state = _load_checkpoint(layout.checkpoint_file) if (bool(args.resume) or layout.checkpoint_file.exists()) else {}
     if bool(args.resume) and not state:
         raise SystemExit(f"未找到 checkpoint: {layout.checkpoint_file}")
@@ -600,7 +731,21 @@ def main() -> int:
     if state:
         prev_sig = str(state.get("resume_signature") or "")
         if prev_sig and prev_sig != resume_signature and not bool(args.force_resume):
-            raise SystemExit("检测到参数变化，拒绝恢复。若确需继续，请加 --force-resume。")
+            if not (
+                resume_signature_compatible_with_manifest(
+                    prev_sig,
+                    resume_signature,
+                    args,
+                    db_path,
+                    layout.manifest_file,
+                )
+                or resume_signature_compatible_with_manifest_semantics(
+                    layout.manifest_file,
+                    args,
+                    db_path,
+                )
+            ):
+                raise SystemExit("检测到参数变化，拒绝恢复。若确需继续，请加 --force-resume。")
         prev_db = str(state.get("db_path") or "")
         if prev_db and prev_db != str(db_path) and not bool(args.force_resume):
             raise SystemExit("checkpoint 对应的 db_path 与当前不一致，拒绝恢复。")
@@ -630,6 +775,8 @@ def main() -> int:
             "llm_raw_logging": bool(args.log_raw_llm),
             "checkpoint": str(layout.checkpoint_file),
             "report": str(layout.out_file),
+            "resume_signature": resume_signature,
+            "resume_signature_payload": resume_signature_payload,
             "args": vars(args),
         },
     )
@@ -646,7 +793,10 @@ def main() -> int:
     phase7_5_report_file = layout.artifacts_dir / "phase7_5_report.json"
     cached_phase7_5 = state.get("phase7_5")
     phase7_5_report: Dict[str, Any]
-    if bool(args.resume) and isinstance(cached_phase7_5, dict) and cached_phase7_5:
+    if (
+        bool(args.resume)
+        and _phase7_5_checkpoint_reusable(cached_phase7_5)
+    ):
         phase7_5_report = dict(cached_phase7_5)
         _log_event(
             layout,
@@ -654,21 +804,35 @@ def main() -> int:
             status=str(phase7_5_report.get("status") or ""),
             report_file=str(phase7_5_report_file),
         )
+        _p7(args, "[Phase7] Phase7.5 从 checkpoint 加载，跳过对账")
     else:
+        _p7(args, "[Phase7] Phase7.5 严格对齐中（哈希对账，可能耗时数分钟）...")
+        # 严格对齐可能耗时很久；在此之前落盘 journal + checkpoint，避免进程被中断时目录里只有 run_start、看不到阶段。
+        _log_event(
+            layout,
+            "phase7_5_started",
+            mode="strict",
+            db_path=str(db_path),
+            input_path=str(args.input_path or ""),
+            ida_dir=str(args.phase7_5_ida_dir or ""),
+            report_file=str(phase7_5_report_file),
+        )
+        _checkpoint_stage(layout, state, "phase7_5_running")
         try:
             phase7_5_report = run_phase7_5_strict_align(
                 db_path=db_path,
                 input_path=args.input_path,
                 artifacts_dir=layout.artifacts_dir,
                 call_ref_types=sorted(CALL_REF_TYPES),
-                mode=str(args.phase7_5_mode),
                 ida_dir=args.phase7_5_ida_dir,
                 keep_rebuilt_db=bool(args.phase7_5_keep_rebuilt_db),
+                console_progress=_want_console_progress(args),
+                goal_run_start_mono=engine_run_t0,
             )
         except Phase75StrictAlignError as exc:
             phase7_5_report = {
-                "enabled": str(args.phase7_5_mode).strip().lower() != "off",
-                "mode": str(args.phase7_5_mode),
+                "enabled": True,
+                "mode": "strict",
                 "status": "failed",
                 "reason": str(exc),
                 "db_path": str(db_path),
@@ -692,6 +856,11 @@ def main() -> int:
             diff_count=int(phase7_5_report.get("profile_diff_count", 0) or 0),
             report_file=str(phase7_5_report_file),
         )
+        _p7(
+            args,
+            f"[Phase7] Phase7.5 完成: status={phase7_5_report.get('status')} "
+            f"diffs={int(phase7_5_report.get('profile_diff_count', 0) or 0)}",
+        )
 
     weights = {
         "call": float(args.w_call),
@@ -701,7 +870,8 @@ def main() -> int:
         "indirect": float(args.w_data),
     }
 
-    llm_cfg = load_semantics_config(args.llm_config)
+    # Phase7 始终从仓库根 config.yaml 读取语义配置；任务 JSON 仅承载本次运行参数。
+    llm_cfg = load_semantics_config(platform_key=args.platform)
     llm_settings = build_llm_settings(
         llm_cfg,
         model=args.llm_model,
@@ -725,6 +895,7 @@ def main() -> int:
             include_call_xrefs=True,
             include_string_xrefs=True,
         )
+        _p7(args, f"[Phase7] UnifiedGraph 已构建: {len(graph.nodes)} 个函数节点")
         analysis_info = _load_analysis_info_safe(conn)
 
         indirect_edges, indirect_status = _collect_indirect_edges(
@@ -742,11 +913,45 @@ def main() -> int:
             include_indirect_edges=indirect_edges,
         )
 
+        gc_dir = layout.artifacts_dir / "graph_computation"
+        gc_dir.mkdir(parents=True, exist_ok=True)
+        _write_json_file(
+            gc_dir / "01_unified_graph.json",
+            {
+                "binary_id": int(binary_id),
+                "function_node_count": len(graph.nodes),
+                "note": "UnifiedGraph：每个节点为一个函数入口；含 internal call、字符串引用等，尚未拼成五类混合无向边。",
+            },
+        )
+        _write_json_file(
+            gc_dir / "02_mixed_graph_build.json",
+            {
+                "mixed_stats": mixed_stats,
+                "indirect_edge_status": {
+                    "enabled": bool(indirect_status.enabled),
+                    "degraded": bool(indirect_status.degraded),
+                    "reason": str(indirect_status.reason),
+                    "total_candidates": int(indirect_status.total_candidates),
+                    "selected_candidates": int(indirect_status.selected_candidates),
+                    "incremental_applied": bool(indirect_status.incremental_applied),
+                },
+                "mixed_adjacency_size": len(mixed_adj),
+                "lambda_weights": dict(weights),
+                "note": "混合无向图：call 边 + data xrefs 函数对 + 同全局/同字符串的函数团 + 间接调用补边。λ 邻域在此图上做最短路裁剪。",
+            },
+        )
+        _p7(
+            args,
+            f"[Phase7] 混合图已构建: adjacency 起点数={len(mixed_adj)} "
+            f"间接边 degraded={bool(indirect_status.degraded)}",
+        )
+
         cached_goals = list(state.get("selected_goals", []) or [])
         if cached_goals:
             selected_goals = [_goal_from_dict(x) for x in cached_goals if isinstance(x, dict)]
             goal_mode = str(state.get("goal_mode") or "resume")
             _log_event(layout, "goals_loaded_from_checkpoint", count=len(selected_goals), goal_mode=goal_mode)
+            _p7(args, f"[Phase7] 从 checkpoint 恢复 {len(selected_goals)} 个分析目标（{goal_mode}）")
         else:
             manual_goals = _pick_manual_goals(
                 graph,
@@ -775,6 +980,7 @@ def main() -> int:
             state["selected_goals"] = [_goal_to_dict(g) for g in selected_goals]
             _checkpoint_stage(layout, state, "goals_selected")
             _log_event(layout, "goals_selected", count=len(selected_goals), goal_mode=goal_mode)
+            _p7(args, f"[Phase7] 已选 {len(selected_goals)} 个分析目标（{goal_mode}）")
 
         if not selected_goals:
             raise SystemExit("未选出任何可分析目标。")
@@ -788,6 +994,41 @@ def main() -> int:
         comparison_candidate_nodes: Set[int] = set(
             int(x) for x in (state.get("comparison_candidate_nodes", []) or []) if x is not None
         )
+        raw_llm_step_progress = state.get("llm_step_progress") or {}
+        if not isinstance(raw_llm_step_progress, dict):
+            raw_llm_step_progress = {}
+        llm_step_progress: Dict[str, Dict[str, Any]] = {
+            str(k): dict(v)
+            for k, v in raw_llm_step_progress.items()
+            if isinstance(v, dict)
+        }
+
+        raw_shared_gen1 = state.get("shared_entry_gen1")
+        shared_gen1_cache: Optional[Dict[str, Any]] = None
+        if (
+            isinstance(raw_shared_gen1, dict)
+            and str(raw_shared_gen1.get("resume_signature") or "") == resume_signature
+            and isinstance(raw_shared_gen1.get("result"), dict)
+        ):
+            shared_gen1_cache = dict(raw_shared_gen1)
+
+        def _llm_step_callback(label: str) -> Callable[[Dict[str, Any]], None]:
+            def _save(progress_payload: Dict[str, Any]) -> None:
+                llm_step_progress[str(label)] = dict(progress_payload)
+                state["llm_step_progress"] = dict(llm_step_progress)
+                completed = list(progress_payload.get("completed_steps", []) or [])
+                step_index = len(completed)
+                _checkpoint_stage(layout, state, f"llm_{label}_step_{step_index}")
+                _log_event(
+                    layout,
+                    "llm_step_checkpoint",
+                    label=str(label),
+                    step_index=int(step_index),
+                    total_steps=int(progress_payload.get("total_steps", 0) or 0),
+                )
+
+            return _save
+
         completed_goal_indices: Set[int] = set()
         for item in gen1_deepest_items:
             try:
@@ -815,28 +1056,197 @@ def main() -> int:
             print(f"[GoalDeep] goal#{idx} 0x{goal_va:08X} max_generations={max_gen}")
 
             # ── Gen1: 主干子树（始终执行） ──────────────────────────
-            gen1_nodes, gen1_dist = _mixed_neighborhood(
-                mixed_adj,
-                start_va=goal_va,
-                radius=float(args.lambda_radius),
-                weights=weights,
-                max_nodes=180,
-                adaptive_shrink=True,
+            raw_gen1_root = getattr(args, "gen1_root_va", None)
+            shared_gen1_mode = bool(
+                (raw_gen1_root is not None and str(raw_gen1_root).strip())
+                or str(args.gen1_subtree_mode).strip().lower() == "entry"
             )
+            if raw_gen1_root is not None and str(raw_gen1_root).strip():
+                try:
+                    gen1_root_va = int(parse_va(str(raw_gen1_root).strip()))
+                except Exception as exc:
+                    raise SystemExit(
+                        f"[GoalDeep] --gen1-root-va 无法解析为地址: {raw_gen1_root!r} ({exc})"
+                    ) from exc
+                if gen1_root_va not in graph.nodes:
+                    raise SystemExit(
+                        f"[GoalDeep] --gen1-root-va 对应函数不在图中: 0x{gen1_root_va:08X}。"
+                        "请核对导出或地址。"
+                    )
+                gen1_root_vas = [gen1_root_va]
+                print(
+                    f"[GoalDeep] goal#{idx} 第一代子树根=用户指定 0x{gen1_root_va:08X} "
+                    f"(分析目标 goal=0x{goal_va:08X})"
+                )
+            elif str(args.gen1_subtree_mode).strip().lower() == "entry":
+                ep_list = resolve_entry_points(
+                    graph,
+                    [],
+                    max(1, int(args.gen1_entry_top_k or 3)),
+                )
+                if not ep_list:
+                    raise SystemExit(
+                        "[GoalDeep] --gen1-subtree-mode entry 未能解析到程序入口。"
+                        "请检查导出或改用 --gen1-subtree-mode goal，或使用 --gen1-root-va。"
+                    )
+                gen1_root_vas = [int(x) for x in ep_list]
+                print(
+                    f"[GoalDeep] goal#{idx} 第一代子树根=程序入口 "
+                    f"{[f'0x{x:08X}' for x in gen1_root_vas]} "
+                    f"(分析目标 goal=0x{goal_va:08X}，用于后续代/黑板等)"
+                )
+            else:
+                gen1_root_vas = [int(goal_va)]
 
-            gen1 = _run_deep_generation(
-                conn=conn,
-                graph=graph,
-                entries=[goal_va],
-                args=args,
-                llm_settings=llm_settings,
-                llm_mode=str(args.llm_mode),
-                allowed_nodes=gen1_nodes,
-                label=f"goal#{idx}_gen1",
-                llm_poll_log_file=str(layout.llm_poll_log_file),
-                log_raw_llm=bool(args.log_raw_llm),
+            gen1_nodes: Set[int] = set()
+            gen1_dist: Dict[int, float] = {}
+            gen1_root_traces: List[Dict[str, Any]] = []
+            for root_va in gen1_root_vas:
+                root_trace: Dict[str, Any] = {}
+                root_nodes, root_dist = _mixed_neighborhood(
+                    mixed_adj,
+                    start_va=int(root_va),
+                    radius=float(args.lambda_radius),
+                    weights=weights,
+                    max_nodes=180,
+                    adaptive_shrink=True,
+                    trace_out=root_trace,
+                )
+                gen1_nodes.update(root_nodes)
+                for va, distance in root_dist.items():
+                    if va not in gen1_dist or float(distance) < gen1_dist[va]:
+                        gen1_dist[int(va)] = float(distance)
+                gen1_root_traces.append(root_trace)
+            gen1_trace: Dict[str, Any] = {
+                "algorithm": "multi_root_min_distance_union",
+                "root_count": len(gen1_root_vas),
+                "root_vas": [f"0x{int(x):08X}" for x in gen1_root_vas],
+                "per_root": gen1_root_traces,
+                "nodes_in_union": len(gen1_nodes),
+            }
+
+            gen1_dir = generation_dir(layout.artifacts_dir, idx, 1)
+            gen1_dir.mkdir(parents=True, exist_ok=True)
+            write_neighborhood_computation_json(
+                gen1_dir / "neighborhood_computation.json",
+                trace=gen1_trace,
+                dist=dict(gen1_dist),
             )
+            _write_json_file(
+                gen1_dir / "dfs_pipeline_note.json",
+                {
+                    "stage": "第一代深路径 DFS",
+                    "gen1_subtree_mode": str(args.gen1_subtree_mode),
+                    "gen1_root_va_override": (
+                        str(getattr(args, "gen1_root_va", None))
+                        if getattr(args, "gen1_root_va", None)
+                        else None
+                    ),
+                    "dfs_entry_vas": [f"0x{int(x):08X}" for x in gen1_root_vas],
+                    "analysis_goal_va": f"0x{int(goal_va):08X}",
+                    "note": (
+                        "在 UnifiedGraph 的 internal call 边上做深度优先展开（非混合图）；"
+                        "allowed_nodes 将路径限制在 λ 邻域节点内（_best_paths_within）。"
+                        "最深路径由 _pick_deepest_path 在 paths 中选（深度优先、路径长、门控强度）。"
+                        "gen1-root-va 指定时顶层根以用户为准；"
+                        "否则 gen1-subtree-mode=entry 时从程序入口出发，goal 时从分析目标出发。"
+                    ),
+                    "allowed_node_count": len(gen1_nodes),
+                },
+            )
+            gen1_label = f"goal#{idx}_gen1"
+            shared_source_goal_index: Optional[int] = None
+            if shared_gen1_mode and shared_gen1_cache is not None:
+                try:
+                    gen1_root_vas = [int(x) for x in (shared_gen1_cache.get("root_vas") or [])]
+                    gen1_nodes = {int(x) for x in (shared_gen1_cache.get("node_vas") or [])}
+                    gen1_dist = {
+                        int(k): float(v)
+                        for k, v in (shared_gen1_cache.get("dist") or {}).items()
+                    }
+                    gen1_trace = dict(shared_gen1_cache.get("trace") or {})
+                    gen1 = dict(shared_gen1_cache["result"])
+                    shared_source_goal_index = int(shared_gen1_cache.get("source_goal_index") or 0) or None
+                    if not gen1_root_vas:
+                        raise ValueError("shared Gen1 cache has no roots")
+                except (TypeError, ValueError):
+                    shared_gen1_cache = None
+
+            if shared_gen1_mode and shared_gen1_cache is not None:
+                wall_gen1 = 0.0
+                _log_event(
+                    layout,
+                    "gen1_shared_reused",
+                    goal_index=int(idx),
+                    source_goal_index=shared_source_goal_index,
+                )
+            else:
+                t_gen1 = time.perf_counter()
+                gen1 = _run_deep_generation(
+                    conn=conn,
+                    graph=graph,
+                    entries=list(gen1_root_vas),
+                    args=args,
+                    llm_settings=llm_settings,
+                    llm_mode=str(args.llm_mode),
+                    allowed_nodes=gen1_nodes,
+                    label=gen1_label,
+                    llm_poll_log_file=str(gen1_dir / "llm_poll.jsonl"),
+                    log_raw_llm=bool(args.log_raw_llm),
+                    llm_resume_state=llm_step_progress.get(gen1_label),
+                    on_llm_step_checkpoint=_llm_step_callback(gen1_label),
+                )
+                wall_gen1 = time.perf_counter() - t_gen1
+                if shared_gen1_mode:
+                    shared_source_goal_index = int(idx)
+                    shared_gen1_cache = {
+                        "resume_signature": resume_signature,
+                        "source_goal_index": int(idx),
+                        "root_vas": [int(x) for x in gen1_root_vas],
+                        "node_vas": sorted(int(x) for x in gen1_nodes),
+                        "dist": {str(int(k)): float(v) for k, v in gen1_dist.items()},
+                        "trace": dict(gen1_trace),
+                        "result": dict(gen1),
+                    }
+                    state["shared_entry_gen1"] = dict(shared_gen1_cache)
+                    _checkpoint_stage(layout, state, "shared_gen1_completed")
+                    _log_event(layout, "gen1_shared_completed", source_goal_index=int(idx))
             gen1_paths = list(gen1.get("paths", []) or [])
+            write_subtree_tree_json(
+                gen1_dir / "subtree_tree.json",
+                graph=graph,
+                goal_index=int(idx),
+                generation_index=1,
+                label=f"goal#{idx}_gen1",
+                root_vas=list(gen1_root_vas),
+                allowed_nodes=set(gen1_nodes),
+                lambda_dist=dict(gen1_dist),
+                paths=gen1_paths,
+            )
+            _write_json_file(gen1_dir / "deep_generation.json", gen1)
+            write_generation_manifest(
+                gen1_dir / "generation_manifest.json",
+                goal_index=int(idx),
+                generation_index=1,
+                label=f"goal#{idx}_gen1",
+                wall_time_sec=float(wall_gen1),
+                llm_payload=gen1.get("llm") if isinstance(gen1.get("llm"), dict) else None,
+                dfs_stats=gen1.get("stats") if isinstance(gen1.get("stats"), dict) else {},
+                paths_count=len(gen1_paths),
+            )
+            append_generations_index(
+                layout.artifacts_dir,
+                {
+                    "goal_index": int(idx),
+                    "generation": 1,
+                    "label": f"goal#{idx}_gen1",
+                    "artifact_dir": str(gen1_dir),
+                    "wall_time_sec": round(float(wall_gen1), 4),
+                    "shared_source_goal_index": shared_source_goal_index,
+                    "llm_token_usage": (gen1.get("llm") or {}).get("token_usage") if isinstance(gen1.get("llm"), dict) else None,
+                    "llm_timing": (gen1.get("llm") or {}).get("timing") if isinstance(gen1.get("llm"), dict) else None,
+                },
+            )
             gen1_deepest = _pick_deepest_path(gen1_paths)
             deepest_item = {
                 "goal_index": int(idx),
@@ -903,16 +1313,43 @@ def main() -> int:
                     break
 
                 gen_nodes_union: Set[int] = set()
+                gen_dir = generation_dir(layout.artifacts_dir, idx, gen_idx)
+                gen_dir.mkdir(parents=True, exist_ok=True)
+                neighborhood_parts: List[Dict[str, Any]] = []
                 for r in (new_roots or gen_roots):
-                    sub_nodes, _ = _mixed_neighborhood(
+                    tr_root: Dict[str, Any] = {}
+                    sub_nodes, sub_dist = _mixed_neighborhood(
                         mixed_adj,
                         start_va=int(r),
                         radius=float(args.lambda_radius),
                         weights=weights,
                         max_nodes=180,
                         adaptive_shrink=True,
+                        trace_out=tr_root,
                     )
                     gen_nodes_union.update(sub_nodes)
+                    rows = sorted(((int(k), float(v)) for k, v in sub_dist.items()), key=lambda x: (x[1], x[0]))
+                    neighborhood_parts.append(
+                        {
+                            "root_va_hex": f"0x{int(r):08X}",
+                            "trace": tr_root,
+                            "per_root_node_count": len(sub_nodes),
+                            "dist_table_sample": [
+                                {"va": f"0x{va:08X}", "mixed_distance": round(d, 6)}
+                                for va, d in rows[:400]
+                            ],
+                        }
+                    )
+                _write_json_file(
+                    gen_dir / "neighborhood_computation.json",
+                    {
+                        "goal_index": int(idx),
+                        "generation": int(gen_idx),
+                        "union_node_count": len(gen_nodes_union),
+                        "per_root": neighborhood_parts,
+                        "note": "每根分别做 λ 邻域 Dijkstra，再对节点集取并集；DFS 仍只在 call 边且受 allowed_nodes 限制。",
+                    },
+                )
 
                 genuinely_new = gen_nodes_union - all_covered_nodes
                 new_ratio = len(genuinely_new) / max(1, len(all_covered_nodes))
@@ -939,6 +1376,8 @@ def main() -> int:
                     )
                     break
 
+                t_genx = time.perf_counter()
+                genx_label = f"goal#{idx}_gen{gen_idx}"
                 gen_result = _run_deep_generation(
                     conn=conn,
                     graph=graph,
@@ -947,9 +1386,52 @@ def main() -> int:
                     llm_settings=llm_settings,
                     llm_mode=str(args.llm_mode),
                     allowed_nodes=gen_nodes_union if gen_nodes_union else None,
-                    label=f"goal#{idx}_gen{gen_idx}",
-                    llm_poll_log_file=str(layout.llm_poll_log_file),
+                    label=genx_label,
+                    llm_poll_log_file=str(gen_dir / "llm_poll.jsonl"),
                     log_raw_llm=bool(args.log_raw_llm),
+                    llm_resume_state=llm_step_progress.get(genx_label),
+                    on_llm_step_checkpoint=_llm_step_callback(genx_label),
+                )
+                wall_genx = time.perf_counter() - t_genx
+                gen_result_paths = list(gen_result.get("paths", []) or [])
+                roots_for_tree = [int(x) for x in (new_roots or gen_roots)]
+                write_subtree_tree_json(
+                    gen_dir / "subtree_tree.json",
+                    graph=graph,
+                    goal_index=int(idx),
+                    generation_index=int(gen_idx),
+                    label=f"goal#{idx}_gen{gen_idx}",
+                    root_vas=roots_for_tree,
+                    allowed_nodes=set(gen_nodes_union),
+                    lambda_dist=None,
+                    paths=gen_result_paths,
+                )
+                _write_json_file(gen_dir / "deep_generation.json", gen_result)
+                write_generation_manifest(
+                    gen_dir / "generation_manifest.json",
+                    goal_index=int(idx),
+                    generation_index=int(gen_idx),
+                    label=f"goal#{idx}_gen{gen_idx}",
+                    wall_time_sec=float(wall_genx),
+                    llm_payload=gen_result.get("llm") if isinstance(gen_result.get("llm"), dict) else None,
+                    dfs_stats=gen_result.get("stats") if isinstance(gen_result.get("stats"), dict) else {},
+                    paths_count=len(gen_result_paths),
+                )
+                append_generations_index(
+                    layout.artifacts_dir,
+                    {
+                        "goal_index": int(idx),
+                        "generation": int(gen_idx),
+                        "label": f"goal#{idx}_gen{gen_idx}",
+                        "artifact_dir": str(gen_dir),
+                        "wall_time_sec": round(float(wall_genx), 4),
+                        "llm_token_usage": (gen_result.get("llm") or {}).get("token_usage")
+                        if isinstance(gen_result.get("llm"), dict)
+                        else None,
+                        "llm_timing": (gen_result.get("llm") or {}).get("timing")
+                        if isinstance(gen_result.get("llm"), dict)
+                        else None,
+                    },
                 )
 
                 gen_path_nodes = _collect_path_nodes(
@@ -1012,6 +1494,11 @@ def main() -> int:
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.json", generation_item)
             _write_json_file(layout.artifacts_dir / f"goal_{int(idx):02d}.deepest.json", deepest_item)
 
+            goal_label_prefix = f"goal#{idx}_"
+            llm_step_progress = {
+                k: v for k, v in llm_step_progress.items() if not k.startswith(goal_label_prefix)
+            }
+            state["llm_step_progress"] = dict(llm_step_progress)
             state["generation_results"] = generation_results
             state["gen1_deepest_items"] = gen1_deepest_items
             state["comparison_candidate_nodes"] = sorted(comparison_candidate_nodes)
@@ -1060,6 +1547,14 @@ def main() -> int:
         selected_profiles: List[Dict[str, Any]] = [
             dict(x) for x in (state.get("selected_profiles", []) or []) if isinstance(x, dict)
         ]
+        raw_compare_progress = state.get("compare_progress") or {}
+        if not isinstance(raw_compare_progress, dict):
+            raw_compare_progress = {}
+        compare_progress: Dict[str, Dict[str, Any]] = {
+            str(k): dict(v)
+            for k, v in raw_compare_progress.items()
+            if isinstance(v, dict)
+        }
 
         completed_compare_vas: Set[int] = set()
         for item in compare_items:
@@ -1109,33 +1604,51 @@ def main() -> int:
                 )
             else:
                 try:
-                    new_profile = _analyze_node_semantics_with_llm(
-                        conn=conn,
-                        graph=graph,
-                        analysis_info=analysis_info,
-                        entry_va=int(va),
-                        llm_settings=llm_settings,
-                        max_attempts=max(1, int(args.llm_max_attempts or 1)),
-                        dry_run=bool(args.dry_run),
-                        llm_trace_file=layout.llm_trace_file,
-                        log_raw_llm=bool(args.log_raw_llm),
-                    )
-                    state["last_llm_entry_va"] = entry_hex
-                    state["last_llm_action"] = "analyze_node"
-                    _checkpoint_stage(layout, state, f"llm_analyze_{int(va):08X}")
+                    node_progress = compare_progress.get(entry_hex, {})
+                    cached_new = node_progress.get("new_profile")
+                    if isinstance(cached_new, dict):
+                        new_profile = dict(cached_new)
+                        _log_event(layout, "llm_analyze_resume_skip", entry_va=entry_hex)
+                    else:
+                        new_profile = _analyze_node_semantics_with_llm(
+                            conn=conn,
+                            graph=graph,
+                            analysis_info=analysis_info,
+                            entry_va=int(va),
+                            llm_settings=llm_settings,
+                            max_attempts=max(1, int(args.llm_max_attempts or 1)),
+                            dry_run=bool(args.dry_run),
+                            llm_trace_file=layout.llm_trace_file,
+                            log_raw_llm=bool(args.log_raw_llm),
+                        )
+                        node_progress["new_profile"] = dict(new_profile)
+                        compare_progress[entry_hex] = node_progress
+                        state["compare_progress"] = dict(compare_progress)
+                        state["backup_profiles"] = backup_profiles
+                        state["last_llm_entry_va"] = entry_hex
+                        state["last_llm_action"] = "analyze_node"
+                        _checkpoint_stage(layout, state, f"llm_analyze_{int(va):08X}")
 
-                    compare_result = _llm_compare_profiles(
-                        old_profile=old_profile,
-                        new_profile=new_profile,
-                        llm_settings=llm_settings,
-                        max_attempts=max(1, int(args.llm_max_attempts or 1)),
-                        dry_run=bool(args.dry_run),
-                        llm_trace_file=layout.llm_trace_file,
-                        log_raw_llm=bool(args.log_raw_llm),
-                    )
-                    state["last_llm_entry_va"] = entry_hex
-                    state["last_llm_action"] = "compare_profiles"
-                    _checkpoint_stage(layout, state, f"llm_compare_{int(va):08X}")
+                    cached_compare = node_progress.get("compare_result")
+                    if isinstance(cached_compare, dict):
+                        compare_result = dict(cached_compare)
+                        _log_event(layout, "llm_compare_resume_skip", entry_va=entry_hex)
+                    else:
+                        compare_result = _llm_compare_profiles(
+                            old_profile=old_profile,
+                            new_profile=new_profile,
+                            llm_settings=llm_settings,
+                            max_attempts=max(1, int(args.llm_max_attempts or 1)),
+                            dry_run=bool(args.dry_run),
+                            llm_trace_file=layout.llm_trace_file,
+                            log_raw_llm=bool(args.log_raw_llm),
+                        )
+                        node_progress["compare_result"] = dict(compare_result)
+                        compare_progress[entry_hex] = node_progress
+                        state["compare_progress"] = dict(compare_progress)
+                        state["last_llm_entry_va"] = entry_hex
+                        state["last_llm_action"] = "compare_profiles"
+                        _checkpoint_stage(layout, state, f"llm_compare_{int(va):08X}")
 
                     select_result = _select_profile(
                         old_profile,
@@ -1182,9 +1695,11 @@ def main() -> int:
             )
             _write_json_file(layout.artifacts_dir / f"compare_0x{int(va):08X}.json", compare_item)
 
+            compare_progress.pop(entry_hex, None)
             state["backup_profiles"] = backup_profiles
             state["compare_items"] = compare_items
             state["selected_profiles"] = selected_profiles
+            state["compare_progress"] = dict(compare_progress)
             _checkpoint_stage(layout, state, f"compare_node_{int(va):08X}_completed")
             _log_event(
                 layout,
@@ -1266,10 +1781,16 @@ def main() -> int:
                 "llm_poll_log_file": str(layout.llm_poll_log_file),
                 "llm_trace_file": str(layout.llm_trace_file),
                 "phase7_5_report_file": str(phase7_5_report_file),
+                "generations_artifacts_dir": str(layout.artifacts_dir / "generations"),
+                "generations_index_json": str(layout.artifacts_dir / "generations" / "INDEX.json"),
+                "graph_computation_dir": str(layout.artifacts_dir / "graph_computation"),
             },
             "config": {
                 "goal_limit": int(args.goal_limit),
                 "auto_goal_limit": int(args.auto_goal_limit),
+                "gen1_subtree_mode": str(args.gen1_subtree_mode),
+                "gen1_entry_top_k": int(args.gen1_entry_top_k),
+                "gen1_root_va": str(args.gen1_root_va) if getattr(args, "gen1_root_va", None) else None,
                 "manual_goal_va": list(args.goal_va or []),
                 "manual_goal_keyword": list(args.goal_keyword or []),
                 "manual_goal_struct": list(args.goal_struct or []),
@@ -1298,9 +1819,12 @@ def main() -> int:
                 "apply_db": bool(args.apply_db),
                 "apply_max_rows": int(args.apply_max_rows),
                 "apply_min_confidence": int(args.apply_min_confidence),
-                "phase7_5_mode": str(args.phase7_5_mode),
+                "phase7_5_mode": "strict",
                 "phase7_5_ida_dir": str(args.phase7_5_ida_dir or ""),
                 "phase7_5_keep_rebuilt_db": bool(args.phase7_5_keep_rebuilt_db),
+                "no_console_progress": bool(getattr(args, "no_console_progress", False)),
+                "phase7_task_loaded_from": getattr(args, "phase7_task_loaded_from", None),
+                "phase7_task_fingerprint": getattr(args, "phase7_task_fingerprint", None),
             },
             "phase7_5": phase7_5_report,
             "mixed_graph_stats": mixed_stats,
@@ -1376,7 +1900,8 @@ def main() -> int:
         )
         print(f"[GoalDeep] checkpoint={layout.checkpoint_file}")
         print(f"[GoalDeep] journal={layout.journal_file}")
-        print(f"[GoalDeep] llm_poll_log={layout.llm_poll_log_file}")
+        print(f"[GoalDeep] llm_poll_log(legacy_aggregate_path)={layout.llm_poll_log_file}")
+        print(f"[GoalDeep] generations_dir={layout.artifacts_dir / 'generations'}")
         print(f"[GoalDeep] llm_trace={layout.llm_trace_file}")
         print(f"[GoalDeep] backup={layout.backup_file}")
         print(f"[GoalDeep] output={layout.out_file}")

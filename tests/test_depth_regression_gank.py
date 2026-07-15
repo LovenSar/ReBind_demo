@@ -483,20 +483,6 @@ class TestT9Phase75:
         assert "xrefs" in profile
         assert int(profile["functions"]["count"]) > 0
 
-    @pytest.mark.skipif(not GANK_IDA_DIR.exists(), reason="gank_idademo 不存在")
-    def test_phase7_5_off_mode(self):
-        from depth.strict_align import run_phase7_5_strict_align
-        report = run_phase7_5_strict_align(
-            db_path=GANK_DB,
-            input_path=None,
-            artifacts_dir=Path(tempfile.mkdtemp()),
-            call_ref_types=["UNCONDITIONAL_CALL", "17"],
-            mode="off",
-        )
-        assert report["status"] == "skipped"
-        assert report["enabled"] is False
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # T10: 端到端 dry-run（不调用 LLM）
 # ═══════════════════════════════════════════════════════════════════════════

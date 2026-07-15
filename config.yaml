@@ -123,6 +123,105 @@ semantics:
       base_url: "https://api.longcat.chat/openai/v1"
     chat_completion_kwargs: {}
 
+  # Phase7 任务参数的唯一维护位置。每样本预处理生成的 JSON 仅是运行快照，
+  # 不会被隐式加载；显式 --task-config 可在单次运行中覆盖这里的默认值。
+  phase7:
+    task_defaults:
+      binary_id: null
+      goal_va: []
+      goal_keyword: []
+      goal_struct: []
+      goal_limit: 3
+      auto_goal_limit: 20
+
+      # 规范要求第一代优先从程序入口主干开始；可用 goal 或 gen1_root_va 覆盖。
+      gen1_subtree_mode: "entry"
+      gen1_entry_top_k: 3
+      gen1_root_va: null
+
+      lambda_radius: 2.5
+      w_call: 0.45
+      w_data: 0.30
+      w_string: 0.15
+      w_global: 0.10
+
+      max_depth: 0
+      max_paths: 200
+      max_branch: 6
+      max_call_sites: 3
+      cond_window: 10
+      max_guards_per_site: 3
+
+      max_generations: 0
+      gen_stop_new_ratio: 0.05
+      gen_token_budget: 0
+      gen2_ancestor_depth: 5
+      gen2_min_wlca: 0.28
+      gen2_frontier_k: 3
+      gen2_alpha: 0.65
+      gen2_beta: 0.08
+      gen2_gamma: 0.40
+
+      indirect_edge_mode: "auto"
+      indirect_edge_budget: 25000
+      incremental_indirect: false
+      incremental_indirect_topn: 3000
+
+      llm_mode: "auto"
+      llm_model: null
+      llm_temperature: null
+      llm_max_tokens: null
+      llm_max_attempts: 3
+      llm_code_chars: 1200
+      llm_max_steps: 0
+
+      max_compare_nodes: 12
+      compare_min_delta: 0.10
+      apply_db: false
+      apply_max_rows: 0
+      apply_min_confidence: 70
+      phase7_5_ida_dir: null
+      phase7_5_keep_rebuilt_db: false
+
+      resume: false
+      force_resume: false
+      log_raw_llm: false
+      dry_run: false
+      no_console_progress: false
+
+    presets:
+      exploratory:
+        goal_limit: 5
+        max_generations: 2
+        max_paths: 260
+      balanced: {}
+      conservative:
+        goal_limit: 2
+        max_generations: 1
+        max_paths: 80
+        max_branch: 5
+        max_call_sites: 2
+        indirect_edge_budget: 12000
+        incremental_indirect: true
+
+    preprocess:
+      exploratory_function_limit: 800
+      balanced_function_limit: 8000
+      large_function_limit: 8000
+      large_xref_limit: 300000
+      very_large_function_limit: 15000
+      very_large_xref_limit: 800000
+      large_overrides:
+        max_paths: 80
+        max_branch: 4
+        indirect_edge_budget: 10000
+        incremental_indirect: true
+      very_large_overrides:
+        max_paths: 50
+        max_branch: 4
+        indirect_edge_budget: 6000
+        incremental_indirect: true
+
   pipeline:
     ida_sync:
       connect_max_wait_seconds: 120

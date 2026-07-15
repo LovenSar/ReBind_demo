@@ -8,15 +8,21 @@ This module encapsulates the LLM workflow for:
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from kp.kp_deep_path import display_name, get_pseudocode_by_va, parse_va
 from kp.kp_llm import build_chat_request, call_llm_analyze_function
 from kp.kp_types import UnifiedGraph
 from pmt.prompts import deep_path_step_prompt
+
+
+class LLMStepCheckpointError(RuntimeError):
+    """LLM 结果已产生但逐步 checkpoint 落盘失败。"""
 
 
 def _truncate_text(text: str, max_chars: int) -> str:
@@ -25,6 +31,17 @@ def _truncate_text(text: str, max_chars: int) -> str:
         return s
     keep = max(32, int(max_chars) - 3)
     return s[:keep] + "..."
+
+
+def _redact_sensitive(value: Any, key: str = "") -> Any:
+    low = str(key or "").lower()
+    if any(token in low for token in ("api_key", "authorization", "token", "secret", "password")):
+        return "<redacted>"
+    if isinstance(value, dict):
+        return {str(k): _redact_sensitive(v, str(k)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_sensitive(v) for v in value]
+    return value
 
 
 def _pick_deepest_longest_path(paths: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -60,6 +77,45 @@ def _edge_prompt_block(edge: Dict[str, Any], *, max_sites: int = 2, max_guards: 
     return "\n".join(lines)
 
 
+def _sum_usage_rows(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    pt = ct = tt = 0
+    for r in rows:
+        try:
+            pt += int(r.get("prompt_tokens") or 0)
+            ct += int(r.get("completion_tokens") or 0)
+            tt += int(r.get("total_tokens") or 0)
+        except Exception:
+            continue
+    if tt <= 0 and (pt > 0 or ct > 0):
+        tt = pt + ct
+    return {
+        "prompt_tokens": pt,
+        "completion_tokens": ct,
+        "total_tokens": tt,
+        "api_calls": len(rows),
+    }
+
+
+def _sum_step_usage(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    pt = ct = tt = calls = 0
+    for row in rows:
+        usage = row.get("usage") or {}
+        if not isinstance(usage, dict):
+            continue
+        pt += int(usage.get("prompt_tokens") or 0)
+        ct += int(usage.get("completion_tokens") or 0)
+        tt += int(usage.get("total_tokens") or 0)
+        calls += int(usage.get("api_calls") or 0)
+    if tt <= 0 and (pt > 0 or ct > 0):
+        tt = pt + ct
+    return {
+        "prompt_tokens": pt,
+        "completion_tokens": ct,
+        "total_tokens": tt,
+        "api_calls": calls,
+    }
+
+
 def run_llm_poll_on_deepest_path(
     *,
     conn: sqlite3.Connection,
@@ -71,9 +127,13 @@ def run_llm_poll_on_deepest_path(
     max_steps: int,
     dry_run: bool,
     verbose: bool = False,
+    progress: bool = True,
+    progress_label: str = "",
     prompt_preview_chars: int = 1800,
     raw_response_chars: int = 2000,
     log_file: Optional[str] = None,
+    resume_state: Optional[Dict[str, Any]] = None,
+    on_step_checkpoint: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     log_path: Optional[Path] = None
     if log_file:
@@ -82,6 +142,10 @@ def run_llm_poll_on_deepest_path(
             log_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
             log_path = None
+
+    run_started = datetime.now(timezone.utc).isoformat()
+    t_run0 = time.perf_counter()
+    usage_collect: List[Dict[str, Any]] = []
 
     def _append_log(event: Dict[str, Any]) -> None:
         if not log_path:
@@ -113,10 +177,33 @@ def run_llm_poll_on_deepest_path(
         _append_log({"type": "summary", "status": "skipped", "reason": "no_edges_for_best_path"})
         return {"status": "skipped", "reason": "no_edges_for_best_path", "selected_path": best}
 
+    resumed_by_index: Dict[int, Dict[str, Any]] = {}
+    if isinstance(resume_state, dict):
+        prior_path = [str(x) for x in (resume_state.get("path_vas") or [])]
+        if prior_path == [str(x) for x in path_vas]:
+            for row in resume_state.get("completed_steps", []) or []:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    step_index = int(row.get("step_index", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= step_index <= total_steps:
+                    resumed_by_index[step_index] = dict(row)
+
+    plab = str(progress_label or "").strip()
+    if progress and not verbose:
+        print(
+            f"[Phase7][LLM] {plab + ' ' if plab else ''}深路径轮询: {total_steps} 步"
+            f"{'' if dry_run else '（调用 API）'}",
+            flush=True,
+        )
+
     _append_log(
         {
-            "type": "start",
+            "type": "session_start",
             "status": "started",
+            "ts_wall": run_started,
             "selected_path": {
                 "entry_va": best.get("entry_va"),
                 "entry_name": best.get("entry_name"),
@@ -127,6 +214,7 @@ def run_llm_poll_on_deepest_path(
                 "leaf_reason": best.get("leaf_reason", ""),
             },
             "total_steps": int(total_steps),
+            "resumed_steps": len(resumed_by_index),
             "dry_run": bool(dry_run),
             "llm_model": getattr(llm_settings, "model", ""),
             "llm_temperature": getattr(llm_settings, "temperature", ""),
@@ -138,6 +226,20 @@ def run_llm_poll_on_deepest_path(
     previous_steps: List[Dict[str, Any]] = []
     step_results: List[Dict[str, Any]] = []
 
+    def _checkpoint_current() -> None:
+        if on_step_checkpoint is None:
+            return
+        try:
+            on_step_checkpoint(
+                {
+                    "path_vas": [str(x) for x in path_vas],
+                    "total_steps": int(total_steps),
+                    "completed_steps": [dict(x) for x in step_results],
+                }
+            )
+        except Exception as exc:
+            raise LLMStepCheckpointError(str(exc)) from exc
+
     for i in range(total_steps):
         from_va_s = str(path_vas[i])
         to_va_s = str(path_vas[i + 1])
@@ -146,6 +248,25 @@ def run_llm_poll_on_deepest_path(
         from_name = str(path_names[i] if i < len(path_names) else display_name(graph, from_va))
         to_name = str(path_names[i + 1] if (i + 1) < len(path_names) else display_name(graph, to_va))
         edge = dict(edge_conditions[i] if i < len(edge_conditions) else {})
+
+        cached = resumed_by_index.get(i + 1)
+        if cached is not None:
+            same_edge = (
+                str(cached.get("from_va") or "") == from_va_s
+                and str(cached.get("to_va") or "") == to_va_s
+            )
+            if same_edge:
+                step_results.append(cached)
+                previous_steps.append(
+                    {
+                        "step_index": i + 1,
+                        "likely_initial_input": str(cached.get("likely_initial_input") or ""),
+                        "required_state_now": str(cached.get("required_state_now") or ""),
+                        "gate_condition": str(cached.get("gate_condition") or ""),
+                    }
+                )
+                _append_log({"type": "step_resumed", "step_index": i + 1, "item": cached})
+                continue
 
         caller_code = _truncate_text(
             get_pseudocode_by_va(conn, graph, from_va, pseudo_cache),
@@ -171,21 +292,23 @@ def run_llm_poll_on_deepest_path(
             callee_code=callee_code,
             previous_steps=previous_steps,
         )
-        _append_log(
-            {
-                "type": "step_prompt",
-                "step_index": i + 1,
-                "total_steps": total_steps,
-                "from": from_name,
-                "from_va": from_va_s,
-                "to": to_name,
-                "to_va": to_va_s,
-                "edge_status": edge.get("status", ""),
-                "edge_aggregated_env_signals": edge.get("aggregated_env_signals", []),
-                "edge_gating_strength": edge.get("gating_strength", 0),
-                "prompt": prompt,
-            }
-        )
+        prompt_event = {
+            "type": "step_prompt",
+            "step_index": i + 1,
+            "total_steps": total_steps,
+            "from": from_name,
+            "from_va": from_va_s,
+            "to": to_name,
+            "to_va": to_va_s,
+            "edge_status": edge.get("status", ""),
+            "edge_aggregated_env_signals": edge.get("aggregated_env_signals", []),
+            "edge_gating_strength": edge.get("gating_strength", 0),
+            "prompt_chars": len(prompt),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        }
+        if verbose:
+            prompt_event["prompt"] = prompt
+        _append_log(prompt_event)
 
         if verbose:
             print(
@@ -206,12 +329,22 @@ def run_llm_poll_on_deepest_path(
             )
 
         if dry_run:
+            if progress and not verbose:
+                print(
+                    f"[Phase7][LLM] {plab + ' ' if plab else ''}dry_run step {i + 1}/{total_steps} "
+                    f"{from_name}->{to_name}",
+                    flush=True,
+                )
             item = {
                 "step_index": i + 1,
                 "from": from_name,
+                "from_va": from_va_s,
                 "to": to_name,
+                "to_va": to_va_s,
                 "status": "dry_run",
-                "prompt_preview": _truncate_text(prompt, 1200),
+                "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "api_calls": 0},
+                "usage_records": [],
             }
             step_results.append(item)
             _append_log({"type": "step_dry_run", "step_index": i + 1, "item": item})
@@ -223,16 +356,34 @@ def run_llm_poll_on_deepest_path(
                     "required_state_now": "",
                 }
             )
+            _checkpoint_current()
             continue
 
+        if progress and not verbose:
+            print(
+                f"[Phase7][LLM] {plab + ' ' if plab else ''}API 请求 step {i + 1}/{total_steps} "
+                f"{from_name}->{to_name} ...",
+                flush=True,
+            )
+
         conversation, request_kwargs = build_chat_request(prompt, llm_settings)
-        _append_log(
-            {
-                "type": "step_request",
-                "step_index": i + 1,
-                "request_kwargs": request_kwargs,
-            }
+        step_usage_before = len(usage_collect)
+        t_step0 = time.perf_counter()
+        request_summary = _redact_sensitive(
+            {k: v for k, v in request_kwargs.items() if k != "messages"}
         )
+        request_summary["messages"] = [
+            {"role": str(m.get("role") or ""), "content_chars": len(str(m.get("content") or ""))}
+            for m in conversation
+        ]
+        request_event: Dict[str, Any] = {
+            "type": "step_request",
+            "step_index": i + 1,
+            "request_summary": request_summary,
+        }
+        if verbose:
+            request_event["request_kwargs"] = _redact_sensitive(request_kwargs)
+        _append_log(request_event)
 
         def _on_raw_text(raw: str) -> None:
             if not verbose:
@@ -254,16 +405,40 @@ def run_llm_poll_on_deepest_path(
             api_settings=llm_settings.api_settings,
             max_attempts=max(1, int(max_attempts or 1)),
             on_raw_text=_on_raw_text if verbose else None,
+            usage_collect=usage_collect,
         )
+        step_elapsed = time.perf_counter() - t_step0
+        step_usage_slice = usage_collect[step_usage_before:]
+        step_usage = _sum_usage_rows(step_usage_slice)
+        _append_log(
+            {
+                "type": "step_llm_metrics",
+                "step_index": i + 1,
+                "elapsed_sec": round(float(step_elapsed), 4),
+                "usage": step_usage,
+                "usage_raw": step_usage_slice,
+            }
+        )
+        if progress and not verbose:
+            print(
+                f"[Phase7][LLM] step {i + 1}/{total_steps} 完成 "
+                f"{step_elapsed:.2f}s tok={step_usage.get('total_tokens', 0)}",
+                flush=True,
+            )
         if not isinstance(result, dict) or not result:
             if verbose:
                 print(f"[DeepDFS][LLM][Step {i+1}] 解析失败，result={result!r}")
             item = {
                 "step_index": i + 1,
                 "from": from_name,
+                "from_va": from_va_s,
                 "to": to_name,
+                "to_va": to_va_s,
                 "status": "llm_failed",
                 "raw_result": result,
+                "elapsed_sec": round(float(step_elapsed), 4),
+                "usage": step_usage,
+                "usage_records": step_usage_slice,
             }
             step_results.append(item)
             _append_log({"type": "step_parse_failed", "step_index": i + 1, "result": result, "item": item})
@@ -275,6 +450,7 @@ def run_llm_poll_on_deepest_path(
                     "required_state_now": "",
                 }
             )
+            _checkpoint_current()
             continue
 
         try:
@@ -286,7 +462,9 @@ def run_llm_poll_on_deepest_path(
         item = {
             "step_index": i + 1,
             "from": str(result.get("from") or from_name),
+            "from_va": from_va_s,
             "to": str(result.get("to") or to_name),
+            "to_va": to_va_s,
             "likely_initial_input": str(result.get("likely_initial_input") or "").strip(),
             "required_state_now": str(result.get("required_state_now") or "").strip(),
             "gate_condition": str(result.get("gate_condition") or "").strip(),
@@ -295,6 +473,9 @@ def run_llm_poll_on_deepest_path(
             "evidence": [str(x).strip() for x in (result.get("evidence") or []) if str(x).strip()],
             "confidence": confidence,
             "status": "ok",
+            "elapsed_sec": round(float(step_elapsed), 4),
+            "usage": step_usage,
+            "usage_records": step_usage_slice,
         }
         if verbose:
             print(
@@ -316,6 +497,7 @@ def run_llm_poll_on_deepest_path(
                 "gate_condition": item["gate_condition"],
             }
         )
+        _checkpoint_current()
 
     initial_input = ""
     for s in step_results:
@@ -344,6 +526,25 @@ def run_llm_poll_on_deepest_path(
     if ok_steps:
         avg_conf = sum(float(s.get("confidence", 0.0) or 0.0) for s in ok_steps) / float(len(ok_steps))
 
+    run_ended = datetime.now(timezone.utc).isoformat()
+    wall_sec = time.perf_counter() - t_run0
+    total_usage = _sum_step_usage(step_results)
+    all_usage_records: List[Dict[str, Any]] = []
+    for step in step_results:
+        for row in step.get("usage_records", []) or []:
+            if isinstance(row, dict):
+                all_usage_records.append(dict(row))
+    timing_block = {
+        "started_at": run_started,
+        "ended_at": run_ended,
+        "wall_time_sec": round(float(wall_sec), 4),
+    }
+    if progress and not verbose:
+        print(
+            f"[Phase7][LLM] {plab + ' ' if plab else ''}轮询结束 "
+            f"wall={wall_sec:.2f}s tok={total_usage.get('total_tokens', 0)}",
+            flush=True,
+        )
     final_payload = {
         "status": "dry_run" if dry_run else "ok",
         "selected_path": {
@@ -359,6 +560,17 @@ def run_llm_poll_on_deepest_path(
         "avg_step_confidence": round(avg_conf, 4),
         "steps": step_results,
         "condition_chain": condition_chain,
+        "timing": timing_block,
+        "token_usage": total_usage,
+        "usage_records": all_usage_records,
     }
-    _append_log({"type": "summary", "status": final_payload.get("status", "ok"), "result": final_payload})
+    _append_log(
+        {
+            "type": "summary",
+            "status": final_payload.get("status", "ok"),
+            "timing": timing_block,
+            "token_usage": final_payload.get("token_usage"),
+            "result": final_payload,
+        }
+    )
     return final_payload

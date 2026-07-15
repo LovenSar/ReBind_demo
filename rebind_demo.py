@@ -213,6 +213,97 @@ def _phase7_workspace_dir(input_path: Path) -> Path:
     return input_path.parent / f"{safe_name}_goal_deep"
 
 
+def _parse_phase7_task_json_run_id(task_config_path: Optional[Path]) -> Optional[str]:
+    """读取任务 JSON 中的 ``run_id``（忽略 ``_`` 元键）；无则 ``None``。"""
+    if not task_config_path or not task_config_path.is_file():
+        return None
+    try:
+        data = json.loads(task_config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    rid = data.get("run_id")
+    if rid is None:
+        return None
+    s = str(rid).strip()
+    return s or None
+
+
+def _phase7_predict_run_dir(
+    input_path: Path,
+    *,
+    db_path: Path,
+    runs_root: Optional[Path],
+    run_id_cli: Optional[str],
+    task_config_path: Optional[Path],
+) -> Optional[Path]:
+    """预测显式 run_id 的目录，用于碰撞检测与交互式续跑。
+
+    未指定 run_id 时引擎生成高精度时间戳，预检没有稳定目标，直接返回 ``None``。
+    """
+    if str(_SA) not in sys.path:
+        sys.path.insert(0, str(_SA))
+    from depth.run_management import _build_run_layout
+
+    rid = (run_id_cli or "").strip() or None
+    if not rid:
+        rid = _parse_phase7_task_json_run_id(task_config_path)
+    if not rid:
+        return None
+    er = runs_root or (_phase7_workspace_dir(input_path) / "runs")
+    er = Path(er).expanduser().resolve()
+    layout = _build_run_layout(
+        db_path=db_path,
+        input_path=str(input_path),
+        explicit_output=None,
+        runs_root=str(er),
+        run_id=rid,
+        resume=False,
+    )
+    return layout.run_dir
+
+
+def _interactive_resolve_phase7_run_collision(run_dir: Path) -> Optional[str]:
+    """交互式处理已存在的 run 目录。
+
+    返回 ``\"resume\"``、``\"new:<run_id>\"``，或 ``None`` 表示退出。
+    非 TTY 时打印说明并返回 ``None``。
+    """
+    if not sys.stdin.isatty():
+        print(
+            "\n[ReBindDemo] run 目录已存在:\n"
+            f"  {run_dir}\n"
+            "当前为非交互终端：请显式添加 --phase7-resume（续跑）或 "
+            "--phase7-run-id <新id>（新 run）后重试。\n",
+            file=sys.stderr,
+        )
+        return None
+    print(f"\n[ReBindDemo] run 目录已存在:\n  {run_dir}")
+    print("  [r] 续跑（--resume）")
+    print("  [n] 使用新的 run-id（覆盖任务 JSON 中的默认 run-id）")
+    print("  [q] 退出")
+    while True:
+        try:
+            raw = input("请选择 [r/n/q]: ").strip().lower()
+        except EOFError:
+            return None
+        if raw in ("q", "quit"):
+            return None
+        if raw in ("r", "resume"):
+            return "resume"
+        if raw in ("n", "new"):
+            try:
+                nid = input("请输入新的 run-id（字母数字、点、下划线等）: ").strip()
+            except EOFError:
+                return None
+            if not nid:
+                print("run-id 不能为空。", file=sys.stderr)
+                continue
+            return f"new:{nid}"
+        print("请输入 r、n 或 q。")
+
+
 def _phase7_legacy_db_path(input_path: Path) -> Path:
     """返回由常规流水线生成的对齐 DB 路径（用于 Phase7 自动迁移检测）。
 
@@ -654,7 +745,7 @@ def run_deep_path_analysis(
 def run_phase7_analysis(
     input_paths: List[Path],
     *,
-    semantics_config_path: Optional[Path] = None,
+    platform_key: Optional[str] = None,
     db_path_override: Optional[Path] = None,
     output_path: Optional[Path] = None,
     runs_root: Optional[Path] = None,
@@ -666,6 +757,8 @@ def run_phase7_analysis(
     apply_max_rows: Optional[int] = None,
     apply_min_confidence: Optional[int] = None,
     extra_args: Optional[List[str]] = None,
+    no_console_progress: bool = False,
+    task_config_path: Optional[Path] = None,
 ) -> None:
     """Call goal_deep_engine.py (Phase7) from the unified project entry."""
 
@@ -694,18 +787,43 @@ def run_phase7_analysis(
             effective_db = preferred_db
 
         cmd.extend(["--db", str(effective_db)])
-        if semantics_config_path:
-            cmd.extend(["--llm-config", str(semantics_config_path)])
+        if platform_key:
+            cmd.extend(["--platform", str(platform_key)])
         if output_path:
             cmd.extend(["--output", str(output_path)])
         effective_runs_root = runs_root or (_phase7_workspace_dir(input_path) / "runs")
-        cmd.extend(["--runs-root", str(effective_runs_root)])
+
+        explicit_run_id: Optional[str] = None
         if run_id:
-            effective_run_id = str(run_id)
+            explicit_run_id = str(run_id)
             if len(input_paths) > 1:
-                effective_run_id = f"{effective_run_id}_{idx:02d}"
-            cmd.extend(["--run-id", effective_run_id])
-        if resume:
+                explicit_run_id = f"{explicit_run_id}_{idx:02d}"
+
+        final_resume = bool(resume or force_resume)
+        if (
+            len(input_paths) == 1
+            and not final_resume
+        ):
+            pred = _phase7_predict_run_dir(
+                input_path,
+                db_path=effective_db,
+                runs_root=runs_root,
+                run_id_cli=explicit_run_id,
+                task_config_path=task_config_path,
+            )
+            if pred is not None and pred.is_dir():
+                choice = _interactive_resolve_phase7_run_collision(pred)
+                if choice is None:
+                    raise SystemExit(1)
+                if choice == "resume":
+                    final_resume = True
+                elif choice.startswith("new:"):
+                    explicit_run_id = choice.split(":", 1)[1]
+
+        cmd.extend(["--runs-root", str(effective_runs_root)])
+        if explicit_run_id:
+            cmd.extend(["--run-id", explicit_run_id])
+        if final_resume:
             cmd.append("--resume")
         if force_resume:
             cmd.append("--force-resume")
@@ -717,6 +835,10 @@ def run_phase7_analysis(
             cmd.extend(["--apply-max-rows", str(int(apply_max_rows))])
         if apply_min_confidence is not None:
             cmd.extend(["--apply-min-confidence", str(int(apply_min_confidence))])
+        if no_console_progress:
+            cmd.append("--no-console-progress")
+        if task_config_path:
+            cmd.extend(["--task-config", str(task_config_path)])
 
         for raw in forwarded:
             try:
@@ -1118,7 +1240,18 @@ def main():
         default=[],
         help="额外透传给 goal_deep_engine.py 的参数片段（可重复）。",
     )
-    
+    parser.add_argument(
+        "--phase7-task-config",
+        default=None,
+        help="Phase7 单次任务 JSON（透传 --task-config；默认值来自根 config.yaml）。",
+    )
+    parser.add_argument(
+        "--phase7-no-console-progress",
+        action="store_true",
+        default=False,
+        help="关闭 Phase7 终端阶段性进度（默认会打印 Phase7.5/建图/DFS/LLM 简要信息）。",
+    )
+
     args = parser.parse_args()
     
     # 验证输入文件
@@ -1187,10 +1320,12 @@ def main():
             or args.phase7_resume
             or args.phase7_force_resume
             or args.phase7_log_raw_llm
+            or args.phase7_no_console_progress
             or args.phase7_apply_db
             or args.phase7_apply_max_rows is not None
             or args.phase7_apply_min_confidence is not None
             or args.phase7_extra_arg
+            or args.phase7_task_config
         ) and not (args.phase7 or args.phase7_after_align):
             print("错误: phase7 相关参数仅在 --phase7 或 --phase7-after-align 模式下可用。", file=sys.stderr)
             sys.exit(1)
@@ -1203,6 +1338,17 @@ def main():
             sys.exit(1)
 
         if args.phase7:
+            if args.phase7_task_config:
+                _tcp = Path(args.phase7_task_config).expanduser().resolve()
+                if not _tcp.is_file():
+                    print(
+                        "[ReBindDemo] 错误: --phase7-task-config 指向的文件不存在:\n"
+                        f"  {_tcp}\n"
+                        "请先创建该 JSON，或传入已存在的 preset/任务文件路径。\n"
+                        "省略该参数时使用根 config.yaml 的 semantics.phase7.task_defaults。",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
             phase7_output = Path(args.phase7_output).expanduser().resolve() if args.phase7_output else None
             phase7_runs_root = Path(args.phase7_runs_root).expanduser().resolve() if args.phase7_runs_root else None
             ensure_phase7_db_for_inputs(
@@ -1212,7 +1358,7 @@ def main():
             )
             run_phase7_analysis(
                 sample_paths,
-                semantics_config_path=demo.semantics_config_path,
+                platform_key=demo.platform_key,
                 db_path_override=db_override,
                 output_path=phase7_output,
                 runs_root=phase7_runs_root,
@@ -1224,6 +1370,12 @@ def main():
                 apply_max_rows=args.phase7_apply_max_rows,
                 apply_min_confidence=args.phase7_apply_min_confidence,
                 extra_args=list(args.phase7_extra_arg or []),
+                no_console_progress=bool(args.phase7_no_console_progress),
+                task_config_path=(
+                    Path(args.phase7_task_config).expanduser().resolve()
+                    if args.phase7_task_config
+                    else None
+                ),
             )
             return
 
@@ -1438,7 +1590,7 @@ def main():
                     phase7_runs_root = Path(args.phase7_runs_root).expanduser().resolve() if args.phase7_runs_root else None
                     run_phase7_analysis(
                         sample_paths,
-                        semantics_config_path=demo.semantics_config_path,
+                        platform_key=demo.platform_key,
                         db_path_override=db_override,
                         output_path=phase7_output,
                         runs_root=phase7_runs_root,
@@ -1450,6 +1602,12 @@ def main():
                         apply_max_rows=args.phase7_apply_max_rows,
                         apply_min_confidence=args.phase7_apply_min_confidence,
                         extra_args=list(args.phase7_extra_arg or []),
+                        no_console_progress=bool(args.phase7_no_console_progress),
+                        task_config_path=(
+                            Path(args.phase7_task_config).expanduser().resolve()
+                            if args.phase7_task_config
+                            else None
+                        ),
                     )
         
     except Exception as e:

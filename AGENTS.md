@@ -35,6 +35,9 @@
 - 配置合并逻辑在 `project_config.py` 中实现：
   - 基础配置：`config.yaml` 中的 `ghidra` / `ida` / `semantics`
   - 平台覆盖：`platforms.<os>` 下的同名段（优先级更高）
+- Phase7 默认值、presets 与预处理阈值分别位于
+  `semantics.phase7.task_defaults` / `presets` / `preprocess`；预处理生成的任务 JSON
+  是显式单次运行快照，不是隐式配置源
 - **禁止**：在代码中硬编码路径、创建新的配置文件、使用 `-c` 参数指定模块配置
 
 ### 2. 路径与目录结构

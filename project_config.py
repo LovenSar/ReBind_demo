@@ -125,3 +125,12 @@ def merge_semantics_config_dict(global_config: Dict[str, Any], platform_key: str
     if not isinstance(platform_sem, dict):
         platform_sem = {}
     return deep_merge_dicts(semantics_common, platform_sem)
+
+
+def merge_phase7_config_dict(global_config: Dict[str, Any], platform_key: str) -> Dict[str, Any]:
+    """返回平台合并后的 ``semantics.phase7`` 配置。"""
+    semantics = merge_semantics_config_dict(global_config, platform_key)
+    phase7 = semantics.get("phase7") or {}
+    if not isinstance(phase7, dict):
+        raise RuntimeError("config.yaml 的 semantics.phase7 必须是一个字典结构。")
+    return copy.deepcopy(phase7)

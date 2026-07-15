@@ -614,6 +614,28 @@ def _try_parse_json_value(text: str) -> Optional[Any]:
     return None
 
 
+def _extract_usage_from_chat_response(resp: Any) -> Optional[Dict[str, Any]]:
+    """从 OpenAI Chat Completions 响应中提取 usage（新旧 SDK / dict 兼容）。"""
+    if resp is None:
+        return None
+    u = getattr(resp, "usage", None)
+    if u is None and isinstance(resp, dict):
+        u = resp.get("usage")
+    if u is None:
+        return None
+    if isinstance(u, dict):
+        return {
+            "prompt_tokens": u.get("prompt_tokens"),
+            "completion_tokens": u.get("completion_tokens"),
+            "total_tokens": u.get("total_tokens"),
+        }
+    return {
+        "prompt_tokens": getattr(u, "prompt_tokens", None),
+        "completion_tokens": getattr(u, "completion_tokens", None),
+        "total_tokens": getattr(u, "total_tokens", None),
+    }
+
+
 def call_llm_analyze_function(
     *,
     conversation: List[Dict[str, str]],
@@ -624,12 +646,15 @@ def call_llm_analyze_function(
     expect_array: bool = False,
     expected_size: Optional[int] = None,
     on_raw_text: Optional[Callable[[str], None]] = None,
+    usage_collect: Optional[List[Dict[str, Any]]] = None,
 ) -> Any:
     """调用 OpenAI ChatCompletion 做分析。
 
     默认期望返回单个 JSON 对象；若 expect_array=True，则要求返回 JSON 数组，
     并在 expected_size 给定时校验数组长度。
     """
+
+    global _API_KEY_INDEX
 
     client = require_openai(api_settings)
 
@@ -666,6 +691,14 @@ def call_llm_analyze_function(
                 else:  # pragma: no cover
                     last_error = "当前 openai 客户端不支持 ChatCompletion 接口"
                     break
+                uu = _extract_usage_from_chat_response(resp)
+                if usage_collect is not None and uu:
+                    try:
+                        row = dict(uu)
+                        row["attempt"] = int(attempt)
+                        usage_collect.append(row)
+                    except Exception:
+                        pass
             except Exception as exc:
                 if _is_quota_exhausted_error(exc):
                     exit_msg = (
