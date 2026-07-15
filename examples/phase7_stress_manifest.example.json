@@ -2,7 +2,6 @@
   "defaults": {
     "timeout_seconds": 7200,
     "engines": ["legacy", "practical"],
-    "practical_budgets": [12, 24, 40],
     "common_args": [
       "--goal-limit", "3",
       "--max-generations", "2",
