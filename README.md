@@ -16,7 +16,22 @@
 | [目录说明](docs/directory-layout.md) | 各文件夹职责与关键脚本 |
 | [流水线架构](docs/architecture.md) | Phase1–4 流程图（Mermaid） |
 | [Goal Deep Engine](docs/goal-deep-engine.md) | Phase7 / 7.5 规范与参数 |
+| [Phase7 实战准确度模式](docs/phase7-practical-mode.md) | 调用图预算、静态证据 Prompt、独立回填门槛 |
 | [可观测与续跑](docs/observability.md) | 日志、checkpoint、`runs/` 约定 |
+
+## Phase7 实战入口
+
+原有 `depth/engine.py` 保持兼容。需要降低混合图噪声时，可以改用：
+
+```bash
+python tools/Semantics_Alignment/depth/practical_engine.py \
+  /path/to/sample.bin \
+  --db /path/to/sample.db \
+  --practical-node-budget 24 \
+  --no-apply-db
+```
+
+这个入口只沿 caller/callee 调用关系扩展路径。字符串、全局变量、数据引用和间接调用会作为证据进入 Prompt，不会直接扩大函数邻域。新 Profile 还需要通过静态证据门槛。
 
 ## 近期结构调整说明
 
