@@ -17,6 +17,7 @@
 | [流水线架构](docs/architecture.md) | Phase1–4 流程图（Mermaid） |
 | [Goal Deep Engine](docs/goal-deep-engine.md) | Phase7 / 7.5 规范与参数 |
 | [Phase7 实战准确度模式](docs/phase7-practical-mode.md) | 调用图预算、静态证据 Prompt、独立回填门槛 |
+| [Phase7 实战压力测试](docs/phase7-stress-test.md) | Legacy/Practical A/B、资源指标和人工真值召回 |
 | [可观测与续跑](docs/observability.md) | 日志、checkpoint、`runs/` 约定 |
 
 ## Phase7 实战入口
@@ -32,6 +33,20 @@ python tools/Semantics_Alignment/depth/practical_engine.py \
 ```
 
 这个入口只沿 caller/callee 调用关系扩展路径。字符串、全局变量、数据引用和间接调用会作为证据进入 Prompt，不会直接扩大函数邻域。新 Profile 还需要通过静态证据门槛。
+
+## Phase7 A/B 压力测试
+
+复制样本清单后，可以先进行无 API 成本检查：
+
+```bash
+cp examples/phase7_stress_manifest.example.json tmp/phase7_stress_manifest.json
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --profile smoke \
+  --dry-run
+```
+
+真实测试会让同一批样本分别运行 legacy 和 practical，并输出耗时、内存、Token、路径覆盖和人工真值召回对比。
 
 ## 近期结构调整说明
 
