@@ -134,21 +134,31 @@ def score_profile_static_evidence(profile: Dict[str, Any]) -> Dict[str, Any]:
 
     profile_tokens = base._profile_tokens(profile)
     evidence = _evidence_sets(entry_va)
+    node = base._node(base._CONTEXT.graph, entry_va) if base._CONTEXT.graph is not None else None
+    symbol_tokens = base._tokens(str(profile.get("name") or ""))
+    known_symbols = {
+        frozenset(base._tokens(str(name)))
+        for name in (getattr(node, "names", set()) or set())
+        if base._tokens(str(name))
+    }
+    symbol_match = bool(symbol_tokens) and frozenset(symbol_tokens) in known_symbols
     overlaps = {
         kind: sorted(profile_tokens & tokens)
         for kind, tokens in evidence.items()
     }
+    overlaps["symbol_name"] = sorted(symbol_tokens) if symbol_match else []
     weighted = {
         "api": 0.35,
         "string": 0.25,
         "relation": 0.20,
         "graph": 0.10,
         "existing": 0.10,
+        "symbol_name": 0.20,
     }
     score = sum(weight for kind, weight in weighted.items() if overlaps.get(kind))
     independent = sum(
         1
-        for kind in ("api", "string", "relation", "graph")
+        for kind in ("api", "string", "relation", "graph", "symbol_name")
         if overlaps.get(kind)
     )
 

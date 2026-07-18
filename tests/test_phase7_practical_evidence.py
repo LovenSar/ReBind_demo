@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -72,3 +73,33 @@ def test_relation_overlap_is_counted_but_not_strong_enough_alone():
     assert "license" in result["overlaps"]["relation"]
     assert result["score"] == 0.2
     assert result["score"] < base._CONTEXT.settings.evidence_threshold
+
+
+def test_exact_existing_symbol_name_is_independent_static_evidence():
+    result = base.score_profile_static_evidence(
+        {
+            "entry_va": "0x1000",
+            "name": "network_dispatch",
+            "summary_signature": "int network_dispatch(int fd)",
+            "semantic_summary": "Dispatches network packets.",
+            "confidence_score": 95,
+        }
+    )
+    assert "network" in result["overlaps"]["symbol_name"]
+    assert result["independent_signal_count"] >= 1
+    assert result["score"] >= base._CONTEXT.settings.evidence_threshold
+
+
+def load_tests(_loader, _tests, _pattern):
+    suite = unittest.TestSuite()
+    for func in (
+        test_non_call_relations_are_rendered_as_evidence,
+        test_relation_overlap_is_counted_but_not_strong_enough_alone,
+        test_exact_existing_symbol_name_is_independent_static_evidence,
+    ):
+        def run_test(test_func=func):
+            setup_function()
+            test_func()
+
+        suite.addTest(unittest.FunctionTestCase(run_test, description=func.__name__))
+    return suite

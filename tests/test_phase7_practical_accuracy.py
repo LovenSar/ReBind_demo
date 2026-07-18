@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -181,3 +182,20 @@ def test_profile_gate_accepts_candidate_supported_by_strings():
     assert result["selected"] == "new"
     assert result["evidence_gate"]["passed"] is True
     assert "auth" in result["evidence_gate"]["overlaps"]["string"]
+
+
+def load_tests(_loader, _tests, _pattern):
+    suite = unittest.TestSuite()
+    for func in (
+        test_call_budget_neighborhood_excludes_string_only_edges,
+        test_static_evidence_block_contains_api_string_global_and_neighbors,
+        test_prompt_patch_injects_evidence_constraints,
+        test_profile_gate_rejects_unsupported_llm_candidate,
+        test_profile_gate_accepts_candidate_supported_by_strings,
+    ):
+        def run_test(test_func=func):
+            setup_function()
+            test_func()
+
+        suite.addTest(unittest.FunctionTestCase(run_test, description=func.__name__))
+    return suite

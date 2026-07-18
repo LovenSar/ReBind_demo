@@ -112,6 +112,32 @@ def _load_backup_profile(
 # LLM 调用（带 trace 日志）
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _usage_from_records(records: Sequence[Dict[str, Any]]) -> Dict[str, int]:
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    successful_calls = 0
+    for row in records:
+        try:
+            prompt_tokens += int(row.get("prompt_tokens", 0) or 0)
+            completion_tokens += int(row.get("completion_tokens", 0) or 0)
+            total_tokens += int(row.get("total_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if str(row.get("status") or "ok") == "ok":
+            successful_calls += 1
+    if total_tokens <= 0:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "api_calls": len(records),
+        "successful_api_calls": successful_calls,
+        "failed_api_calls": len(records) - successful_calls,
+    }
+
+
 def _redact_request_data(value: Any, key: str = "") -> Any:
     """递归脱敏请求参数，原始 LLM 日志也绝不写入认证信息。"""
     key_lower = str(key or "").lower()
@@ -133,6 +159,7 @@ def _call_llm_with_trace(
     trace_label: str,
     trace_meta: Optional[Dict[str, Any]] = None,
     log_raw_llm: bool = False,
+    usage_collect: Optional[List[Dict[str, Any]]] = None,
 ) -> Any:
     """调用 LLM 并把请求/响应摘要写入 trace JSONL。"""
     conversation, request_kwargs = build_chat_request(prompt, llm_settings)
@@ -172,6 +199,7 @@ def _call_llm_with_trace(
         api_settings=llm_settings.api_settings,
         max_attempts=max(1, int(max_attempts or 1)),
         on_raw_text=_on_raw_text if log_raw_llm else None,
+        usage_collect=usage_collect,
     )
 
     if llm_trace_file is not None:
@@ -182,6 +210,7 @@ def _call_llm_with_trace(
             "meta": meta,
             "ok": isinstance(result, dict) and bool(result),
             "result_type": type(result).__name__,
+            "usage": _usage_from_records(usage_collect or []),
         }
         if log_raw_llm:
             response_event["raw_text"] = raw_holder.get("raw", "")
@@ -230,6 +259,7 @@ def _analyze_node_semantics_with_llm(
         max_pseudo_chars_per_tool=3200,
         max_strings=20,
     )
+    usage_records: List[Dict[str, Any]] = []
     result = _call_llm_with_trace(
         prompt=prompt,
         llm_settings=llm_settings,
@@ -238,9 +268,17 @@ def _analyze_node_semantics_with_llm(
         trace_label="analyze_node",
         trace_meta={"entry_va": f"0x{va:08X}"},
         log_raw_llm=bool(log_raw_llm),
+        usage_collect=usage_records,
     )
+    usage = _usage_from_records(usage_records)
     if not isinstance(result, dict) or not result:
-        return {"entry_va": f"0x{va:08X}", "status": "llm_failed", "raw": result}
+        return {
+            "entry_va": f"0x{va:08X}",
+            "status": "llm_failed",
+            "raw": result,
+            "usage": usage,
+            "usage_records": usage_records,
+        }
 
     signature = str(result.get("signature") or "").strip()
     summary = str(result.get("summary") or "").strip()
@@ -266,6 +304,8 @@ def _analyze_node_semantics_with_llm(
         ),
         "confidence_score": int(max(0.0, min(1.0, confidence)) * 100.0),
         "raw": result,
+        "usage": usage,
+        "usage_records": usage_records,
     }
 
 
@@ -295,6 +335,7 @@ def _llm_compare_profiles(
         f"[OLD]\n{json.dumps(old_profile, ensure_ascii=False, indent=2)}\n\n"
         f"[NEW]\n{json.dumps(new_profile, ensure_ascii=False, indent=2)}"
     )
+    usage_records: List[Dict[str, Any]] = []
     result = _call_llm_with_trace(
         prompt=prompt,
         llm_settings=llm_settings,
@@ -303,9 +344,20 @@ def _llm_compare_profiles(
         trace_label="compare_profiles",
         trace_meta={"entry_va": str(old_profile.get("entry_va") or "")},
         log_raw_llm=bool(log_raw_llm),
+        usage_collect=usage_records,
     )
+    usage = _usage_from_records(usage_records)
     if not isinstance(result, dict) or not result:
-        return {"status": "llm_failed", "choose": "old", "old_score": 0.0, "new_score": 0.0, "reason": "llm_failed", "raw": result}
+        return {
+            "status": "llm_failed",
+            "choose": "old",
+            "old_score": 0.0,
+            "new_score": 0.0,
+            "reason": "llm_failed",
+            "raw": result,
+            "usage": usage,
+            "usage_records": usage_records,
+        }
 
     choose = str(result.get("choose") or "old").strip().lower()
     if choose not in {"old", "new"}:
@@ -324,6 +376,8 @@ def _llm_compare_profiles(
         "new_score": _f(result.get("new_score", 0.0)),
         "reason": str(result.get("reason") or ""),
         "raw": result,
+        "usage": usage,
+        "usage_records": usage_records,
     }
 
 

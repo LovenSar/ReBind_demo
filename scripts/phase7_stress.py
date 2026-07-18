@@ -45,7 +45,14 @@ _PROFILES: Dict[str, Dict[str, Any]] = {
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,}")
 _SLUG_RE = re.compile(r"[^A-Za-z0-9_.-]+")
-_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens", "api_calls")
+_USAGE_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "api_calls",
+    "successful_api_calls",
+    "failed_api_calls",
+)
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,7 @@ class RunSpec:
 class ProcessResult:
     return_code: int
     timed_out: bool
+    interrupted: bool
     wall_time_sec: float
     peak_rss_mb: Optional[float]
 
@@ -119,6 +127,31 @@ def _list_of_strings(value: Any, field_name: str) -> Tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"{field_name} must be a JSON array")
     return tuple(str(item) for item in value)
+
+
+def _validate_expectations(value: Mapping[str, Any], field_name: str) -> None:
+    goal_vas = value.get("goal_vas")
+    if goal_vas is not None and not isinstance(goal_vas, list):
+        raise ValueError(f"{field_name}.goal_vas must be a JSON array")
+
+    paths = value.get("path_subsequences")
+    if paths is not None:
+        if not isinstance(paths, list) or any(
+            not isinstance(path, list) or not path for path in paths
+        ):
+            raise ValueError(
+                f"{field_name}.path_subsequences must be an array of non-empty arrays"
+            )
+
+    profile_tokens = value.get("profile_tokens")
+    if profile_tokens is not None:
+        if not isinstance(profile_tokens, dict):
+            raise ValueError(f"{field_name}.profile_tokens must be a JSON object")
+        for va, tokens in profile_tokens.items():
+            if not isinstance(tokens, list) or not tokens:
+                raise ValueError(
+                    f"{field_name}.profile_tokens[{va!r}] must be a non-empty array"
+                )
 
 
 def load_manifest(path: Path) -> Dict[str, Any]:
@@ -193,6 +226,7 @@ def build_run_matrix(
     default_expectations = defaults.get("expectations") or {}
     if not isinstance(default_expectations, dict):
         raise ValueError("defaults.expectations must be an object")
+    _validate_expectations(default_expectations, "defaults.expectations")
 
     matrix: List[RunSpec] = []
     seen_names: set[str] = set()
@@ -216,6 +250,7 @@ def build_run_matrix(
         sample_expectations = raw_sample.get("expectations") or {}
         if not isinstance(sample_expectations, dict):
             raise ValueError(f"samples[{index}].expectations must be an object")
+        _validate_expectations(sample_expectations, f"samples[{index}].expectations")
         expectations.update(sample_expectations)
 
         sample_common = _list_of_strings(raw_sample.get("common_args", []), f"samples[{index}].common_args")
@@ -251,6 +286,15 @@ def build_run_matrix(
                             **shared,
                         )
                     )
+    run_keys: Dict[str, str] = {}
+    for spec in matrix:
+        previous = run_keys.get(spec.run_key)
+        if previous is not None:
+            raise ValueError(
+                "sample names collide after normalization: "
+                f"{previous!r} and {spec.sample_name!r} both produce {spec.run_key!r}"
+            )
+        run_keys[spec.run_key] = spec.sample_name
     return matrix
 
 
@@ -398,6 +442,7 @@ def run_process(command: Sequence[str], run_dir: Path, timeout_seconds: float) -
     started = time.perf_counter()
     peak_rss_mb: Optional[float] = None
     timed_out = False
+    interrupted = False
     with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout_file, stderr_path.open(
         "w", encoding="utf-8", errors="replace"
     ) as stderr_file:
@@ -409,26 +454,35 @@ def run_process(command: Sequence[str], run_dir: Path, timeout_seconds: float) -
             env=env,
             **popen_kwargs,
         )
-        while process.poll() is None:
-            current_rss = _process_tree_rss_mb(process)
-            if current_rss is not None:
-                peak_rss_mb = max(peak_rss_mb or 0.0, current_rss)
-            if timeout_seconds > 0 and (time.perf_counter() - started) > timeout_seconds:
-                timed_out = True
-                _terminate_process_tree(process)
-                break
-            time.sleep(0.25)
         try:
-            return_code = int(process.wait(timeout=10))
-        except subprocess.TimeoutExpired:
+            while process.poll() is None:
+                current_rss = _process_tree_rss_mb(process)
+                if current_rss is not None:
+                    peak_rss_mb = max(peak_rss_mb or 0.0, current_rss)
+                if timeout_seconds > 0 and (time.perf_counter() - started) > timeout_seconds:
+                    timed_out = True
+                    _terminate_process_tree(process)
+                    break
+                time.sleep(0.25)
+            try:
+                return_code = int(process.wait(timeout=10))
+            except subprocess.TimeoutExpired:
+                _terminate_process_tree(process)
+                return_code = 124
+        except KeyboardInterrupt:
+            interrupted = True
             _terminate_process_tree(process)
-            return_code = 124
+            return_code = 130
+        finally:
+            if process.poll() is None:
+                _terminate_process_tree(process)
 
     if timed_out:
         return_code = 124
     return ProcessResult(
         return_code=return_code,
         timed_out=timed_out,
+        interrupted=interrupted,
         wall_time_sec=round(time.perf_counter() - started, 4),
         peak_rss_mb=round(peak_rss_mb, 3) if peak_rss_mb is not None else None,
     )
@@ -524,7 +578,11 @@ def _is_subsequence(expected: Sequence[str], actual: Sequence[str]) -> bool:
 
 
 def _tokens(value: Any) -> set[str]:
-    return {match.group(0).lower() for match in _TOKEN_RE.finditer(str(value or ""))}
+    result: set[str] = set()
+    for match in _TOKEN_RE.finditer(str(value or "")):
+        expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", match.group(0))
+        result.update(token for token in expanded.lower().split("_") if len(token) >= 2)
+    return result
 
 
 def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
@@ -562,6 +620,7 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
         if isinstance(item, dict) and _normalize_va(item.get("entry_va"))
     }
     all_paths: List[List[str]] = []
+    seen_paths: set[Tuple[str, ...]] = set()
     coverage_nodes: set[str] = set()
     generation_count = 0
     llm_steps = 0
@@ -572,6 +631,7 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
     for goal in generations if isinstance(generations, list) else []:
         if not isinstance(goal, dict):
             continue
+        goal_index = int(goal.get("goal_index", 0) or 0)
         generation_count += int(goal.get("actual_generations", 0) or 0)
         for generation in goal.get("generations", []) or []:
             if not isinstance(generation, dict):
@@ -585,10 +645,14 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
                 continue
             for path in result.get("paths", []) or []:
                 normalized = _path_vas(path)
-                if normalized:
+                path_key = tuple(normalized)
+                if normalized and path_key not in seen_paths:
+                    seen_paths.add(path_key)
                     all_paths.append(normalized)
             llm = result.get("llm") or {}
-            if isinstance(llm, dict):
+            shared_source = generation.get("shared_source_goal_index")
+            owns_llm_result = shared_source is None or int(shared_source or 0) == goal_index
+            if isinstance(llm, dict) and owns_llm_result:
                 _add_usage(usage_total, _usage_from_dict(llm.get("token_usage")))
                 for step in llm.get("steps", []) or []:
                     if not isinstance(step, dict):
@@ -598,17 +662,48 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
                         successful_llm_steps += 1
                         confidences.append(_as_number(step.get("confidence")))
 
-    _add_usage(usage_total, _sum_usage_nodes(function_compare))
+    for item in function_compare if isinstance(function_compare, list) else []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("new_profile", "llm_compare"):
+            payload = item.get(key) or {}
+            if isinstance(payload, dict):
+                _add_usage(
+                    usage_total,
+                    _usage_from_dict(payload.get("usage") or payload.get("token_usage")),
+                )
 
     selected_new = 0
     evidence_gate_passed = 0
     evidence_gate_seen = 0
+    profile_analysis_attempts = 0
+    profile_analysis_successes = 0
+    profile_compare_attempts = 0
+    profile_compare_successes = 0
     for item in function_compare if isinstance(function_compare, list) else []:
         if not isinstance(item, dict):
             continue
         selection = item.get("selection") or {}
         if not isinstance(selection, dict):
             continue
+        new_profile = item.get("new_profile") or {}
+        if isinstance(new_profile, dict) and str(new_profile.get("status") or "") not in {
+            "",
+            "dry_run",
+            "skipped",
+        }:
+            profile_analysis_attempts += 1
+            if str(new_profile.get("status") or "") == "ok":
+                profile_analysis_successes += 1
+        llm_compare = item.get("llm_compare") or {}
+        if isinstance(llm_compare, dict) and str(llm_compare.get("status") or "") not in {
+            "",
+            "dry_run",
+            "skipped",
+        }:
+            profile_compare_attempts += 1
+            if str(llm_compare.get("status") or "") == "ok":
+                profile_compare_successes += 1
         if str(selection.get("selected") or "").lower() == "new":
             selected_new += 1
         gate = selection.get("evidence_gate")
@@ -666,7 +761,9 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
         for raw_va, raw_tokens in profile_tokens_raw.items():
             if not isinstance(raw_tokens, list):
                 continue
-            expected = {str(value).lower() for value in raw_tokens if str(value).strip()}
+            expected: set[str] = set()
+            for value in raw_tokens:
+                expected.update(_tokens(value))
             expected_count += len(expected)
             matched_count += len(expected & profile_by_va.get(_normalize_va(raw_va), set()))
         if expected_count:
@@ -675,6 +772,10 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
     db_apply = report.get("db_apply") or {}
     applied_count = int(db_apply.get("applied_count", 0) or 0) if isinstance(db_apply, dict) else 0
     planned_count = int(db_apply.get("planned_count", 0) or 0) if isinstance(db_apply, dict) else 0
+    llm_interactions = llm_steps + profile_analysis_attempts + profile_compare_attempts
+    successful_llm_interactions = (
+        successful_llm_steps + profile_analysis_successes + profile_compare_successes
+    )
 
     return {
         "report_status": "ok",
@@ -686,11 +787,22 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
         "llm_steps": llm_steps,
         "successful_llm_steps": successful_llm_steps,
         "llm_step_success_rate": successful_llm_steps / llm_steps if llm_steps else None,
+        "profile_analysis_attempts": profile_analysis_attempts,
+        "profile_analysis_successes": profile_analysis_successes,
+        "profile_compare_attempts": profile_compare_attempts,
+        "profile_compare_successes": profile_compare_successes,
+        "llm_interactions": llm_interactions,
+        "successful_llm_interactions": successful_llm_interactions,
+        "llm_interaction_success_rate": (
+            successful_llm_interactions / llm_interactions if llm_interactions else None
+        ),
         "avg_step_confidence": avg_confidence,
         "prompt_tokens": int(usage_total["prompt_tokens"]),
         "completion_tokens": int(usage_total["completion_tokens"]),
         "total_tokens": int(usage_total["total_tokens"]),
         "api_calls": int(usage_total["api_calls"]),
+        "successful_api_calls": int(usage_total["successful_api_calls"]),
+        "failed_api_calls": int(usage_total["failed_api_calls"]),
         "compare_count": len(function_compare) if isinstance(function_compare, list) else 0,
         "selected_new_count": selected_new,
         "evidence_gate_seen": evidence_gate_seen,
@@ -746,14 +858,39 @@ def execute_run(
         )
         process_result = run_process(command, run_dir, timeout_seconds)
         base.update(asdict(process_result))
-        base["status"] = "ok" if process_result.return_code == 0 else ("timeout" if process_result.timed_out else "failed")
-        base.update(extract_report_metrics(run_dir / "report.json", spec.expectations))
+        if process_result.interrupted:
+            base["status"] = "interrupted"
+        elif process_result.timed_out:
+            base["status"] = "timeout"
+        else:
+            base["status"] = "ok" if process_result.return_code == 0 else "failed"
+        metrics = extract_report_metrics(run_dir / "report.json", spec.expectations)
+        base.update(metrics)
+        if base["status"] == "ok" and metrics.get("report_status") != "ok":
+            base["status"] = "failed"
+            base["runner_error"] = "engine exited successfully but produced no valid report"
+        if base["status"] == "ok" and int(metrics.get("db_apply_applied", 0) or 0) != 0:
+            base["status"] = "failed"
+            base["runner_error"] = "safety violation: benchmark applied database updates"
+        if base["status"] == "ok" and llm_mode == "on":
+            interactions = int(metrics.get("llm_interactions", 0) or 0)
+            successes = int(metrics.get("successful_llm_interactions", 0) or 0)
+            if interactions <= 0:
+                base["status"] = "failed"
+                base["runner_error"] = "llm_mode=on produced no measurable LLM interactions"
+            elif successes != interactions:
+                base["status"] = "failed"
+                base["runner_error"] = (
+                    "LLM interactions were incomplete: "
+                    f"successful={successes} attempted={interactions}"
+                )
     except Exception as exc:
         base.update(
             {
                 "status": "runner_error",
                 "return_code": -1,
                 "timed_out": False,
+                "interrupted": False,
                 "wall_time_sec": 0.0,
                 "peak_rss_mb": None,
                 "report_status": "missing",
@@ -794,11 +931,17 @@ def aggregate_results(results: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
     metrics = (
         "wall_time_sec",
         "peak_rss_mb",
+        "prompt_tokens",
+        "completion_tokens",
         "total_tokens",
         "api_calls",
+        "successful_api_calls",
+        "failed_api_calls",
         "coverage_node_count",
         "path_count",
         "deepest_path_depth",
+        "llm_step_success_rate",
+        "llm_interaction_success_rate",
         "avg_step_confidence",
         "selected_new_count",
         "evidence_gate_pass_rate",
@@ -808,15 +951,30 @@ def aggregate_results(results: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
     )
     summary: List[Dict[str, Any]] = []
     for (sample, variant), rows in sorted(grouped.items()):
+        successful_rows = [
+            row
+            for row in rows
+            if row.get("status") == "ok" and row.get("report_status") == "ok"
+        ]
+        timeouts = sum(1 for row in rows if row.get("status") == "timeout")
+        interruptions = sum(1 for row in rows if row.get("status") == "interrupted")
+        runner_errors = sum(1 for row in rows if row.get("status") == "runner_error")
+        failures = len(rows) - len(successful_rows) - timeouts - interruptions - runner_errors
         item: Dict[str, Any] = {
             "sample": sample,
             "variant": variant,
             "runs": len(rows),
-            "successes": sum(1 for row in rows if row.get("status") == "ok"),
+            "successes": len(successful_rows),
+            "timeouts": timeouts,
+            "failures": failures,
+            "runner_errors": runner_errors,
+            "interruptions": interruptions,
         }
         item["success_rate"] = item["successes"] / item["runs"] if item["runs"] else 0.0
+        item["timeout_rate"] = timeouts / item["runs"] if item["runs"] else 0.0
+        item["failure_rate"] = (len(rows) - len(successful_rows)) / item["runs"] if item["runs"] else 0.0
         for metric in metrics:
-            values = _numeric_values(rows, metric)
+            values = _numeric_values(successful_rows, metric)
             item[f"{metric}_mean"] = round(statistics.fmean(values), 6) if values else None
             item[f"{metric}_p50"] = round(_percentile(values, 0.50), 6) if values else None
             item[f"{metric}_p95"] = round(_percentile(values, 0.95), 6) if values else None
@@ -904,15 +1062,25 @@ def write_markdown_summary(
         "",
         "## 运行聚合",
         "",
-        "| 样本 | 变体 | 成功率 | 平均耗时(s) | P95耗时(s) | 峰值内存(MB) | 平均Token | 覆盖节点 | 最深路径 | Goal Recall | Path Recall | Profile Token Recall |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| 样本 | 变体 | 成功率 | 超时率 | 失败率 | LLM成功率 | 平均耗时(s) | P95耗时(s) | 峰值内存(MB) | 平均Token | 覆盖节点 | 最深路径 | Goal Recall | Path Recall | Profile Token Recall |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary:
         lines.append(
-            "| {sample} | {variant} | {success_rate} | {wall} | {wall_p95} | {rss} | {tokens} | {coverage} | {depth} | {goal} | {path_recall} | {profile} |".format(
+            "| {sample} | {variant} | {success_rate} | {timeout_rate} | {failure_rate} | {llm_success_rate} | {wall} | {wall_p95} | {rss} | {tokens} | {coverage} | {depth} | {goal} | {path_recall} | {profile} |".format(
                 sample=row.get("sample"),
                 variant=row.get("variant"),
                 success_rate=_fmt(_as_number(row.get("success_rate")) * 100.0) + "%",
+                timeout_rate=_fmt(_as_number(row.get("timeout_rate")) * 100.0) + "%",
+                failure_rate=_fmt(_as_number(row.get("failure_rate")) * 100.0) + "%",
+                llm_success_rate=(
+                    "-"
+                    if row.get("llm_interaction_success_rate_mean") is None
+                    else _fmt(
+                        _as_number(row.get("llm_interaction_success_rate_mean")) * 100.0
+                    )
+                    + "%"
+                ),
                 wall=_fmt(row.get("wall_time_sec_mean")),
                 wall_p95=_fmt(row.get("wall_time_sec_p95")),
                 rss=_fmt(row.get("peak_rss_mb_max")),
@@ -1062,6 +1230,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"tokens={result.get('total_tokens', '-')} coverage={result.get('coverage_node_count', '-')}",
             flush=True,
         )
+        if result.get("status") == "interrupted":
+            print("[Phase7 Stress] interrupted; remaining runs were not started", flush=True)
+            break
         if args.fail_fast and result.get("status") != "ok":
             break
 
@@ -1076,8 +1247,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     write_markdown_summary(output_root / "summary.md", summary, comparisons)
 
     failed = sum(1 for result in results if result.get("status") != "ok")
+    interrupted = any(result.get("status") == "interrupted" for result in results)
     print(f"[Phase7 Stress] completed={len(results)} failed={failed}")
     print(f"[Phase7 Stress] summary={output_root / 'summary.md'}")
+    if interrupted:
+        return 130
     return 1 if failed else 0
 
 

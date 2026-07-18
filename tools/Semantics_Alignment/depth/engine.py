@@ -1277,6 +1277,7 @@ def main() -> int:
             gen_details: List[Dict[str, Any]] = []
             gen_details.append({
                 "generation": 1,
+                "shared_source_goal_index": shared_source_goal_index,
                 "lambda_nodes": [f"0x{int(x):08X}" for x in sorted(gen1_nodes)],
                 "lambda_dist": {f"0x{int(k):08X}": round(float(v), 4) for k, v in sorted(gen1_dist.items())},
                 "result": gen1,

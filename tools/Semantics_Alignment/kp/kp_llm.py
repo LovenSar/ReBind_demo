@@ -550,6 +550,29 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     )
 
 
+def _is_transient_retry_error(exc: Exception) -> bool:
+    """识别适合短暂退避后重试的网络/服务端瞬态错误。"""
+
+    msg = str(exc).lower()
+    return any(
+        marker in msg
+        for marker in (
+            "connection error",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "temporarily unavailable",
+            "service unavailable",
+            "request timed out",
+            "timed out",
+            "timeout",
+            "502",
+            "503",
+            "504",
+        )
+    )
+
+
 def _repair_json_string(text: str) -> str:
     text = re.sub(r",\s*\]", "]", text)
     text = re.sub(r",\s*\}", "}", text)
@@ -560,13 +583,22 @@ def _repair_json_string(text: str) -> str:
 _JSON_DECODER = json.JSONDecoder()
 
 
-def _try_parse_json_value(text: str) -> Optional[Any]:
+def _try_parse_json_value(
+    text: str,
+    *,
+    preferred_type: Optional[type] = None,
+) -> Optional[Any]:
     """Best-effort parse a JSON value from an LLM response.
 
     Supports:
     - clean JSON
     - JSON with trailing text (via raw_decode)
-    - JSON embedded in surrounding text (first '{'/'[')
+    - JSON embedded in surrounding text
+
+    When ``preferred_type`` is ``dict`` or ``list``, embedded values of that
+    type are preferred.  This matters for reasoning-style responses such as
+    ``"argument [0] means ...\n{...final answer...}"``: taking the first JSON
+    value would otherwise mistake the explanatory ``[0]`` for the answer.
     """
 
     if not text:
@@ -580,38 +612,50 @@ def _try_parse_json_value(text: str) -> Optional[Any]:
     if "\n" in raw:
         candidates.append(raw.replace("\n", " "))
 
+    first_parsed: Optional[Any] = None
+
+    def _remember_or_return(value: Any) -> Optional[Any]:
+        nonlocal first_parsed
+        if first_parsed is None:
+            first_parsed = value
+        if preferred_type is None or isinstance(value, preferred_type):
+            return value
+        return None
+
     for cand in candidates:
         try:
-            return json.loads(cand)
+            matched = _remember_or_return(json.loads(cand))
+            if matched is not None:
+                return matched
         except Exception:
             pass
 
         try:
             obj, _idx = _JSON_DECODER.raw_decode(cand.lstrip())
-            return obj
+            matched = _remember_or_return(obj)
+            if matched is not None:
+                return matched
         except Exception:
             pass
 
-        m = re.search(r"[\[{]", cand)
-        if not m:
-            continue
-
-        sub = cand[m.start() :].lstrip()
-        try:
-            obj, _idx = _JSON_DECODER.raw_decode(sub)
-            return obj
-        except Exception:
-            pass
-
-        last_close = max(sub.rfind("}"), sub.rfind("]"))
-        if last_close != -1:
-            sub2 = sub[: last_close + 1]
+        openers = "{["
+        if preferred_type is dict:
+            openers = "{"
+        elif preferred_type is list:
+            openers = "["
+        for idx, char in enumerate(cand):
+            if char not in openers:
+                continue
+            sub = cand[idx:].lstrip()
             try:
-                return json.loads(sub2)
+                obj, _idx = _JSON_DECODER.raw_decode(sub)
             except Exception:
-                pass
+                continue
+            matched = _remember_or_return(obj)
+            if matched is not None:
+                return matched
 
-    return None
+    return first_parsed
 
 
 def _extract_usage_from_chat_response(resp: Any) -> Optional[Dict[str, Any]]:
@@ -692,14 +736,32 @@ def call_llm_analyze_function(
                     last_error = "当前 openai 客户端不支持 ChatCompletion 接口"
                     break
                 uu = _extract_usage_from_chat_response(resp)
-                if usage_collect is not None and uu:
+                if usage_collect is not None:
                     try:
-                        row = dict(uu)
+                        row = dict(uu or {})
+                        row.setdefault("prompt_tokens", 0)
+                        row.setdefault("completion_tokens", 0)
+                        row.setdefault("total_tokens", 0)
                         row["attempt"] = int(attempt)
+                        row["status"] = "ok"
                         usage_collect.append(row)
                     except Exception:
                         pass
             except Exception as exc:
+                if usage_collect is not None:
+                    try:
+                        usage_collect.append(
+                            {
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "total_tokens": 0,
+                                "attempt": int(attempt),
+                                "status": "error",
+                                "error_type": type(exc).__name__,
+                            }
+                        )
+                    except Exception:
+                        pass
                 if _is_quota_exhausted_error(exc):
                     exit_msg = (
                         "检测到 LLM API 余额不足，流程将安全退出；当前任务支持断点续工，"
@@ -748,6 +810,10 @@ def call_llm_analyze_function(
 
                 last_error = f"LLM 调用失败({attempt}/{max_attempts}): {exc}"
                 logger.warning("%s", last_error)
+                if attempt < max_attempts and _is_transient_retry_error(exc):
+                    delay = min(8.0, 1.5 * (2 ** (attempt - 1)))
+                    logger.info("瞬态 LLM 错误，%.1fs 后进行第 %d 次尝试", delay, attempt + 1)
+                    time.sleep(delay)
                 break
 
             if on_raw_text is not None:
@@ -769,10 +835,11 @@ def call_llm_analyze_function(
             if "\n" in text_str:
                 candidates.append(text_str.replace("\n", " "))
 
-            data = _try_parse_json_value(text_str)
+            preferred_type = list if expect_array else dict
+            data = _try_parse_json_value(text_str, preferred_type=preferred_type)
             if data is None:
                 repaired = _repair_json_string(text_str)
-                data = _try_parse_json_value(repaired)
+                data = _try_parse_json_value(repaired, preferred_type=preferred_type)
 
             if data is None:
                 hint = ""

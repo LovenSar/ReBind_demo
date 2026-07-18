@@ -79,6 +79,7 @@ def _edge_prompt_block(edge: Dict[str, Any], *, max_sites: int = 2, max_guards: 
 
 def _sum_usage_rows(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     pt = ct = tt = 0
+    successful_calls = 0
     for r in rows:
         try:
             pt += int(r.get("prompt_tokens") or 0)
@@ -86,6 +87,8 @@ def _sum_usage_rows(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
             tt += int(r.get("total_tokens") or 0)
         except Exception:
             continue
+        if str(r.get("status") or "ok") == "ok":
+            successful_calls += 1
     if tt <= 0 and (pt > 0 or ct > 0):
         tt = pt + ct
     return {
@@ -93,11 +96,13 @@ def _sum_usage_rows(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "completion_tokens": ct,
         "total_tokens": tt,
         "api_calls": len(rows),
+        "successful_api_calls": successful_calls,
+        "failed_api_calls": len(rows) - successful_calls,
     }
 
 
 def _sum_step_usage(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    pt = ct = tt = calls = 0
+    pt = ct = tt = calls = successful_calls = failed_calls = 0
     for row in rows:
         usage = row.get("usage") or {}
         if not isinstance(usage, dict):
@@ -106,6 +111,8 @@ def _sum_step_usage(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         ct += int(usage.get("completion_tokens") or 0)
         tt += int(usage.get("total_tokens") or 0)
         calls += int(usage.get("api_calls") or 0)
+        successful_calls += int(usage.get("successful_api_calls") or 0)
+        failed_calls += int(usage.get("failed_api_calls") or 0)
     if tt <= 0 and (pt > 0 or ct > 0):
         tt = pt + ct
     return {
@@ -113,6 +120,8 @@ def _sum_step_usage(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "completion_tokens": ct,
         "total_tokens": tt,
         "api_calls": calls,
+        "successful_api_calls": successful_calls,
+        "failed_api_calls": failed_calls,
     }
 
 

@@ -20,7 +20,11 @@ if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
 from depth.deep_path_step import LLMStepCheckpointError, run_llm_poll_on_deepest_path  # noqa: E402
-from kp.kp_llm import _extract_usage_from_chat_response  # noqa: E402
+from kp.kp_llm import (  # noqa: E402
+    _extract_usage_from_chat_response,
+    _try_parse_json_value,
+    call_llm_analyze_function,
+)
 from kp.kp_types import UnifiedFunctionNode, UnifiedGraph  # noqa: E402
 
 
@@ -90,6 +94,107 @@ class TestDeepPathStepResume(unittest.TestCase):
                 {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}}
             )["total_tokens"],
             5,
+        )
+
+    def test_failed_api_attempts_are_counted(self) -> None:
+        class FailingCompletions:
+            def create(self, **_kwargs):
+                raise RuntimeError("simulated provider rejection")
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=FailingCompletions())
+        )
+        usage_records: list[dict[str, object]] = []
+        with patch("kp.kp_llm.require_openai", return_value=client):
+            result = call_llm_analyze_function(
+                conversation=[],
+                request_kwargs={},
+                api_settings={},
+                max_attempts=2,
+                usage_collect=usage_records,
+            )
+
+        self.assertEqual(result, {})
+        self.assertEqual(len(usage_records), 2)
+        self.assertTrue(all(row["status"] == "error" for row in usage_records))
+
+    def test_transient_connection_error_uses_backoff_before_retry(self) -> None:
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))],
+            usage=None,
+        )
+
+        class FlakyCompletions:
+            calls = 0
+
+            def create(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("Connection error")
+                return response
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=FlakyCompletions())
+        )
+        usage_records: list[dict[str, object]] = []
+        with patch("kp.kp_llm.require_openai", return_value=client), patch(
+            "kp.kp_llm.time.sleep"
+        ) as sleep:
+            result = call_llm_analyze_function(
+                conversation=[],
+                request_kwargs={},
+                api_settings={},
+                max_attempts=2,
+                usage_collect=usage_records,
+            )
+
+        self.assertEqual(result, {"ok": True})
+        sleep.assert_called_once_with(1.5)
+        self.assertEqual([row["status"] for row in usage_records], ["error", "ok"])
+
+    def test_successful_response_without_usage_still_counts_api_call(self) -> None:
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))],
+            usage=None,
+        )
+        client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=lambda **_kwargs: response)
+            )
+        )
+        usage_records: list[dict[str, object]] = []
+        with patch("kp.kp_llm.require_openai", return_value=client):
+            result = call_llm_analyze_function(
+                conversation=[],
+                request_kwargs={},
+                api_settings={},
+                max_attempts=1,
+                usage_collect=usage_records,
+            )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(usage_records), 1)
+        self.assertEqual(usage_records[0]["status"], "ok")
+
+    def test_json_parser_prefers_expected_object_after_reasoning_array(self) -> None:
+        response = (
+            "Parameter [0] carries the socket handle.\n"
+            "```json\n"
+            '{"from":"caller","to":"callee","confidence":0.9}'
+            "\n```"
+        )
+
+        self.assertEqual(
+            _try_parse_json_value(response, preferred_type=dict),
+            {"from": "caller", "to": "callee", "confidence": 0.9},
+        )
+
+    def test_json_parser_prefers_expected_array_after_reasoning_object(self) -> None:
+        response = 'Schema example {"name":"placeholder"}; final: ["network", "socket"]'
+
+        self.assertEqual(
+            _try_parse_json_value(response, preferred_type=list),
+            ["network", "socket"],
         )
 
     def test_resume_skips_checkpointed_api_step_and_logs_summary_only(self) -> None:

@@ -7,7 +7,10 @@ import importlib.util
 import json
 import sqlite3
 import sys
+import tempfile
+import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "phase7_stress.py"
@@ -184,3 +187,194 @@ def test_comparison_reports_speed_and_token_reduction():
     assert comparison["wall_speedup"] == 2.0
     assert comparison["token_reduction_pct"] == 30.0
     assert comparison["goal_recall_delta"] == 0.5
+
+
+def test_matrix_rejects_normalized_name_collision(tmp_path: Path):
+    db = tmp_path / "sample.db"
+    sqlite3.connect(db).close()
+    manifest = {
+        "samples": [
+            {"name": "a b", "db": str(db)},
+            {"name": "a-b", "db": str(db)},
+        ]
+    }
+
+    try:
+        stress.build_run_matrix(
+            tmp_path / "manifest.json",
+            manifest,
+            profile="smoke",
+            repeat_override=None,
+            budgets_override=None,
+            engines_override=None,
+        )
+    except ValueError as exc:
+        assert "collide after normalization" in str(exc)
+    else:
+        raise AssertionError("normalized sample-name collision was accepted")
+
+
+def test_manifest_rejects_malformed_expectations(tmp_path: Path):
+    db = tmp_path / "sample.db"
+    sqlite3.connect(db).close()
+    manifest = {
+        "samples": [
+            {
+                "name": "sample",
+                "db": str(db),
+                "expectations": {"goal_vas": "0x1000"},
+            }
+        ]
+    }
+
+    try:
+        stress.build_run_matrix(
+            tmp_path / "manifest.json",
+            manifest,
+            profile="smoke",
+            repeat_override=None,
+            budgets_override=None,
+            engines_override=None,
+        )
+    except ValueError as exc:
+        assert "goal_vas must be a JSON array" in str(exc)
+    else:
+        raise AssertionError("malformed expectations were accepted")
+
+
+def test_aggregate_excludes_failed_runs_from_performance_metrics():
+    summary = stress.aggregate_results(
+        [
+            {
+                "sample": "s",
+                "variant": "legacy",
+                "status": "ok",
+                "report_status": "ok",
+                "wall_time_sec": 10.0,
+                "total_tokens": 100,
+            },
+            {
+                "sample": "s",
+                "variant": "legacy",
+                "status": "runner_error",
+                "report_status": "missing",
+                "wall_time_sec": 0.0,
+            },
+        ]
+    )[0]
+
+    assert summary["success_rate"] == 0.5
+    assert summary["failure_rate"] == 0.5
+    assert summary["runner_errors"] == 1
+    assert summary["wall_time_sec_mean"] == 10.0
+
+
+def test_run_process_terminates_tree_on_keyboard_interrupt(tmp_path: Path):
+    class FakeProcess:
+        pid = 12345
+
+        def __init__(self):
+            self.alive = True
+
+        def poll(self):
+            return None if self.alive else 130
+
+    process = FakeProcess()
+
+    def terminate(proc):
+        proc.alive = False
+
+    with patch.object(stress.subprocess, "Popen", return_value=process), patch.object(
+        stress, "_process_tree_rss_mb", return_value=None
+    ), patch.object(stress, "_terminate_process_tree", side_effect=terminate) as terminate_mock, patch.object(
+        stress.time, "sleep", side_effect=KeyboardInterrupt
+    ):
+        result = stress.run_process(["phase7"], tmp_path / "run", timeout_seconds=60)
+
+    assert result.interrupted is True
+    assert result.return_code == 130
+    assert terminate_mock.call_count == 1
+    assert process.alive is False
+
+
+def test_execute_run_rejects_partial_llm_success(tmp_path: Path):
+    source_db = tmp_path / "source.db"
+    sqlite3.connect(source_db).close()
+    spec = stress.RunSpec(
+        sample_name="sample",
+        engine="legacy",
+        repeat_index=1,
+        practical_budget=None,
+        input_path=None,
+        db_path=source_db,
+        task_config=None,
+        ida_dir=None,
+        binary_id=None,
+        goal_keywords=(),
+        goal_vas=(),
+        goal_structs=(),
+        common_args=(),
+        extra_args=(),
+        expectations={},
+    )
+    metrics = {
+        "report_status": "ok",
+        "db_apply_applied": 0,
+        "llm_interactions": 2,
+        "successful_llm_interactions": 1,
+    }
+    process_result = stress.ProcessResult(
+        return_code=0,
+        timed_out=False,
+        interrupted=False,
+        wall_time_sec=1.0,
+        peak_rss_mb=1.0,
+    )
+
+    with patch.object(stress, "clone_sqlite"), patch.object(
+        stress, "run_process", return_value=process_result
+    ), patch.object(stress, "extract_report_metrics", return_value=metrics):
+        result = stress.execute_run(
+            spec,
+            output_root=tmp_path / "out",
+            timeout_seconds=60,
+            llm_mode="on",
+            engine_dry_run=False,
+            keep_work_db=False,
+        )
+
+    assert result["status"] == "failed"
+    assert "successful=1 attempted=2" in result["runner_error"]
+
+
+def test_tokenization_splits_compound_function_names():
+    assert stress._tokens("attack_main sendHTTP") == {"attack", "main", "send", "http"}
+
+
+_TMP_PATH_TESTS = (
+    test_build_matrix_balanced_profile,
+    test_clone_sqlite_copies_content,
+    test_build_command_forces_safe_writeback_off,
+    test_extract_metrics_with_expectations,
+    test_matrix_rejects_normalized_name_collision,
+    test_manifest_rejects_malformed_expectations,
+    test_run_process_terminates_tree_on_keyboard_interrupt,
+    test_execute_run_rejects_partial_llm_success,
+)
+
+
+def load_tests(_loader, _tests, _pattern):
+    suite = unittest.TestSuite()
+    for func in _TMP_PATH_TESTS:
+        def run_tmp_test(test_func=func):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                test_func(Path(temp_dir))
+
+        suite.addTest(unittest.FunctionTestCase(run_tmp_test, description=func.__name__))
+    for func in (
+        test_comparison_reports_speed_and_token_reduction,
+        test_aggregate_excludes_failed_runs_from_performance_metrics,
+        test_tokenization_splits_compound_function_names,
+    ):
+        suite.addTest(unittest.FunctionTestCase(func, description=func.__name__))
+    return suite
