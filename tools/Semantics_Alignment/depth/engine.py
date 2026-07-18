@@ -16,10 +16,12 @@ if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
 import argparse
+import json
 import math
 import sqlite3
 import time
 from collections import defaultdict, deque
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -66,6 +68,8 @@ from depth.goal_collector import (
     _pick_auto_goals,
 )
 from depth.graph_augment import (
+    IndirectEdgeStatus,
+    _build_call_only_graph,
     _collect_indirect_edges,
     _build_mixed_graph,
     _mixed_neighborhood,
@@ -102,6 +106,39 @@ def _phase7_5_checkpoint_reusable(report: Any) -> bool:
         isinstance(report, dict)
         and str(report.get("status") or "") in _PHASE7_5_REUSABLE_STATUSES
     )
+
+
+def _load_prevalidated_phase7_5_report(
+    report_path: Path,
+    *,
+    input_path: Optional[str],
+    ida_dir: Optional[str],
+) -> Dict[str, Any]:
+    """Load an explicitly trusted Phase7.5 result for a benchmark matrix."""
+    source = Path(report_path).expanduser().resolve()
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"无法读取 Phase7.5 预检报告: {source}: {exc}") from exc
+    if not _phase7_5_checkpoint_reusable(payload):
+        raise ValueError("Phase7.5 预检报告不是已成功完成的 aligned/replaced 结果")
+    if not input_path or not ida_dir:
+        raise ValueError("复用 Phase7.5 预检报告时必须显式提供输入样本和 --phase7-5-ida-dir")
+
+    expected_input = Path(input_path).expanduser().resolve()
+    expected_ida_dir = Path(ida_dir).expanduser().resolve()
+    report_input = Path(str(payload.get("input_path") or "")).expanduser().resolve()
+    report_ida_dir = Path(str(payload.get("ida_dir") or "")).expanduser().resolve()
+    if report_input != expected_input:
+        raise ValueError("Phase7.5 预检报告的输入样本与当前运行不一致")
+    if report_ida_dir != expected_ida_dir:
+        raise ValueError("Phase7.5 预检报告的 IDA 导出目录与当前运行不一致")
+
+    result = dict(payload)
+    result["mode"] = "prevalidated"
+    result["prevalidated_report"] = str(source)
+    result["prevalidated_status"] = str(payload.get("status") or "")
+    return result
 
 
 def _add_boolean_pair(
@@ -174,6 +211,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--w-data", type=float, default=0.30, help="混合距离中 data 权重（默认 0.30）")
     ap.add_argument("--w-string", type=float, default=0.15, help="混合距离中 string 权重（默认 0.15）")
     ap.add_argument("--w-global", type=float, default=0.10, help="混合距离中 global 权重（默认 0.10）")
+    ap.add_argument(
+        "--mixed-graph-mode",
+        choices=("full", "call-only"),
+        default="full",
+        help="图构建范围：full=调用/数据/全局/字符串（默认）；call-only=仅内部直接调用边。",
+    )
 
     ap.add_argument("--max-depth", type=int, default=0, help="DFS 最大深度，0=自动")
     ap.add_argument("--max-paths", type=int, default=200, help="每轮最多路径数")
@@ -226,6 +269,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--llm-max-attempts", type=int, default=3)
     ap.add_argument("--llm-code-chars", type=int, default=1200)
     ap.add_argument("--llm-max-steps", type=int, default=0)
+    ap.add_argument(
+        "--profile-max-tokens",
+        type=int,
+        default=0,
+        help="Profile 分析/比较的输出 token 上限，0=使用 --llm-max-tokens 或配置默认值。",
+    )
+    ap.add_argument(
+        "--profile-max-disasm-lines",
+        type=int,
+        default=180,
+        help="单个 Profile 的反汇编上下文行数（默认 180）。",
+    )
+    ap.add_argument(
+        "--profile-max-pseudo-chars",
+        type=int,
+        default=3200,
+        help="单个 Profile 每个工具伪代码上下文字符数（默认 3200）。",
+    )
+    ap.add_argument(
+        "--profile-max-strings",
+        type=int,
+        default=20,
+        help="单个 Profile 的字符串上下文数量（默认 20）。",
+    )
 
     ap.add_argument("--max-compare-nodes", type=int, default=12, help="备份比较最多函数数")
     ap.add_argument(
@@ -258,6 +325,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--phase7-5-ida-dir",
         default=None,
         help="Phase7.5 指定 IDA 导出目录(*_idademo)。不传则自动推断。",
+    )
+    ap.add_argument(
+        "--phase7-5-prevalidated-report",
+        default=None,
+        help="仅压测复用：同一输入和 IDA 导出已完成的 Phase7.5 aligned/replaced 报告。",
     )
     _add_boolean_pair(
         ap,
@@ -793,7 +865,24 @@ def main() -> int:
     phase7_5_report_file = layout.artifacts_dir / "phase7_5_report.json"
     cached_phase7_5 = state.get("phase7_5")
     phase7_5_report: Dict[str, Any]
-    if (
+    if args.phase7_5_prevalidated_report:
+        phase7_5_report = _load_prevalidated_phase7_5_report(
+            Path(str(args.phase7_5_prevalidated_report)),
+            input_path=args.input_path,
+            ida_dir=args.phase7_5_ida_dir,
+        )
+        _write_json_file(phase7_5_report_file, phase7_5_report)
+        state["phase7_5"] = phase7_5_report
+        state["phase7_5_report_file"] = str(phase7_5_report_file)
+        _checkpoint_stage(layout, state, "phase7_5_prevalidated")
+        _log_event(
+            layout,
+            "phase7_5_prevalidated",
+            status=str(phase7_5_report.get("status") or ""),
+            source_report=str(phase7_5_report.get("prevalidated_report") or ""),
+        )
+        _p7(args, "[Phase7] Phase7.5 使用已验证报告，跳过重复严格对齐")
+    elif (
         bool(args.resume)
         and _phase7_5_checkpoint_reusable(cached_phase7_5)
     ):
@@ -878,6 +967,12 @@ def main() -> int:
         temperature=args.llm_temperature,
         max_tokens=args.llm_max_tokens,
     )
+    profile_llm_settings = llm_settings
+    if int(args.profile_max_tokens or 0) > 0:
+        profile_llm_settings = replace(
+            llm_settings,
+            max_tokens=int(args.profile_max_tokens),
+        )
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -898,20 +993,32 @@ def main() -> int:
         _p7(args, f"[Phase7] UnifiedGraph 已构建: {len(graph.nodes)} 个函数节点")
         analysis_info = _load_analysis_info_safe(conn)
 
-        indirect_edges, indirect_status = _collect_indirect_edges(
-            conn,
-            graph,
-            mode=str(args.indirect_edge_mode),
-            budget=max(1, int(args.indirect_edge_budget or 1)),
-            incremental=bool(args.incremental_indirect),
-            incremental_topn=max(1, int(args.incremental_indirect_topn or 1)),
-        )
+        if str(args.mixed_graph_mode) == "call-only":
+            indirect_edges = {}
+            indirect_status = IndirectEdgeStatus(
+                enabled=False,
+                degraded=False,
+                reason="skipped_call_only_graph",
+                total_candidates=0,
+                selected_candidates=0,
+                incremental_applied=False,
+            )
+            mixed_adj, _func_to_globals, mixed_stats = _build_call_only_graph(graph)
+        else:
+            indirect_edges, indirect_status = _collect_indirect_edges(
+                conn,
+                graph,
+                mode=str(args.indirect_edge_mode),
+                budget=max(1, int(args.indirect_edge_budget or 1)),
+                incremental=bool(args.incremental_indirect),
+                incremental_topn=max(1, int(args.incremental_indirect_topn or 1)),
+            )
 
-        mixed_adj, _func_to_globals, mixed_stats = _build_mixed_graph(
-            conn,
-            graph,
-            include_indirect_edges=indirect_edges,
-        )
+            mixed_adj, _func_to_globals, mixed_stats = _build_mixed_graph(
+                conn,
+                graph,
+                include_indirect_edges=indirect_edges,
+            )
 
         gc_dir = layout.artifacts_dir / "graph_computation"
         gc_dir.mkdir(parents=True, exist_ok=True)
@@ -994,6 +1101,10 @@ def main() -> int:
         comparison_candidate_nodes: Set[int] = set(
             int(x) for x in (state.get("comparison_candidate_nodes", []) or []) if x is not None
         )
+        comparison_priority_nodes: Set[int] = {
+            int(goal.entry_va) for goal in selected_goals if int(goal.entry_va) in graph.nodes
+        }
+        comparison_candidate_nodes.update(comparison_priority_nodes)
         raw_llm_step_progress = state.get("llm_step_progress") or {}
         if not isinstance(raw_llm_step_progress, dict):
             raw_llm_step_progress = {}
@@ -1534,6 +1645,7 @@ def main() -> int:
                 comparison_candidate_nodes,
                 goal_structs=list(args.goal_struct or []),
                 limit=max(1, int(args.max_compare_nodes or 1)),
+                priority_nodes=comparison_priority_nodes,
             )
             state["compare_nodes"] = [int(x) for x in compare_nodes]
             _checkpoint_stage(layout, state, "compare_nodes_selected")
@@ -1616,11 +1728,14 @@ def main() -> int:
                             graph=graph,
                             analysis_info=analysis_info,
                             entry_va=int(va),
-                            llm_settings=llm_settings,
+                            llm_settings=profile_llm_settings,
                             max_attempts=max(1, int(args.llm_max_attempts or 1)),
                             dry_run=bool(args.dry_run),
                             llm_trace_file=layout.llm_trace_file,
                             log_raw_llm=bool(args.log_raw_llm),
+                            max_disasm_lines=int(args.profile_max_disasm_lines),
+                            max_pseudo_chars_per_tool=int(args.profile_max_pseudo_chars),
+                            max_strings=int(args.profile_max_strings),
                         )
                         node_progress["new_profile"] = dict(new_profile)
                         compare_progress[entry_hex] = node_progress
@@ -1638,7 +1753,7 @@ def main() -> int:
                         compare_result = _llm_compare_profiles(
                             old_profile=old_profile,
                             new_profile=new_profile,
-                            llm_settings=llm_settings,
+                            llm_settings=profile_llm_settings,
                             max_attempts=max(1, int(args.llm_max_attempts or 1)),
                             dry_run=bool(args.dry_run),
                             llm_trace_file=layout.llm_trace_file,
@@ -1820,8 +1935,9 @@ def main() -> int:
                 "apply_db": bool(args.apply_db),
                 "apply_max_rows": int(args.apply_max_rows),
                 "apply_min_confidence": int(args.apply_min_confidence),
-                "phase7_5_mode": "strict",
+                "phase7_5_mode": str(phase7_5_report.get("mode") or "strict"),
                 "phase7_5_ida_dir": str(args.phase7_5_ida_dir or ""),
+                "phase7_5_prevalidated_report": str(args.phase7_5_prevalidated_report or ""),
                 "phase7_5_keep_rebuilt_db": bool(args.phase7_5_keep_rebuilt_db),
                 "no_console_progress": bool(getattr(args, "no_console_progress", False)),
                 "phase7_task_loaded_from": getattr(args, "phase7_task_loaded_from", None),

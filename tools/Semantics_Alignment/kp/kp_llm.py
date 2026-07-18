@@ -6,8 +6,9 @@
 
 功能特性：
 - 支持多个 API Key：.env 中可写多行 OPENAI_API_KEY=... 或逗号分隔
-- 启动探测：自动检查已被限流的 keys（不修改 .env）
+- 启动探测：多 key 时可检查已被限流的 keys；单 key 默认跳过额外请求
 - 限流处理（429）：立即封禁当前 key 并切换到下一个可用 key（不再等待 30s）
+- 结构化恢复：JSON 为空/截断时用紧凑提示和可配置的更大输出预算重试
 - 当日封禁：被 429 的 key 标记为当天不可用，次日 04:00 自动解封（不永久删除）
 - 全部耗尽时等待恢复：等待用户回车立即重试，或次日 04:00 自动解封继续
 """
@@ -225,7 +226,10 @@ def _strip_optional_quotes(value: str) -> str:
     return value
 
 
-def _load_dotenv_file(dotenv_path: Path) -> int:
+def _load_dotenv_file(
+    dotenv_path: Path,
+    api_key_env: str = DEFAULT_API_KEY_ENV,
+) -> int:
     """Load KEY=VALUE pairs from a .env file into os.environ.
 
     Special handling for API keys — supports three .env formats:
@@ -244,8 +248,10 @@ def _load_dotenv_file(dotenv_path: Path) -> int:
 
            OPENAI_API_KEY=key1,key2
 
-    All values are merged into ``OPENAI_API_KEY`` (comma-separated) so that
-    ``_parse_api_keys_from_env`` can see every key.
+    All values are merged into ``api_key_env`` (comma-separated) so that
+    ``_parse_api_keys_from_env`` can see every key.  The environment variable
+    is configurable because OpenAI-compatible providers commonly use their own
+    names, such as ``MINIMAX_API_KEY``.
     """
 
     try:
@@ -253,7 +259,7 @@ def _load_dotenv_file(dotenv_path: Path) -> int:
     except Exception:
         return 0
 
-    _BASE_KEY = DEFAULT_API_KEY_ENV
+    _BASE_KEY = api_key_env
     _numbered_re = re.compile(rf"^{re.escape(_BASE_KEY)}_\d+$")
 
     updated = 0
@@ -328,7 +334,7 @@ def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str
         if not dotenv_path.is_absolute():
             dotenv_path = (Path(__file__).resolve().parents[1] / dotenv_path).resolve()
         if dotenv_path.exists() and dotenv_path.is_file():
-            _load_dotenv_file(dotenv_path)
+            _load_dotenv_file(dotenv_path, api_key_env)
             _normalize_api_keys_env(api_key_env)
             return
 
@@ -336,7 +342,7 @@ def _try_load_api_key_from_dotenv(api_settings: Dict[str, Any], api_key_env: str
     for candidate_dir in (kp_parent, kp_parent.parents[1]):
         candidate = candidate_dir / ".env"
         if candidate.exists() and candidate.is_file():
-            _load_dotenv_file(candidate)
+            _load_dotenv_file(candidate, api_key_env)
             _normalize_api_keys_env(api_key_env)
             if os.getenv(api_key_env):
                 return
@@ -454,15 +460,24 @@ def require_openai(api_settings: Dict[str, Any]) -> Any:
 
     # 在首次调用时探测并移除已被限流的 keys（不修改 .env）
     global _API_KEYS, _API_KEY_INDEX, _PRUNED_ON_STARTUP, _LAST_PARSED_ENV_KEYS
-    if not _PRUNED_ON_STARTUP:
+    startup_probe = bool(api_settings.get("startup_probe", len(env_keys) > 1))
+    if not _PRUNED_ON_STARTUP and startup_probe:
         try:
             pruned = _prune_rate_limited_keys_on_startup(api_settings, env_keys)
             # 记录并替换 env_keys 中的内容为探测后的结果
             if pruned != env_keys:
                 logger.info("Startup key probe: %d -> %d usable keys", len(env_keys), len(pruned))
-            env_keys = pruned
+            # A probe is advisory.  Dropping every key makes a transient 429
+            # look like a missing credential and prevents the normal retry
+            # path from recovering.
+            if pruned:
+                env_keys = pruned
+            else:
+                logger.warning("Startup probe rejected every key; retaining them for runtime retry")
         finally:
             _PRUNED_ON_STARTUP = True
+    elif not _PRUNED_ON_STARTUP:
+        _PRUNED_ON_STARTUP = True
 
     # 如果首次加载或 env 内容变更，则初始化 keys 列表与索引；否则保留当前索引（便于切换后重试）
     if not _API_KEYS or _LAST_PARSED_ENV_KEYS != env_keys_snapshot:
@@ -581,6 +596,12 @@ def _repair_json_string(text: str) -> str:
 
 
 _JSON_DECODER = json.JSONDecoder()
+_REASONING_BLOCK_RE = re.compile(r"<think>.*?</think>", flags=re.IGNORECASE | re.DOTALL)
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Remove completed provider reasoning blocks before JSON extraction."""
+    return _REASONING_BLOCK_RE.sub("", text).strip()
 
 
 def _try_parse_json_value(
@@ -604,7 +625,7 @@ def _try_parse_json_value(
     if not text:
         return None
 
-    raw = text.strip()
+    raw = _strip_reasoning_blocks(text)
     if not raw:
         return None
 
@@ -680,6 +701,78 @@ def _extract_usage_from_chat_response(resp: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _extract_chat_message_text(resp: Any) -> str:
+    """Extract text from object/dict responses and block-style content."""
+    try:
+        choices = resp.get("choices", []) if isinstance(resp, dict) else getattr(resp, "choices", [])
+        if not choices:
+            return ""
+        choice = choices[0]
+        message = choice.get("message", {}) if isinstance(choice, dict) else getattr(choice, "message", None)
+        if message is None:
+            return ""
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                    parts.append(str(block["text"]))
+                elif isinstance(getattr(block, "text", None), str):
+                    parts.append(str(getattr(block, "text")))
+            return "\n".join(parts)
+    except Exception:
+        return ""
+    return ""
+
+
+def _request_kwargs_for_attempt(
+    request_kwargs: Dict[str, Any],
+    attempt: int,
+    *,
+    retry_token_multiplier: float = 1.0,
+    retry_max_tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Build one attempt without mutating the original request.
+
+    Reasoning models can consume the nominal completion budget before emitting
+    the final JSON.  Recovery attempts therefore use a compact-output reminder
+    and may grow ``max_tokens`` up to a configured cap.  Successful first
+    attempts retain their original latency and token ceiling.
+    """
+    current = dict(request_kwargs)
+    if int(attempt) <= 1:
+        return current
+    messages = [dict(item) for item in (current.get("messages") or []) if isinstance(item, dict)]
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                "Recovery retry: return the final compact JSON value now. "
+                "Do not include analysis, <think> tags, markdown, schema examples, or commentary."
+            ),
+        }
+    )
+    current["messages"] = messages
+    try:
+        current["temperature"] = min(float(current.get("temperature", 0.0) or 0.0), 0.1)
+    except Exception:
+        pass
+    try:
+        original_max_tokens = int(request_kwargs.get("max_tokens", 0) or 0)
+        multiplier = max(1.0, float(retry_token_multiplier or 1.0))
+        if original_max_tokens > 0 and multiplier > 1.0:
+            expanded = int(math.ceil(original_max_tokens * (multiplier ** (int(attempt) - 1))))
+            cap = int(retry_max_tokens or 0)
+            current["max_tokens"] = min(expanded, cap) if cap > 0 else expanded
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return current
+
+
 def call_llm_analyze_function(
     *,
     conversation: List[Dict[str, str]],
@@ -700,8 +793,6 @@ def call_llm_analyze_function(
 
     global _API_KEY_INDEX
 
-    client = require_openai(api_settings)
-
     last_error: Optional[str] = None
 
     try:
@@ -715,6 +806,12 @@ def call_llm_analyze_function(
     for attempt in range(1, max_attempts + 1):
         text_str = ""
         attempt_start = time.time()
+        attempt_request_kwargs = _request_kwargs_for_attempt(
+            request_kwargs,
+            attempt,
+            retry_token_multiplier=api_settings.get("json_retry_token_multiplier", 1.0),
+            retry_max_tokens=api_settings.get("json_retry_max_tokens"),
+        )
         # 在每个新 attempt 开始时重新获取 client（特别是在 key 被切换时）
         try:
             client = require_openai(api_settings)
@@ -727,11 +824,11 @@ def call_llm_analyze_function(
         while True:
             try:
                 if hasattr(client, "chat") and hasattr(client.chat, "completions"):
-                    resp = client.chat.completions.create(**request_kwargs)  # type: ignore[attr-defined]
-                    text = resp.choices[0].message.content or ""  # type: ignore[union-attr]
+                    resp = client.chat.completions.create(**attempt_request_kwargs)  # type: ignore[attr-defined]
+                    text = _extract_chat_message_text(resp)
                 elif hasattr(client, "ChatCompletion"):
-                    resp = client.ChatCompletion.create(**request_kwargs)  # type: ignore[attr-defined]
-                    text = resp["choices"][0]["message"]["content"]  # type: ignore[index]
+                    resp = client.ChatCompletion.create(**attempt_request_kwargs)  # type: ignore[attr-defined]
+                    text = _extract_chat_message_text(resp)
                 else:  # pragma: no cover
                     last_error = "当前 openai 客户端不支持 ChatCompletion 接口"
                     break
@@ -744,6 +841,10 @@ def call_llm_analyze_function(
                         row.setdefault("total_tokens", 0)
                         row["attempt"] = int(attempt)
                         row["status"] = "ok"
+                        row["request_max_tokens"] = int(
+                            attempt_request_kwargs.get("max_tokens", 0) or 0
+                        )
+                        row["response_chars"] = len(str(text or ""))
                         usage_collect.append(row)
                     except Exception:
                         pass
@@ -758,6 +859,10 @@ def call_llm_analyze_function(
                                 "attempt": int(attempt),
                                 "status": "error",
                                 "error_type": type(exc).__name__,
+                                "request_max_tokens": int(
+                                    attempt_request_kwargs.get("max_tokens", 0) or 0
+                                ),
+                                "response_chars": 0,
                             }
                         )
                     except Exception:
@@ -779,12 +884,27 @@ def call_llm_analyze_function(
                     )
                     print(f"[LLM] 检测到限流(429)，封禁当前 key {_mask_key(_get_current_api_key())}...")
 
+                    current_key = _get_current_api_key()
                     has_next = _block_current_key_and_rotate()
                     if has_next:
                         print(
                             f"[LLM] 已切换到 key {_mask_key(_get_current_api_key())}"
                             f" ({_API_KEY_INDEX + 1}/{len(_API_KEYS)})"
                         )
+                        break
+
+                    if len(_API_KEYS) == 1 and not bool(
+                        api_settings.get("wait_on_rate_limit", False)
+                    ):
+                        if current_key:
+                            _BLOCKED_KEYS.pop(current_key, None)
+                        if attempt < max_attempts:
+                            delay = min(8.0, 1.5 * (2 ** (attempt - 1)))
+                            logger.info("单 Key 限流，%.1fs 后进行有界重试", delay)
+                            time.sleep(delay)
+                        else:
+                            last_error = f"单 Key 在 {max_attempts} 次尝试后仍被限流"
+                            logger.error("%s", last_error)
                         break
 
                     # 所有 key 都被限流 → 进入等待恢复模式
@@ -822,7 +942,7 @@ def call_llm_analyze_function(
                 except Exception:
                     logger.debug("on_raw_text 回调执行失败，已忽略。")
 
-            text_str = (text or "").strip()
+            text_str = _strip_reasoning_blocks(str(text or ""))
             if text_str.startswith("```"):
                 lines = text_str.splitlines()
                 if lines and lines[0].startswith("```"):
@@ -847,12 +967,13 @@ def call_llm_analyze_function(
                 if s.startswith("{") and not s.endswith("}"):
                     hint = "（疑似被 max_tokens 截断，可尝试减小单次 prompt/分段查询）"
                 last_error = (
-                    f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})：{candidates[0]!r}{hint}"
+                    f"LLM 返回内容无法解析为 JSON({attempt}/{max_attempts})："
+                    f"response_length={len(text_str)}{hint}"
                 )
                 if return_raw_on_error and attempt == max_attempts:
                     logger.warning("%s\n完整的 LLM 回复：%s", last_error, text_str)
                     return {"_raw_error": last_error, "_raw_text": text_str}
-                logger.warning("%s\n完整的 LLM 回复：%s", last_error, text_str)
+                logger.warning("%s", last_error)
                 break
 
             if expect_array:

@@ -78,6 +78,16 @@ python tools/Semantics_Alignment/depth/practical_engine.py \
 | `--practical-evidence-threshold` | 0.25 | 新 Profile 的静态证据最低分数 |
 | `--practical-min-signals` | 1 | 至少需要几类独立证据 |
 | `--practical-min-profile-confidence` | 70 | Profile 完整度评分使用的最低置信度 |
+| `--practical-profile-max-tokens` | 1600 | 单个 Profile 分析/比较的输出 token 上限 |
+| `--practical-profile-max-disasm-lines` | 80 | 单个 Profile 的反汇编上下文行数 |
+| `--practical-profile-max-pseudo-chars` | 1400 | 单个 Profile 每个工具的伪代码字符数 |
+| `--practical-profile-max-strings` | 8 | 单个 Profile 的字符串上下文数量 |
+| `--practical-max-compare-nodes` | 2 | 参与 Profile 新旧比较的候选函数上限 |
+| `--practical-fast` | 关闭 | 低延迟目标确认：仅比较人工/自动选中的目标函数，路径 LLM 最多两步 |
+
+`1600` 是正常首轮上限。若 MiniMax-M3 的推理过程耗尽该预算并导致 JSON 为空或截断，
+统一 LLM 层会按根 `config.yaml` 的 `semantics.llm.api.json_retry_token_multiplier`
+扩大恢复请求，且不超过 `json_retry_max_tokens`；已成功的首轮请求不承担额外延迟或 Token。
 
 ## 建议评估方法
 

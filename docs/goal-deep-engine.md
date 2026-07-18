@@ -32,7 +32,8 @@
 - Phase7.5 产出结构化报告：`artifacts/phase7_5_report.json`。
 - 报告包含 `focus_metrics_summary`，显式给出 `imports/exports/variable_names` 三类的一致性状态。
 - 运行参数：
-  - Phase7.5 始终为严格对齐（IDA 导出与 DB 对账）；无关闭开关。
+  - Phase7.5 默认始终严格对齐（IDA 导出与 DB 对账）。
+  - 仅压测矩阵可显式传入 `--phase7-5-prevalidated-report <report>`，复用同一输入和同一 IDA 导出已完成的 `aligned`/`replaced` 报告；参数不匹配会拒绝运行。样本、DB 或 IDA 导出改变后不得使用该模式。
   - `--phase7-5-ida-dir <path>`（可显式指定 `*_idademo`）
   - `--phase7-5-keep-rebuilt-db`（调试时保留重建库）
 

@@ -253,6 +253,30 @@ def _add_undirected_edge(adj: Dict[int, Dict[int, Set[str]]], a: int, b: int, ki
     adj[int(b)].setdefault(int(a), set()).add(str(kind))
 
 
+def _build_call_only_graph(
+    graph: UnifiedGraph,
+) -> Tuple[Dict[int, Dict[int, Set[str]]], Dict[int, List[Tuple[int, int]]], Dict[str, Any]]:
+    """Build a lightweight graph containing only direct internal call edges.
+
+    This mode is intended for explicitly scoped, call-path-only analysis of
+    very large binaries.  It deliberately avoids scanning the full xref and
+    instruction tables for data/global/string relationships.
+    """
+    adj: Dict[int, Dict[int, Set[str]]] = defaultdict(dict)
+    for entry_va, node in graph.nodes.items():
+        for callee in node.internal_callee_vas:
+            if int(callee) in graph.nodes:
+                _add_undirected_edge(adj, int(entry_va), int(callee), "call")
+
+    return adj, {}, {
+        "call_nodes": len(graph.nodes),
+        "direct_data_edge_sources": 0,
+        "global_clusters": 0,
+        "string_clusters": 0,
+        "graph_mode": "call-only",
+    }
+
+
 def _build_mixed_graph(
     conn: sqlite3.Connection,
     graph: UnifiedGraph,
@@ -309,6 +333,7 @@ def _build_mixed_graph(
         "direct_data_edge_sources": len(direct_data),
         "global_clusters": len(global_to_funcs),
         "string_clusters": len(string_map),
+        "graph_mode": "full",
     }
     return adj, func_to_globals, stats
 

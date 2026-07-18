@@ -240,6 +240,9 @@ def _analyze_node_semantics_with_llm(
     dry_run: bool,
     llm_trace_file: Optional[Path] = None,
     log_raw_llm: bool = False,
+    max_disasm_lines: int = 180,
+    max_pseudo_chars_per_tool: int = 3200,
+    max_strings: int = 20,
 ) -> Dict[str, Any]:
     """对单个函数节点进行 LLM 语义分析，返回 profile 字典。"""
     va = int(entry_va)
@@ -255,9 +258,9 @@ def _analyze_node_semantics_with_llm(
         graph=graph,
         node=node,
         analysis_info=analysis_info,
-        max_disasm_lines=180,
-        max_pseudo_chars_per_tool=3200,
-        max_strings=20,
+        max_disasm_lines=max(0, int(max_disasm_lines)),
+        max_pseudo_chars_per_tool=max(0, int(max_pseudo_chars_per_tool)),
+        max_strings=max(0, int(max_strings)),
     )
     usage_records: List[Dict[str, Any]] = []
     result = _call_llm_with_trace(
@@ -414,16 +417,19 @@ def _rank_nodes_for_compare(
     nodes: Iterable[int],
     goal_structs: Sequence[str],
     limit: int,
+    *,
+    priority_nodes: Iterable[int] = (),
 ) -> List[int]:
     """对路径节点按丰富度排序，取 top-k 进行新旧 Profile 比较。"""
-    scored: List[Tuple[int, int, int]] = []
+    priorities = {int(va) for va in priority_nodes}
+    scored: List[Tuple[int, int, int, int]] = []
     for va in set(int(x) for x in nodes if int(x) in graph.nodes):
         node = graph.nodes[int(va)]
         xref = len(adjacency.get(int(va), {}))
         rich = _semantic_richness(node, goal_structs)
-        scored.append((int(xref), int(rich), int(va)))
+        scored.append((int(va in priorities), int(xref), int(rich), int(va)))
     scored.sort(reverse=True)
-    return [int(x[2]) for x in scored[: max(1, int(limit or 1))]]
+    return [int(x[3]) for x in scored[: max(1, int(limit or 1))]]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -20,7 +20,10 @@ if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
 from depth.deep_path_step import LLMStepCheckpointError, run_llm_poll_on_deepest_path  # noqa: E402
+from kp import kp_llm  # noqa: E402
 from kp.kp_llm import (  # noqa: E402
+    _extract_chat_message_text,
+    _request_kwargs_for_attempt,
     _extract_usage_from_chat_response,
     _try_parse_json_value,
     call_llm_analyze_function,
@@ -95,6 +98,193 @@ class TestDeepPathStepResume(unittest.TestCase):
             )["total_tokens"],
             5,
         )
+
+    def test_message_text_supports_block_content(self) -> None:
+        response = {
+            "choices": [{"message": {"content": [{"type": "text", "text": '{"ok":true}'}]}}]
+        }
+        self.assertEqual(_extract_chat_message_text(response), '{"ok":true}')
+
+    def test_retry_request_demands_compact_json(self) -> None:
+        original = {
+            "messages": [{"role": "user", "content": "analyze"}],
+            "temperature": 0.7,
+            "max_tokens": 1600,
+        }
+
+        first = _request_kwargs_for_attempt(original, 1)
+        retry = _request_kwargs_for_attempt(
+            original,
+            2,
+            retry_token_multiplier=2.0,
+            retry_max_tokens=6000,
+        )
+        final_retry = _request_kwargs_for_attempt(
+            original,
+            3,
+            retry_token_multiplier=2.0,
+            retry_max_tokens=6000,
+        )
+
+        self.assertEqual(len(first["messages"]), 1)
+        self.assertEqual(len(retry["messages"]), 2)
+        self.assertIn("compact JSON", retry["messages"][-1]["content"])
+        self.assertEqual(retry["temperature"], 0.1)
+        self.assertEqual(retry["max_tokens"], 3200)
+        self.assertEqual(final_retry["max_tokens"], 6000)
+        self.assertEqual(original["max_tokens"], 1600)
+
+    def test_truncated_json_retry_expands_budget_and_recovers(self) -> None:
+        responses = iter(
+            [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content='{"summary":'))],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content='{"summary":"ok"}'))],
+                    usage=None,
+                ),
+            ]
+        )
+
+        class CapturingCompletions:
+            def __init__(self) -> None:
+                self.requests: list[dict[str, object]] = []
+
+            def create(self, **kwargs):
+                self.requests.append(kwargs)
+                return next(responses)
+
+        completions = CapturingCompletions()
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with patch("kp.kp_llm.require_openai", return_value=client):
+            result = call_llm_analyze_function(
+                conversation=[],
+                request_kwargs={
+                    "messages": [{"role": "user", "content": "analyze"}],
+                    "temperature": 0.1,
+                    "max_tokens": 1600,
+                },
+                api_settings={
+                    "json_retry_token_multiplier": 2.0,
+                    "json_retry_max_tokens": 6000,
+                },
+                max_attempts=2,
+            )
+
+        self.assertEqual(result, {"summary": "ok"})
+        self.assertEqual([row["max_tokens"] for row in completions.requests], [1600, 3200])
+
+    def test_empty_response_retry_expands_budget_and_records_summary(self) -> None:
+        responses = iter(
+            [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=""))],
+                    usage=None,
+                ),
+                SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content='{"status":"ok"}'))],
+                    usage=None,
+                ),
+            ]
+        )
+
+        class EmptyOnce:
+            def create(self, **_kwargs):
+                return next(responses)
+
+        usage: list[dict[str, object]] = []
+        client = SimpleNamespace(chat=SimpleNamespace(completions=EmptyOnce()))
+        with patch("kp.kp_llm.require_openai", return_value=client):
+            result = call_llm_analyze_function(
+                conversation=[],
+                request_kwargs={"messages": [], "max_tokens": 1600},
+                api_settings={
+                    "json_retry_token_multiplier": 2.0,
+                    "json_retry_max_tokens": 6000,
+                },
+                max_attempts=2,
+                usage_collect=usage,
+            )
+
+        self.assertEqual(result, {"status": "ok"})
+        self.assertEqual(
+            [(row["request_max_tokens"], row["response_chars"]) for row in usage],
+            [(1600, 0), (3200, 15)],
+        )
+
+    def test_single_key_rate_limit_uses_bounded_retry(self) -> None:
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))],
+            usage=None,
+        )
+
+        class RateLimitedOnce:
+            calls = 0
+
+            def create(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("429 too many requests")
+                return response
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=RateLimitedOnce()))
+        old_keys = list(kp_llm._API_KEYS)
+        old_index = kp_llm._API_KEY_INDEX
+        old_blocked = dict(kp_llm._BLOCKED_KEYS)
+        kp_llm._API_KEYS[:] = ["only_key"]
+        kp_llm._API_KEY_INDEX = 0
+        kp_llm._BLOCKED_KEYS.clear()
+        try:
+            with patch("kp.kp_llm.require_openai", return_value=client), patch(
+                "kp.kp_llm.time.sleep"
+            ) as sleep:
+                result = call_llm_analyze_function(
+                    conversation=[],
+                    request_kwargs={},
+                    api_settings={"wait_on_rate_limit": False},
+                    max_attempts=2,
+                )
+            self.assertEqual(result, {"ok": True})
+            sleep.assert_called_once_with(1.5)
+            self.assertFalse(kp_llm._BLOCKED_KEYS)
+        finally:
+            kp_llm._API_KEYS[:] = old_keys
+            kp_llm._API_KEY_INDEX = old_index
+            kp_llm._BLOCKED_KEYS.clear()
+            kp_llm._BLOCKED_KEYS.update(old_blocked)
+
+    def test_single_key_final_rate_limit_does_not_enter_long_wait(self) -> None:
+        class AlwaysRateLimited:
+            def create(self, **_kwargs):
+                raise RuntimeError("429 too many requests")
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=AlwaysRateLimited()))
+        old_keys = list(kp_llm._API_KEYS)
+        old_index = kp_llm._API_KEY_INDEX
+        old_blocked = dict(kp_llm._BLOCKED_KEYS)
+        kp_llm._API_KEYS[:] = ["only_key"]
+        kp_llm._API_KEY_INDEX = 0
+        kp_llm._BLOCKED_KEYS.clear()
+        try:
+            with patch("kp.kp_llm.require_openai", return_value=client), patch(
+                "kp.kp_llm.time.sleep"
+            ) as sleep, patch("kp.kp_llm._wait_for_key_recovery") as wait:
+                result = call_llm_analyze_function(
+                    conversation=[],
+                    request_kwargs={},
+                    api_settings={"wait_on_rate_limit": False},
+                    max_attempts=2,
+                )
+            self.assertEqual(result, {})
+            sleep.assert_called_once_with(1.5)
+            wait.assert_not_called()
+        finally:
+            kp_llm._API_KEYS[:] = old_keys
+            kp_llm._API_KEY_INDEX = old_index
+            kp_llm._BLOCKED_KEYS.clear()
+            kp_llm._BLOCKED_KEYS.update(old_blocked)
 
     def test_failed_api_attempts_are_counted(self) -> None:
         class FailingCompletions:
@@ -195,6 +385,14 @@ class TestDeepPathStepResume(unittest.TestCase):
         self.assertEqual(
             _try_parse_json_value(response, preferred_type=list),
             ["network", "socket"],
+        )
+
+    def test_json_parser_discards_completed_reasoning_block(self) -> None:
+        response = '<think>work through the answer first</think>\n{"name":"NtCreateFile"}'
+
+        self.assertEqual(
+            _try_parse_json_value(response, preferred_type=dict),
+            {"name": "NtCreateFile"},
         )
 
     def test_resume_skips_checkpointed_api_step_and_logs_summary_only(self) -> None:

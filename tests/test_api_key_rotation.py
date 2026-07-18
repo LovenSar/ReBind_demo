@@ -20,6 +20,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SA_ROOT = REPO_ROOT / "tools" / "Semantics_Alignment"
@@ -129,6 +130,28 @@ class TestDotenvMultiLineLoading(unittest.TestCase):
         finally:
             path.unlink()
 
+    def test_custom_key_env_uses_same_multiline_loading_rules(self):
+        custom_env = "MINIMAX_API_KEY"
+        original = os.environ.pop(custom_env, None)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+            f.write("MINIMAX_API_KEY=mini_first\n")
+            f.write("MINIMAX_API_KEY_2=mini_second\n")
+            f.flush()
+            path = Path(f.name)
+
+        try:
+            kp_llm._try_load_api_key_from_dotenv({"dotenv_path": str(path)}, custom_env)
+            self.assertEqual(
+                kp_llm._parse_api_keys_from_env(custom_env),
+                ["mini_first", "mini_second"],
+            )
+        finally:
+            path.unlink()
+            if original is None:
+                os.environ.pop(custom_env, None)
+            else:
+                os.environ[custom_env] = original
+
 
 class TestKeyBlockAndRotate(unittest.TestCase):
     """Test the block-and-rotate mechanism."""
@@ -185,6 +208,24 @@ class TestKeyRotationIntegration(unittest.TestCase):
 
     def setUp(self):
         _reset_key_state()
+
+    def test_single_key_skips_startup_probe_by_default(self):
+        original = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = "key_only"
+        fake_openai = type("FakeOpenAIModule", (), {"OpenAI": lambda **kwargs: kwargs})
+        try:
+            with patch.dict(sys.modules, {"openai": fake_openai}), patch.object(
+                kp_llm, "_prune_rate_limited_keys_on_startup"
+            ) as probe:
+                client = kp_llm.require_openai({"timeout": 120})
+            probe.assert_not_called()
+            self.assertEqual(client["api_key"], "key_only")
+            self.assertEqual(client["timeout"], 120)
+        finally:
+            if original is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
+                os.environ["OPENAI_API_KEY"] = original
 
     def test_full_rotation_cycle(self):
         kp_llm._API_KEYS = ["key_1", "key_2", "key_3"]

@@ -547,11 +547,14 @@ def rank_nodes_by_call_evidence(
     nodes: Iterable[int],
     goal_structs: Sequence[str],
     limit: int,
+    *,
+    priority_nodes: Iterable[int] = (),
 ) -> List[int]:
-    """Prefer call-connected nodes that expose APIs, strings or globals."""
+    """Prefer explicit goals, then evidence-rich and compact functions."""
 
     del adjacency, goal_structs
-    scored: List[Tuple[int, int, int, int]] = []
+    priorities = {int(va) for va in priority_nodes}
+    scored: List[Tuple[int, int, int, int, int]] = []
     for raw_va in set(int(x) for x in nodes):
         node = _node(graph, raw_va)
         if node is None:
@@ -563,9 +566,19 @@ def rank_nodes_by_call_evidence(
         evidence_count += len(getattr(node, "string_refs", set()) or set())
         evidence_count += len(_CONTEXT.func_to_globals.get(int(raw_va), []) or [])
         instr_count = int(getattr(node, "instr_count", 0) or 0)
-        scored.append((int(evidence_count), int(call_degree), int(instr_count), int(raw_va)))
+        # Smaller functions are less expensive to profile.  The negative
+        # instruction count is only a tie-breaker after priority and evidence.
+        scored.append(
+            (
+                int(raw_va in priorities),
+                int(evidence_count),
+                int(call_degree),
+                -int(instr_count),
+                int(raw_va),
+            )
+        )
     scored.sort(reverse=True)
-    return [row[3] for row in scored[: max(1, int(limit or 1))]]
+    return [row[4] for row in scored[: max(1, int(limit or 1))]]
 
 
 def install_practical_patches(engine_module: Any, settings: PracticalSettings) -> None:
@@ -578,6 +591,7 @@ def install_practical_patches(engine_module: Any, settings: PracticalSettings) -
         return
 
     original_build = engine_module._build_mixed_graph
+    original_call_only_build = engine_module._build_call_only_graph
     original_auto_goals = engine_module._pick_auto_goals
     original_manual_goals = engine_module._pick_manual_goals
     original_estimate_generations = engine_module._estimate_max_generations
@@ -602,6 +616,21 @@ def install_practical_patches(engine_module: Any, settings: PracticalSettings) -
         stats["evidence_only_edges"] = ["data", "string", "global", "indirect"]
         return adjacency, func_to_globals, stats
 
+    def patched_call_only_build(graph: Any):
+        adjacency, func_to_globals, stats = original_call_only_build(graph)
+        configure_practical_context(
+            graph=graph,
+            func_to_globals=func_to_globals,
+            mixed_adjacency=adjacency,
+            settings=settings,
+        )
+        stats = dict(stats)
+        stats["practical_accuracy_mode"] = True
+        stats["path_expansion"] = "directed_call_edges_only"
+        stats["lambda_semantics"] = "node_budget"
+        stats["evidence_only_edges"] = []
+        return adjacency, func_to_globals, stats
+
     def patched_auto_goals(graph: Any, adjacency: Dict[int, Dict[int, Set[str]]], **kwargs: Any):
         return original_auto_goals(graph, _filter_call_adjacency(adjacency), **kwargs)
 
@@ -620,6 +649,7 @@ def install_practical_patches(engine_module: Any, settings: PracticalSettings) -
     _CONTEXT.settings = settings
 
     engine_module._build_mixed_graph = patched_build
+    engine_module._build_call_only_graph = patched_call_only_build
     engine_module._mixed_neighborhood = call_budget_neighborhood
     engine_module._select_profile = select_profile_with_static_gate
     engine_module._rank_nodes_for_compare = rank_nodes_by_call_evidence

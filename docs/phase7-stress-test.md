@@ -130,3 +130,37 @@ tmp/phase7_stress_real/
 - `peak_rss_mb_max`：安装 `psutil` 后可用。
 
 不要只根据平均置信度判断准确率。置信度来自模型，人工真值召回更适合决定是否合并 practical 模式。
+
+## 8. MiniMax 结构化响应稳定性复测
+
+性能 A/B 之外，应单独验证同一 Practical 预算在连续请求中的稳定性。推荐先用 `b12` 连续运行
+三次；低预算会缩短单轮耗时，同时仍覆盖深路径、Profile 分析和新旧 Profile 比较三类交互。
+
+```bash
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --profile smoke \
+  --repeat 3 \
+  --practical-budgets 12 \
+  --engines practical \
+  --llm-mode on \
+  --timeout-seconds 1800 \
+  --out-dir tmp/phase7_stress_minimax_b12
+```
+
+验收时必须同时检查：
+
+- `success_rate == 100%`，三轮均无超时或 Runner 失败。
+- `llm_interaction_success_rate == 100%`，不能只看进程返回码或 HTTP 成功次数。
+- `failed_api_calls == 0`；若发生可恢复的截断，API 调用数可以高于 LLM 交互数。
+- `goal_recall` 和 `profile_token_recall` 不下降。
+- `stderr.log` 中的首次 JSON 截断必须能在结果的后续 attempt 里找到成功记录。
+- `usage_records` 应能看到每次尝试的 `request_max_tokens` 与 `response_chars`，但不包含密钥或原始回复。
+
+MiniMax-M3 的 Practical Profile 首轮使用 1600-token 上限。若 JSON 为空、截断或不可解析，
+统一 LLM 层会按根 `config.yaml` 的 `json_retry_token_multiplier` 扩大预算，并受
+`json_retry_max_tokens` 限制。这个机制只增加失败路径的成本，不影响首轮成功请求。
+
+若复用 Phase7.5 预验证报告，必须通过样本 `extra_args` 显式传入
+`--phase7-5-prevalidated-report`。Runner 会核对输入文件、源 DB 与 IDA 导出路径；任一项变化都
+必须重新执行 Phase7.5，不能使用旧报告来缩短基准时间。

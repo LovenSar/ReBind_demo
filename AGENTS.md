@@ -130,6 +130,9 @@
   - 环境变量：`OPENAI_API_KEY`（推荐）
   - `.env` 文件：放在 `tools/Semantics_Alignment/`（已被 `.gitignore` 忽略）
 - **即使 `.gitignore` 已忽略，仍勿提交明文密钥**
+- **OpenAI 兼容接口配置**：统一维护在 `semantics.llm.api`。`timeout` 控制单次请求超时；
+  `startup_probe` 控制启动探测；`wait_on_rate_limit` 控制单 Key 限流后是否长期等待；
+  `json_retry_token_multiplier` / `json_retry_max_tokens` 只在结构化响应失败后扩大恢复预算。
 
 ## 常见陷阱与已知问题
 

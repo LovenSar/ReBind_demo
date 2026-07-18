@@ -121,6 +121,13 @@ semantics:
     api:
       key_env_var: "MINIMAX_API_KEY"
       base_url: "https://api.minimaxi.com/v1"
+      # 单次请求超时；单 Key 默认免启动探测，避免额外 API 调用和瞬时 429 误判。
+      timeout: 120
+      startup_probe: false
+      wait_on_rate_limit: false
+      # 仅当结构化响应解析失败时扩大输出预算：1600 -> 3200 -> 6000（封顶）。
+      json_retry_token_multiplier: 2.0
+      json_retry_max_tokens: 6000
     chat_completion_kwargs: {}
 
   # Phase7 任务参数的唯一维护位置。每样本预处理生成的 JSON 仅是运行快照，

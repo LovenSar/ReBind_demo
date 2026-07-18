@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,10 @@ _SA_ROOT = _PROJECT_ROOT / "tools" / "Semantics_Alignment"
 if str(_SA_ROOT) not in sys.path:
     sys.path.insert(0, str(_SA_ROOT))
 
-from depth.engine import _phase7_5_checkpoint_reusable  # noqa: E402
+from depth.engine import (  # noqa: E402
+    _load_prevalidated_phase7_5_report,
+    _phase7_5_checkpoint_reusable,
+)
 from depth.profile_ops import _redact_request_data  # noqa: E402
 from depth.strict_align import _collect_ida_profile, _remove_sidecars  # noqa: E402
 
@@ -26,6 +30,35 @@ class TestPhase7Safety(unittest.TestCase):
         self.assertFalse(_phase7_5_checkpoint_reusable({"status": "failed"}))
         self.assertFalse(_phase7_5_checkpoint_reusable({"status": "running"}))
         self.assertFalse(_phase7_5_checkpoint_reusable({}))
+
+    def test_prevalidated_phase75_report_requires_matching_input_and_ida_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sample = root / "sample.bin"
+            ida_dir = root / "sample_idademo"
+            sample.write_bytes(b"test")
+            ida_dir.mkdir()
+            report_path = root / "phase7_5_report.json"
+            report_path.write_text(
+                json.dumps(
+                    {"status": "aligned", "input_path": str(sample), "ida_dir": str(ida_dir)}
+                ),
+                encoding="utf-8",
+            )
+
+            report = _load_prevalidated_phase7_5_report(
+                report_path,
+                input_path=str(sample),
+                ida_dir=str(ida_dir),
+            )
+            self.assertEqual(report["mode"], "prevalidated")
+            self.assertEqual(report["status"], "aligned")
+            with self.assertRaises(ValueError):
+                _load_prevalidated_phase7_5_report(
+                    report_path,
+                    input_path=str(root / "other.bin"),
+                    ida_dir=str(ida_dir),
+                )
 
     def test_rebuilt_db_sidecars_can_be_removed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
