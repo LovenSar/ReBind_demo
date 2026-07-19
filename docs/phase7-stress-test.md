@@ -60,15 +60,51 @@ python scripts/phase7_stress.py \
 
 预设只控制重复次数和 practical 节点预算，不会改变 Phase7 分析参数。
 
-| 预设 | 每个变体重复次数 | Practical 节点预算 |
-|---|---:|---|
-| `smoke` | 1 | 24 |
-| `balanced` | 2 | 12、24、40 |
-| `soak` | 3 | 12、24、40、64 |
+| 预设 | 每个变体重复次数 | Practical 节点预算 | 用途 |
+|---|---:|---|---|
+| `smoke` | 1 | 24 | 快速冒烟 |
+| `balanced` | 2 | 12、24、40 | 常规 A/B |
+| `soak` | 3 | 12、24、40、64 | 长时浸泡 |
+| `resilience` | 3 | 12 | MiniMax/JSON 恢复稳定性 |
+| `detailed` | 3 | 12、24、40 | 完整 A/B + 稳定性 |
 
 一份样本使用 `balanced` 时会产生 8 次运行：legacy 运行 2 次，三个 practical 预算各运行 2 次。
+一份样本使用 `detailed` 时会产生 12 次运行：legacy ×3 + 三个 practical 预算各 ×3。
 
 清单中的 `defaults.repeat` 和 `defaults.practical_budgets` 可以覆盖预设。命令行的 `--repeat` 和 `--practical-budgets` 优先级最高。脚本默认拒绝超过 100 次的矩阵，需要明确提高 `--max-runs` 才会继续。
+
+## 3.1 详细压测套件（推荐）
+
+`--suite detailed` 按三阶段执行，每阶段写入独立子目录，并在根目录生成 `suite_summary.md`：
+
+| 阶段 | 内容 | 默认矩阵（单样本） |
+|---|---|---|
+| `01_dry_guard` | 无 API 干跑门禁（legacy + practical b24） | 2 |
+| `02_resilience` | Practical b12 ×3，验证截断恢复与稳定性 | 3 |
+| `03_ab_matrix` | Legacy + practical b12/b24/b40，各重复 3 次 | 12 |
+
+```bash
+# 只看矩阵，不执行
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --suite detailed \
+  --plan-only
+
+# 先跑无成本门禁
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --suite detailed \
+  --stage 01_dry_guard \
+  --out-dir tmp/phase7_stress_detailed
+
+# 跑完整三阶段（会产生真实 API 成本）
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --suite detailed \
+  --out-dir tmp/phase7_stress_detailed
+```
+
+也可用 `--suite resilience` 只跑稳定性阶段。套件模式下验收失败返回退出码 `2`；普通 `--profile` 运行仍只按进程失败返回 `1`。
 
 ## 4. 无 API 成本检查
 
@@ -107,6 +143,7 @@ tmp/phase7_stress_real/
 ├── summary.csv
 ├── comparisons.json
 ├── comparisons.csv
+├── acceptance.json
 ├── summary.md
 └── runs/
     └── <sample>__<variant>__rXX/
@@ -117,7 +154,13 @@ tmp/phase7_stress_real/
         └── benchmark_result.json
 ```
 
-`summary.md` 给出聚合结果。`comparisons.csv` 给出 practical 相对 legacy 的加速比、Token 减少比例和准确率变化。
+`summary.md` 给出聚合结果，并额外包含：
+
+- 耗时 / Token 的变异系数（CV）
+- `usage_records` 恢复指标：重试组、预算扩展（如 1600→3200）、恢复成功率
+- 验收门禁（`acceptance.json`）
+
+`comparisons.csv` 给出 practical 相对 legacy 的加速比、Token 减少比例和准确率变化。
 
 ## 7. 重点观察
 
@@ -139,9 +182,16 @@ tmp/phase7_stress_real/
 ```bash
 python scripts/phase7_stress.py \
   --manifest tmp/phase7_stress_manifest.json \
-  --profile smoke \
-  --repeat 3 \
-  --practical-budgets 12 \
+  --suite resilience \
+  --out-dir tmp/phase7_stress_minimax_b12
+```
+
+等价的单阶段命令：
+
+```bash
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --profile resilience \
   --engines practical \
   --llm-mode on \
   --timeout-seconds 1800 \

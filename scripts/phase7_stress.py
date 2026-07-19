@@ -41,6 +41,67 @@ _PROFILES: Dict[str, Dict[str, Any]] = {
     "smoke": {"repeat": 1, "practical_budgets": [24]},
     "balanced": {"repeat": 2, "practical_budgets": [12, 24, 40]},
     "soak": {"repeat": 3, "practical_budgets": [12, 24, 40, 64]},
+    # Practical-only stability: same budget, multiple repeats.
+    "resilience": {"repeat": 3, "practical_budgets": [12]},
+    # Full A/B with stability repeats across key budgets.
+    "detailed": {"repeat": 3, "practical_budgets": [12, 24, 40]},
+}
+
+# Named multi-stage campaigns. Stages inherit CLI overrides when provided.
+_SUITES: Dict[str, Dict[str, Any]] = {
+    "detailed": {
+        "description": (
+            "三阶段详细压测：无成本干跑门禁 → MiniMax/Practical 恢复稳定性 → "
+            "Legacy/Practical A/B 矩阵（含耗时、Token、召回与恢复路径）"
+        ),
+        "stages": [
+            {
+                "name": "01_dry_guard",
+                "profile": "smoke",
+                "engines": ["legacy", "practical"],
+                "repeat": 1,
+                "practical_budgets": [24],
+                "dry_run": True,
+                "llm_mode": "off",
+                "timeout_seconds": 1800,
+            },
+            {
+                "name": "02_resilience",
+                "profile": "resilience",
+                "engines": ["practical"],
+                "repeat": 3,
+                "practical_budgets": [12],
+                "dry_run": False,
+                "llm_mode": "on",
+                "timeout_seconds": 1800,
+            },
+            {
+                "name": "03_ab_matrix",
+                "profile": "detailed",
+                "engines": ["legacy", "practical"],
+                "repeat": 3,
+                "practical_budgets": [12, 24, 40],
+                "dry_run": False,
+                "llm_mode": "on",
+                "timeout_seconds": 10800,
+            },
+        ],
+    },
+    "resilience": {
+        "description": "仅 Practical b12 连续三轮，聚焦结构化响应恢复与稳定性",
+        "stages": [
+            {
+                "name": "01_resilience",
+                "profile": "resilience",
+                "engines": ["practical"],
+                "repeat": 3,
+                "practical_budgets": [12],
+                "dry_run": False,
+                "llm_mode": "on",
+                "timeout_seconds": 1800,
+            }
+        ],
+    },
 }
 
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{1,}")
@@ -599,6 +660,115 @@ def _percentile(values: Sequence[float], fraction: float) -> Optional[float]:
     return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
 
 
+def _collect_primary_usage_records(report: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Collect leaf usage_records without double-counting selected_profiles copies."""
+    records: List[Dict[str, Any]] = []
+
+    for goal in report.get("generations") or []:
+        if not isinstance(goal, dict):
+            continue
+        for generation in goal.get("generations") or []:
+            if not isinstance(generation, dict):
+                continue
+            result = generation.get("result") or {}
+            if not isinstance(result, dict):
+                continue
+            llm = result.get("llm") or {}
+            if not isinstance(llm, dict):
+                continue
+            for row in llm.get("usage_records") or []:
+                if isinstance(row, dict):
+                    records.append(dict(row))
+
+    for item in report.get("function_compare") or []:
+        if not isinstance(item, dict):
+            continue
+        for key in ("new_profile", "llm_compare"):
+            payload = item.get(key) or {}
+            if not isinstance(payload, dict):
+                continue
+            for row in payload.get("usage_records") or []:
+                if isinstance(row, dict):
+                    records.append(dict(row))
+    return records
+
+
+def _group_usage_attempts(records: Sequence[Mapping[str, Any]]) -> List[List[Mapping[str, Any]]]:
+    groups: List[List[Mapping[str, Any]]] = []
+    current: List[Mapping[str, Any]] = []
+    for row in records:
+        attempt = int(row.get("attempt") or 1)
+        if attempt <= 1 and current:
+            groups.append(current)
+            current = [row]
+        else:
+            current.append(row)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _usage_recovery_metrics(records: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+    groups = _group_usage_attempts(records)
+    retry_groups = 0
+    recovered_groups = 0
+    failed_retry_groups = 0
+    budget_expansions = 0
+    request_budgets: List[int] = []
+    response_chars: List[int] = []
+    error_attempts = 0
+    ok_attempts = 0
+
+    for group in groups:
+        attempts = [int(row.get("attempt") or 1) for row in group]
+        budgets = [int(row.get("request_max_tokens") or 0) for row in group]
+        statuses = [str(row.get("status") or "") for row in group]
+        request_budgets.extend(value for value in budgets if value > 0)
+        for row in group:
+            chars = int(row.get("response_chars") or 0)
+            if chars > 0:
+                response_chars.append(chars)
+            status = str(row.get("status") or "")
+            if status == "ok":
+                ok_attempts += 1
+            elif status:
+                error_attempts += 1
+
+        multi = len(group) > 1 or any(value > 1 for value in attempts)
+        if not multi:
+            continue
+        retry_groups += 1
+        positive = [value for value in budgets if value > 0]
+        if len(positive) >= 2 and max(positive) > positive[0]:
+            budget_expansions += 1
+        if statuses and statuses[-1] == "ok":
+            recovered_groups += 1
+        else:
+            failed_retry_groups += 1
+
+    return {
+        "usage_attempt_count": len(records),
+        "usage_interaction_groups": len(groups),
+        "usage_ok_attempts": ok_attempts,
+        "usage_error_attempts": error_attempts,
+        "usage_retry_groups": retry_groups,
+        "usage_recovered_retry_groups": recovered_groups,
+        "usage_failed_retry_groups": failed_retry_groups,
+        "usage_budget_expansions": budget_expansions,
+        "usage_retry_recovery_rate": (
+            recovered_groups / retry_groups if retry_groups else None
+        ),
+        "request_max_tokens_max": max(request_budgets) if request_budgets else None,
+        "request_max_tokens_mean": (
+            round(statistics.fmean(request_budgets), 3) if request_budgets else None
+        ),
+        "response_chars_max": max(response_chars) if response_chars else None,
+        "response_chars_mean": (
+            round(statistics.fmean(response_chars), 3) if response_chars else None
+        ),
+    }
+
+
 def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -> Dict[str, Any]:
     if not report_path.is_file():
         return {"report_status": "missing"}
@@ -776,8 +946,9 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
     successful_llm_interactions = (
         successful_llm_steps + profile_analysis_successes + profile_compare_successes
     )
+    recovery = _usage_recovery_metrics(_collect_primary_usage_records(report))
 
-    return {
+    result = {
         "report_status": "ok",
         "selected_goal_count": len(selected_goal_vas),
         "generation_count": generation_count,
@@ -814,6 +985,8 @@ def extract_report_metrics(report_path: Path, expectations: Mapping[str, Any]) -
         "path_recall": path_recall,
         "profile_token_recall": profile_token_recall,
     }
+    result.update(recovery)
+    return result
 
 
 def execute_run(
@@ -948,7 +1121,16 @@ def aggregate_results(results: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
         "goal_recall",
         "path_recall",
         "profile_token_recall",
+        "usage_attempt_count",
+        "usage_retry_groups",
+        "usage_recovered_retry_groups",
+        "usage_failed_retry_groups",
+        "usage_budget_expansions",
+        "usage_retry_recovery_rate",
+        "request_max_tokens_max",
+        "response_chars_max",
     )
+    stability_metrics = ("wall_time_sec", "total_tokens", "coverage_node_count")
     summary: List[Dict[str, Any]] = []
     for (sample, variant), rows in sorted(grouped.items()):
         successful_rows = [
@@ -979,8 +1161,101 @@ def aggregate_results(results: Sequence[Mapping[str, Any]]) -> List[Dict[str, An
             item[f"{metric}_p50"] = round(_percentile(values, 0.50), 6) if values else None
             item[f"{metric}_p95"] = round(_percentile(values, 0.95), 6) if values else None
             item[f"{metric}_max"] = round(max(values), 6) if values else None
+            item[f"{metric}_sum"] = round(sum(values), 6) if values else None
+        for metric in stability_metrics:
+            values = _numeric_values(successful_rows, metric)
+            if len(values) >= 2:
+                stdev = statistics.pstdev(values)
+                mean = statistics.fmean(values)
+                item[f"{metric}_stdev"] = round(stdev, 6)
+                item[f"{metric}_cv"] = round(stdev / mean, 6) if mean else None
+            else:
+                item[f"{metric}_stdev"] = None
+                item[f"{metric}_cv"] = None
         summary.append(item)
     return summary
+
+
+def evaluate_acceptance(
+    summary: Sequence[Mapping[str, Any]],
+    comparisons: Sequence[Mapping[str, Any]],
+    *,
+    llm_mode: Optional[str],
+) -> Dict[str, Any]:
+    """Derive pass/fail gates for detailed stress campaigns."""
+    gates: List[Dict[str, Any]] = []
+    for row in summary:
+        llm_rate = row.get("llm_interaction_success_rate_mean")
+        failed_api_max = row.get("failed_api_calls_max")
+        checks = {
+            "success_rate_100": float(row.get("success_rate") or 0.0) >= 1.0,
+            "no_timeouts": int(row.get("timeouts") or 0) == 0,
+            "no_failed_api_calls": failed_api_max is None or float(failed_api_max) <= 0.0,
+        }
+        if llm_mode == "on":
+            checks["llm_interaction_success_100"] = (
+                llm_rate is not None and float(llm_rate) >= 1.0
+            )
+        retry_groups = row.get("usage_retry_groups_sum")
+        recovered = row.get("usage_recovered_retry_groups_sum")
+        failed_retries = row.get("usage_failed_retry_groups_sum")
+        if retry_groups is not None and float(retry_groups) > 0:
+            checks["retry_recovery_complete"] = (
+                float(failed_retries or 0.0) <= 0.0
+                and float(recovered or 0.0) >= float(retry_groups)
+            )
+        gates.append(
+            {
+                "sample": row.get("sample"),
+                "variant": row.get("variant"),
+                "passed": all(checks.values()),
+                "checks": checks,
+                "success_rate": row.get("success_rate"),
+                "llm_interaction_success_rate_mean": llm_rate,
+                "usage_retry_groups_sum": retry_groups,
+                "usage_recovered_retry_groups_sum": recovered,
+                "usage_budget_expansions_sum": row.get("usage_budget_expansions_sum"),
+                "wall_time_sec_cv": row.get("wall_time_sec_cv"),
+                "total_tokens_cv": row.get("total_tokens_cv"),
+            }
+        )
+
+    comparison_gates: List[Dict[str, Any]] = []
+    for row in comparisons:
+        checks = {
+            "goal_recall_not_worse": (
+                row.get("goal_recall_delta") is None
+                or float(row.get("goal_recall_delta")) >= -1e-9
+            ),
+            "profile_token_recall_not_worse": (
+                row.get("profile_token_recall_delta") is None
+                or float(row.get("profile_token_recall_delta")) >= -1e-9
+            ),
+        }
+        comparison_gates.append(
+            {
+                "sample": row.get("sample"),
+                "variant": row.get("variant"),
+                "passed": all(checks.values()),
+                "checks": checks,
+                "wall_speedup": row.get("wall_speedup"),
+                "token_reduction_pct": row.get("token_reduction_pct"),
+                "goal_recall_delta": row.get("goal_recall_delta"),
+                "path_recall_delta": row.get("path_recall_delta"),
+                "profile_token_recall_delta": row.get("profile_token_recall_delta"),
+            }
+        )
+
+    return {
+        "passed": all(item["passed"] for item in gates)
+        and all(item["passed"] for item in comparison_gates),
+        "variant_gates": gates,
+        "comparison_gates": comparison_gates,
+        "notes": [
+            "Path Recall 仅在人工确认的 path_subsequences 与候选路径一致时用于验收。",
+            "usage_retry_* 来自报告 usage_records；截断后扩大 token 预算会记入 budget_expansions。",
+        ],
+    }
 
 
 def build_comparisons(summary: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
@@ -1056,18 +1331,19 @@ def write_markdown_summary(
     path: Path,
     summary: Sequence[Mapping[str, Any]],
     comparisons: Sequence[Mapping[str, Any]],
+    acceptance: Optional[Mapping[str, Any]] = None,
 ) -> None:
     lines = [
         "# Phase7 压力测试汇总",
         "",
         "## 运行聚合",
         "",
-        "| 样本 | 变体 | 成功率 | 超时率 | 失败率 | LLM成功率 | 平均耗时(s) | P95耗时(s) | 峰值内存(MB) | 平均Token | 覆盖节点 | 最深路径 | Goal Recall | Path Recall | Profile Token Recall |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| 样本 | 变体 | 成功率 | 超时率 | 失败率 | LLM成功率 | 平均耗时(s) | P95耗时(s) | 耗时CV | 峰值内存(MB) | 平均Token | Token CV | 覆盖节点 | 最深路径 | Goal Recall | Path Recall | Profile Token Recall |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summary:
         lines.append(
-            "| {sample} | {variant} | {success_rate} | {timeout_rate} | {failure_rate} | {llm_success_rate} | {wall} | {wall_p95} | {rss} | {tokens} | {coverage} | {depth} | {goal} | {path_recall} | {profile} |".format(
+            "| {sample} | {variant} | {success_rate} | {timeout_rate} | {failure_rate} | {llm_success_rate} | {wall} | {wall_p95} | {wall_cv} | {rss} | {tokens} | {token_cv} | {coverage} | {depth} | {goal} | {path_recall} | {profile} |".format(
                 sample=row.get("sample"),
                 variant=row.get("variant"),
                 success_rate=_fmt(_as_number(row.get("success_rate")) * 100.0) + "%",
@@ -1083,13 +1359,43 @@ def write_markdown_summary(
                 ),
                 wall=_fmt(row.get("wall_time_sec_mean")),
                 wall_p95=_fmt(row.get("wall_time_sec_p95")),
+                wall_cv=_fmt(row.get("wall_time_sec_cv"), 3),
                 rss=_fmt(row.get("peak_rss_mb_max")),
                 tokens=_fmt(row.get("total_tokens_mean"), 0),
+                token_cv=_fmt(row.get("total_tokens_cv"), 3),
                 coverage=_fmt(row.get("coverage_node_count_mean"), 1),
                 depth=_fmt(row.get("deepest_path_depth_mean"), 1),
                 goal=_fmt(row.get("goal_recall_mean")),
                 path_recall=_fmt(row.get("path_recall_mean")),
                 profile=_fmt(row.get("profile_token_recall_mean")),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## LLM 恢复与预算扩展",
+            "",
+            "来自报告 `usage_records`：`retry_groups` 表示发生二次及以上尝试的交互组；"
+            "`budget_expansions` 表示 `request_max_tokens` 在组内升高（如 1600→3200）。",
+            "",
+            "| 样本 | 变体 | 尝试次数 | 重试组 | 恢复成功 | 恢复失败 | 预算扩展 | 恢复率 | 最大request_max_tokens | 最大response_chars |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in summary:
+        lines.append(
+            "| {sample} | {variant} | {attempts} | {retries} | {recovered} | {failed} | {expansions} | {rate} | {budget} | {chars} |".format(
+                sample=row.get("sample"),
+                variant=row.get("variant"),
+                attempts=_fmt(row.get("usage_attempt_count_sum"), 0),
+                retries=_fmt(row.get("usage_retry_groups_sum"), 0),
+                recovered=_fmt(row.get("usage_recovered_retry_groups_sum"), 0),
+                failed=_fmt(row.get("usage_failed_retry_groups_sum"), 0),
+                expansions=_fmt(row.get("usage_budget_expansions_sum"), 0),
+                rate=_fmt(row.get("usage_retry_recovery_rate_mean"), 3),
+                budget=_fmt(row.get("request_max_tokens_max_max"), 0),
+                chars=_fmt(row.get("response_chars_max_max"), 0),
             )
         )
 
@@ -1119,12 +1425,87 @@ def write_markdown_summary(
                 profile=_fmt(row.get("profile_token_recall_delta")),
             )
         )
+
+    if acceptance:
+        lines.extend(
+            [
+                "",
+                "## 验收门禁",
+                "",
+                f"总体结果：{'PASS' if acceptance.get('passed') else 'FAIL'}",
+                "",
+                "| 样本 | 变体 | 结果 | success_rate | LLM成功率 | 重试恢复 | 耗时CV | Token CV |",
+                "|---|---|---|---:|---:|---|---:|---:|",
+            ]
+        )
+        for row in acceptance.get("variant_gates") or []:
+            checks = row.get("checks") or {}
+            lines.append(
+                "| {sample} | {variant} | {passed} | {success} | {llm} | {retry} | {wall_cv} | {token_cv} |".format(
+                    sample=row.get("sample"),
+                    variant=row.get("variant"),
+                    passed="PASS" if row.get("passed") else "FAIL",
+                    success=_fmt(_as_number(row.get("success_rate")) * 100.0) + "%",
+                    llm=(
+                        "-"
+                        if row.get("llm_interaction_success_rate_mean") is None
+                        else _fmt(
+                            _as_number(row.get("llm_interaction_success_rate_mean")) * 100.0
+                        )
+                        + "%"
+                    ),
+                    retry=(
+                        "-"
+                        if "retry_recovery_complete" not in checks
+                        else ("PASS" if checks.get("retry_recovery_complete") else "FAIL")
+                    ),
+                    wall_cv=_fmt(row.get("wall_time_sec_cv"), 3),
+                    token_cv=_fmt(row.get("total_tokens_cv"), 3),
+                )
+            )
+        if acceptance.get("comparison_gates"):
+            lines.extend(
+                [
+                    "",
+                    "| 样本 | Practical 变体 | 结果 | 加速比 | Token减少 | GoalΔ | PathΔ | ProfileΔ |",
+                    "|---|---|---|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for row in acceptance.get("comparison_gates") or []:
+                reduction = row.get("token_reduction_pct")
+                lines.append(
+                    "| {sample} | {variant} | {passed} | {speedup} | {reduction} | {goal} | {path} | {profile} |".format(
+                        sample=row.get("sample"),
+                        variant=row.get("variant"),
+                        passed="PASS" if row.get("passed") else "FAIL",
+                        speedup=_fmt(row.get("wall_speedup")),
+                        reduction=(
+                            "-" if reduction is None else f"{float(reduction):.2f}%"
+                        ),
+                        goal=_fmt(row.get("goal_recall_delta")),
+                        path=_fmt(row.get("path_recall_delta")),
+                        profile=_fmt(row.get("profile_token_recall_delta")),
+                    )
+                )
+        for note in acceptance.get("notes") or []:
+            lines.append(f"- {note}")
+
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _print_plan(matrix: Sequence[RunSpec], timeout_seconds: float, profile: str) -> None:
-    print(f"[Phase7 Stress] profile={profile} runs={len(matrix)} timeout={timeout_seconds:.0f}s")
+def _print_plan(
+    matrix: Sequence[RunSpec],
+    timeout_seconds: float,
+    profile: str,
+    *,
+    stage_name: Optional[str] = None,
+) -> None:
+    prefix = f"stage={stage_name} " if stage_name else ""
+    print(
+        f"[Phase7 Stress] {prefix}profile={profile} runs={len(matrix)} "
+        f"timeout={timeout_seconds:.0f}s"
+    )
     for spec in matrix:
         print(
             f"  {spec.run_key}: db={spec.db_path} "
@@ -1132,66 +1513,80 @@ def _print_plan(matrix: Sequence[RunSpec], timeout_seconds: float, profile: str)
         )
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Phase7 legacy/practical A/B stress benchmark")
-    parser.add_argument("--manifest", required=True, help="JSON sample manifest")
-    parser.add_argument("--out-dir", default="tmp/phase7_stress", help="benchmark output directory")
-    parser.add_argument("--profile", choices=tuple(_PROFILES), default="balanced")
-    parser.add_argument("--repeat", type=int, default=None, help="override repeats per variant")
-    parser.add_argument("--practical-budgets", default=None, help="comma-separated budgets, e.g. 12,24,40")
-    parser.add_argument("--engines", default=None, help="legacy,practical or both as comma-separated values")
-    parser.add_argument("--timeout-seconds", type=float, default=None)
-    parser.add_argument("--llm-mode", choices=("auto", "on", "off"), default=None)
-    parser.add_argument("--dry-run", action="store_true", help="pass --dry-run to Phase7; no LLM API calls")
-    parser.add_argument("--plan-only", action="store_true", help="print matrix without executing")
-    parser.add_argument("--fail-fast", action="store_true")
-    parser.add_argument("--keep-work-dbs", action="store_true")
-    parser.add_argument("--max-runs", type=int, default=100, help="guard against accidental costly matrices")
-    args = parser.parse_args(argv)
+def _parse_engines(raw: Optional[str]) -> Optional[List[str]]:
+    if not raw:
+        return None
+    values = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    if values == ["both"]:
+        values = ["legacy", "practical"]
+    return values
 
-    manifest_path = Path(args.manifest).expanduser().resolve()
-    manifest = load_manifest(manifest_path)
-    defaults = manifest.get("defaults") or {}
-    timeout_seconds = float(
-        args.timeout_seconds
-        if args.timeout_seconds is not None
-        else defaults.get("timeout_seconds", 7200)
-    )
-    budgets_override = _parse_budgets(args.practical_budgets)
-    engines_override = None
-    if args.engines:
-        raw = [item.strip().lower() for item in args.engines.split(",") if item.strip()]
-        if raw == ["both"]:
-            raw = ["legacy", "practical"]
-        engines_override = raw
 
+def resolve_suite_stages(
+    suite_name: str,
+    *,
+    stage_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    suite = _SUITES.get(suite_name)
+    if suite is None:
+        raise ValueError(f"unknown suite: {suite_name}")
+    stages = list(suite.get("stages") or [])
+    if stage_filter and stage_filter not in {"all", "*"}:
+        stages = [stage for stage in stages if stage.get("name") == stage_filter]
+        if not stages:
+            available = ", ".join(str(item.get("name")) for item in suite.get("stages") or [])
+            raise ValueError(
+                f"suite {suite_name!r} has no stage {stage_filter!r}; available: {available}"
+            )
+    return stages
+
+
+def run_benchmark(
+    *,
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
+    output_root: Path,
+    profile: str,
+    repeat_override: Optional[int],
+    budgets_override: Optional[Sequence[int]],
+    engines_override: Optional[Sequence[str]],
+    timeout_seconds: float,
+    llm_mode: Optional[str],
+    dry_run: bool,
+    plan_only: bool,
+    fail_fast: bool,
+    keep_work_dbs: bool,
+    max_runs: int,
+    stage_name: Optional[str] = None,
+    strict_acceptance: bool = False,
+) -> int:
     matrix = build_run_matrix(
         manifest_path,
         manifest,
-        profile=args.profile,
-        repeat_override=args.repeat,
+        profile=profile,
+        repeat_override=repeat_override,
         budgets_override=budgets_override,
         engines_override=engines_override,
     )
-    _print_plan(matrix, timeout_seconds, args.profile)
-    if len(matrix) > int(args.max_runs):
+    _print_plan(matrix, timeout_seconds, profile, stage_name=stage_name)
+    if len(matrix) > int(max_runs):
         raise SystemExit(
-            f"planned run count {len(matrix)} exceeds --max-runs={args.max_runs}; "
+            f"planned run count {len(matrix)} exceeds --max-runs={max_runs}; "
             "raise the guard explicitly after reviewing API cost"
         )
-    if args.plan_only:
+    if plan_only:
         return 0
 
-    output_root = Path(args.out_dir).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     _write_json(
         output_root / "benchmark_plan.json",
         {
             "manifest": str(manifest_path),
-            "profile": args.profile,
+            "profile": profile,
+            "stage": stage_name,
             "timeout_seconds": timeout_seconds,
-            "dry_run": bool(args.dry_run),
-            "llm_mode": args.llm_mode,
+            "dry_run": bool(dry_run),
+            "llm_mode": llm_mode,
             "psutil_available": psutil is not None,
             "runs": [
                 {
@@ -1213,46 +1608,253 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         jsonl_path.unlink()
 
     for index, spec in enumerate(matrix, 1):
-        print(f"[Phase7 Stress] [{index}/{len(matrix)}] {spec.run_key}", flush=True)
+        label = f"{stage_name}/" if stage_name else ""
+        print(
+            f"[Phase7 Stress] [{label}{index}/{len(matrix)}] {spec.run_key}",
+            flush=True,
+        )
         result = execute_run(
             spec,
             output_root=output_root,
             timeout_seconds=timeout_seconds,
-            llm_mode=args.llm_mode,
-            engine_dry_run=bool(args.dry_run),
-            keep_work_db=bool(args.keep_work_dbs),
+            llm_mode=llm_mode,
+            engine_dry_run=bool(dry_run),
+            keep_work_db=bool(keep_work_dbs),
         )
         results.append(result)
         with jsonl_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(result, ensure_ascii=False) + "\n")
         print(
             f"  status={result.get('status')} wall={result.get('wall_time_sec')}s "
-            f"tokens={result.get('total_tokens', '-')} coverage={result.get('coverage_node_count', '-')}",
+            f"tokens={result.get('total_tokens', '-')} "
+            f"coverage={result.get('coverage_node_count', '-')} "
+            f"retries={result.get('usage_retry_groups', '-')}",
             flush=True,
         )
         if result.get("status") == "interrupted":
             print("[Phase7 Stress] interrupted; remaining runs were not started", flush=True)
             break
-        if args.fail_fast and result.get("status") != "ok":
+        if fail_fast and result.get("status") != "ok":
             break
 
     summary = aggregate_results(results)
     comparisons = build_comparisons(summary)
+    acceptance = evaluate_acceptance(summary, comparisons, llm_mode=llm_mode)
     _write_json(output_root / "results.json", results)
     _write_json(output_root / "summary.json", summary)
     _write_json(output_root / "comparisons.json", comparisons)
+    _write_json(output_root / "acceptance.json", acceptance)
     _write_csv(output_root / "results.csv", results)
     _write_csv(output_root / "summary.csv", summary)
     _write_csv(output_root / "comparisons.csv", comparisons)
-    write_markdown_summary(output_root / "summary.md", summary, comparisons)
+    write_markdown_summary(
+        output_root / "summary.md",
+        summary,
+        comparisons,
+        acceptance=acceptance,
+    )
 
     failed = sum(1 for result in results if result.get("status") != "ok")
     interrupted = any(result.get("status") == "interrupted" for result in results)
-    print(f"[Phase7 Stress] completed={len(results)} failed={failed}")
+    print(
+        f"[Phase7 Stress] completed={len(results)} failed={failed} "
+        f"acceptance={'PASS' if acceptance.get('passed') else 'FAIL'}"
+    )
     print(f"[Phase7 Stress] summary={output_root / 'summary.md'}")
     if interrupted:
         return 130
-    return 1 if failed else 0
+    if failed:
+        return 1
+    if strict_acceptance and not acceptance.get("passed"):
+        return 2
+    return 0
+
+
+def write_suite_summary(
+    path: Path,
+    *,
+    suite_name: str,
+    description: str,
+    stage_reports: Sequence[Mapping[str, Any]],
+) -> None:
+    lines = [
+        f"# Phase7 详细压测套件：{suite_name}",
+        "",
+        description,
+        "",
+        "## 阶段结果",
+        "",
+        "| 阶段 | profile | 运行数 | 失败数 | 验收 | 输出目录 |",
+        "|---|---|---:|---:|---|---|",
+    ]
+    for stage in stage_reports:
+        lines.append(
+            "| {name} | {profile} | {completed} | {failed} | {acceptance} | `{out}` |".format(
+                name=stage.get("name"),
+                profile=stage.get("profile"),
+                completed=stage.get("completed"),
+                failed=stage.get("failed"),
+                acceptance=stage.get("acceptance"),
+                out=stage.get("out_dir"),
+            )
+        )
+    lines.extend(["", "## 说明", ""])
+    lines.append("- 每阶段目录内含 `summary.md`、`acceptance.json`、`results.jsonl`。")
+    lines.append("- `02_resilience` 关注 JSON 截断恢复；`03_ab_matrix` 关注速度/Token/召回。")
+    lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Phase7 legacy/practical A/B stress benchmark")
+    parser.add_argument("--manifest", required=True, help="JSON sample manifest")
+    parser.add_argument("--out-dir", default="tmp/phase7_stress", help="benchmark output directory")
+    parser.add_argument("--profile", choices=tuple(_PROFILES), default="balanced")
+    parser.add_argument(
+        "--suite",
+        choices=tuple(_SUITES),
+        default=None,
+        help="run a named multi-stage campaign (detailed/resilience)",
+    )
+    parser.add_argument(
+        "--stage",
+        default="all",
+        help="suite stage name, or 'all' (only with --suite)",
+    )
+    parser.add_argument("--repeat", type=int, default=None, help="override repeats per variant")
+    parser.add_argument("--practical-budgets", default=None, help="comma-separated budgets, e.g. 12,24,40")
+    parser.add_argument("--engines", default=None, help="legacy,practical or both as comma-separated values")
+    parser.add_argument("--timeout-seconds", type=float, default=None)
+    parser.add_argument("--llm-mode", choices=("auto", "on", "off"), default=None)
+    parser.add_argument("--dry-run", action="store_true", help="pass --dry-run to Phase7; no LLM API calls")
+    parser.add_argument("--plan-only", action="store_true", help="print matrix without executing")
+    parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--keep-work-dbs", action="store_true")
+    parser.add_argument("--max-runs", type=int, default=100, help="guard against accidental costly matrices")
+    args = parser.parse_args(argv)
+
+    manifest_path = Path(args.manifest).expanduser().resolve()
+    manifest = load_manifest(manifest_path)
+    defaults = manifest.get("defaults") or {}
+    budgets_override = _parse_budgets(args.practical_budgets)
+    engines_override = _parse_engines(args.engines)
+    output_root = Path(args.out_dir).expanduser().resolve()
+
+    if args.suite:
+        suite = _SUITES[args.suite]
+        stages = resolve_suite_stages(args.suite, stage_filter=args.stage)
+        print(f"[Phase7 Stress] suite={args.suite}: {suite['description']}")
+        stage_reports: List[Dict[str, Any]] = []
+        final_code = 0
+        for stage in stages:
+            stage_name = str(stage["name"])
+            stage_out = output_root / stage_name
+            stage_timeout = float(
+                args.timeout_seconds
+                if args.timeout_seconds is not None
+                else stage.get(
+                    "timeout_seconds",
+                    defaults.get("timeout_seconds", 7200),
+                )
+            )
+            stage_dry = bool(args.dry_run or stage.get("dry_run"))
+            stage_llm = args.llm_mode if args.llm_mode is not None else stage.get("llm_mode")
+            stage_repeat = (
+                args.repeat if args.repeat is not None else stage.get("repeat")
+            )
+            stage_budgets = (
+                budgets_override
+                if budgets_override is not None
+                else stage.get("practical_budgets")
+            )
+            stage_engines = (
+                engines_override
+                if engines_override is not None
+                else stage.get("engines")
+            )
+            code = run_benchmark(
+                manifest_path=manifest_path,
+                manifest=manifest,
+                output_root=stage_out,
+                profile=str(stage.get("profile") or args.profile),
+                repeat_override=stage_repeat,
+                budgets_override=stage_budgets,
+                engines_override=stage_engines,
+                timeout_seconds=stage_timeout,
+                llm_mode=stage_llm,
+                dry_run=stage_dry,
+                plan_only=bool(args.plan_only),
+                fail_fast=bool(args.fail_fast),
+                keep_work_dbs=bool(args.keep_work_dbs),
+                max_runs=int(args.max_runs),
+                stage_name=stage_name,
+                strict_acceptance=True,
+            )
+            acceptance_path = stage_out / "acceptance.json"
+            acceptance_label = "PLAN" if args.plan_only else "MISSING"
+            failed = 0
+            completed = 0
+            if acceptance_path.is_file():
+                acceptance_payload = _read_json(acceptance_path)
+                acceptance_label = (
+                    "PASS" if acceptance_payload.get("passed") else "FAIL"
+                )
+            results_path = stage_out / "results.json"
+            if results_path.is_file():
+                results_payload = _read_json(results_path)
+                if isinstance(results_payload, list):
+                    completed = len(results_payload)
+                    failed = sum(
+                        1 for row in results_payload if row.get("status") != "ok"
+                    )
+            stage_reports.append(
+                {
+                    "name": stage_name,
+                    "profile": stage.get("profile"),
+                    "completed": completed,
+                    "failed": failed,
+                    "acceptance": acceptance_label,
+                    "out_dir": str(stage_out),
+                    "exit_code": code,
+                }
+            )
+            if code != 0:
+                final_code = code
+                if args.fail_fast or code == 130:
+                    break
+        if not args.plan_only:
+            output_root.mkdir(parents=True, exist_ok=True)
+            _write_json(output_root / "suite_report.json", stage_reports)
+            write_suite_summary(
+                output_root / "suite_summary.md",
+                suite_name=args.suite,
+                description=str(suite["description"]),
+                stage_reports=stage_reports,
+            )
+            print(f"[Phase7 Stress] suite summary={output_root / 'suite_summary.md'}")
+        return final_code
+
+    timeout_seconds = float(
+        args.timeout_seconds
+        if args.timeout_seconds is not None
+        else defaults.get("timeout_seconds", 7200)
+    )
+    return run_benchmark(
+        manifest_path=manifest_path,
+        manifest=manifest,
+        output_root=output_root,
+        profile=args.profile,
+        repeat_override=args.repeat,
+        budgets_override=budgets_override,
+        engines_override=engines_override,
+        timeout_seconds=timeout_seconds,
+        llm_mode=args.llm_mode,
+        dry_run=bool(args.dry_run),
+        plan_only=bool(args.plan_only),
+        fail_fast=bool(args.fail_fast),
+        keep_work_dbs=bool(args.keep_work_dbs),
+        max_runs=int(args.max_runs),
+    )
 
 
 if __name__ == "__main__":

@@ -48,6 +48,22 @@ python scripts/phase7_stress.py \
 
 真实测试会让同一批样本分别运行 legacy 和 practical，并输出耗时、内存、Token、路径覆盖和人工真值召回对比。
 
+需要更完整的诊断时，使用三阶段详细套件（干跑门禁 → Practical 恢复稳定性 → A/B 矩阵）：
+
+```bash
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_manifest.json \
+  --suite detailed \
+  --plan-only
+
+python scripts/phase7_stress.py \
+  --manifest tmp/phase7_stress_ntoskrnl_manifest.json \
+  --suite detailed \
+  --out-dir tmp/phase7_stress_ntoskrnl_detailed
+```
+
+输出除原有汇总外，还会写入 `acceptance.json`，并在 `summary.md` 中报告耗时/Token 稳定性（CV）以及 JSON 截断后的 token 预算恢复路径。详见 [Phase7 实战压力测试](docs/phase7-stress-test.md)。
+
 ## MiniMax-M3 配置与鲁棒性
 
 LLM 统一通过 [`kp/kp_llm.py`](tools/Semantics_Alignment/kp/kp_llm.py) 调用。MiniMax-M3 的模型名、

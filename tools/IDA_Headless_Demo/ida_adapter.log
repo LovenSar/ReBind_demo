@@ -1474,3 +1474,104 @@
 2026-03-22 00:14:21,495 - ida_adapter - INFO - 所有脚本执行完成
 2026-03-22 00:14:21,495 - ida_adapter - INFO - 处理输出文件...
 2026-03-22 00:14:21,495 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/client_b_rebind_demo/client_b_idademo
+2026-04-02 21:46:22,273 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake.exe
+2026-04-02 21:46:22,273 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 21:46:22,275 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-04-02 21:46:38,508 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-04-02 21:46:38,508 - ida_adapter - INFO - 所有脚本执行完成
+2026-04-02 21:46:38,508 - ida_adapter - INFO - 处理输出文件...
+2026-04-02 21:46:38,509 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 22:22:38,432 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake.exe
+2026-04-02 22:22:38,433 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 22:22:38,434 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-04-02 22:22:54,240 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-04-02 22:22:54,240 - ida_adapter - INFO - 所有脚本执行完成
+2026-04-02 22:22:54,240 - ida_adapter - INFO - 处理输出文件...
+2026-04-02 22:22:54,241 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 23:38:07,010 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake.exe
+2026-04-02 23:38:07,010 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 23:38:07,011 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-04-02 23:38:23,251 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-04-02 23:38:23,251 - ida_adapter - INFO - 所有脚本执行完成
+2026-04-02 23:38:23,252 - ida_adapter - INFO - 处理输出文件...
+2026-04-02 23:38:23,252 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 23:44:08,912 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake.exe
+2026-04-02 23:44:08,913 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-04-02 23:44:08,913 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-04-02 23:44:24,986 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-04-02 23:44:24,986 - ida_adapter - INFO - 所有脚本执行完成
+2026-04-02 23:44:24,986 - ida_adapter - INFO - 处理输出文件...
+2026-04-02 23:44:24,986 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/ReBind_Demo/tmp/HookChainRemake.exe_goal_deep/HookChainRemake_exe_rebind_demo/HookChainRemake_exe_idademo
+2026-07-08 21:43:10,099 - ida_adapter - INFO - 开始分析文件: /Applications/WeChat.app/Contents/Resources/wechat.dylib
+2026-07-08 21:43:10,133 - ida_adapter - INFO - 准备工作目录: /Applications/WeChat.app/Contents/Resources/wechat_dylib_rebind_demo/wechat_dylib_idademo
+2026-07-08 21:43:10,135 - ida_adapter - DEBUG - 复制脚本: ExtractAll_IDA.py
+2026-07-08 21:43:10,399 - ida_adapter - DEBUG - 复制输入文件: wechat.dylib
+2026-07-08 21:43:10,399 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-07-08 21:43:10,399 - ida_adapter - DEBUG - 构建的命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Applications/WeChat.app/Contents/Resources/wechat_dylib_rebind_demo/wechat_dylib_idademo/wechat.dylib
+2026-07-08 21:43:10,399 - ida_adapter - DEBUG - 完整命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Applications/WeChat.app/Contents/Resources/wechat_dylib_rebind_demo/wechat_dylib_idademo/wechat.dylib
+2026-07-08 21:43:10,399 - ida_adapter - DEBUG - 工作目录: /Applications/WeChat.app/Contents/Resources/wechat_dylib_rebind_demo/wechat_dylib_idademo
+2026-07-18 09:44:36,181 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:44:36,183 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:44:36,193 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-07-18 09:44:37,063 - ida_adapter - WARNING - 脚本 ExtractAll_IDA.py 执行失败，返回码: 1
+2026-07-18 09:44:37,063 - ida_adapter - WARNING - 标准错误:
+2026-07-18 09:44:37,063 - ida_adapter - INFO - 所有脚本执行完成
+2026-07-18 09:44:37,063 - ida_adapter - INFO - 处理输出文件...
+2026-07-18 09:44:37,063 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:46:12,836 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:12,836 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:46:12,839 - ida_adapter - DEBUG - 复制脚本: ExtractAll_IDA.py
+2026-07-18 09:46:12,846 - ida_adapter - DEBUG - 复制输入文件: windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:12,846 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-07-18 09:46:12,847 - ida_adapter - DEBUG - 构建的命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:12,847 - ida_adapter - DEBUG - 完整命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:12,847 - ida_adapter - DEBUG - 工作目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:46:13,554 - ida_adapter - WARNING - 脚本 ExtractAll_IDA.py 执行失败，返回码: 1
+2026-07-18 09:46:13,554 - ida_adapter - WARNING - 标准错误:
+2026-07-18 09:46:13,554 - ida_adapter - INFO - 所有脚本执行完成
+2026-07-18 09:46:13,554 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo):
+2026-07-18 09:46:13,554 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:13,554 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 文件名清理: windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe -> windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe
+2026-07-18 09:46:13,555 - ida_adapter - INFO - 处理输出文件...
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 清理后的文件名: windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 输出目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo):
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-07-18 09:46:13,555 - ida_adapter - DEBUG - 删除临时脚本: ExtractAll_IDA.py
+2026-07-18 09:46:13,555 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:49:05,876 - ida_adapter - INFO - 开始分析文件: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:49:05,877 - ida_adapter - INFO - 准备工作目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 09:49:05,879 - ida_adapter - DEBUG - 复制脚本: ExtractAll_IDA.py
+2026-07-18 09:49:05,886 - ida_adapter - DEBUG - 复制输入文件: windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:49:05,886 - ida_adapter - INFO - [1/1] 执行脚本: ExtractAll_IDA.py
+2026-07-18 09:49:05,887 - ida_adapter - DEBUG - 构建的命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:49:05,887 - ida_adapter - DEBUG - 完整命令: /Applications/IDA Professional 9.2.app/Contents/MacOS/idat -A -c -SExtractAll_IDA.py /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 09:49:05,887 - ida_adapter - DEBUG - 工作目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 10:15:18,146 - ida_adapter - INFO - 脚本 ExtractAll_IDA.py 执行完成
+2026-07-18 10:15:18,147 - ida_adapter - INFO - 所有脚本执行完成
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo):
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_pseudocode
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe.i64
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_output
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-07-18 10:15:18,147 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_disassembly
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG - 文件名清理: windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe -> windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe
+2026-07-18 10:15:18,148 - ida_adapter - INFO - 处理输出文件...
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG - 清理后的文件名: windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG - 输出目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG - 当前工作目录: /Users/lovensar/Workspace/ReBind_Demo
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG - 输出目录内容 (/Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo):
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_pseudocode
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - ExtractAll_IDA.py
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe.i64
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_output
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - .ida_extract_state.json
+2026-07-18 10:15:18,148 - ida_adapter - DEBUG -   - windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_disassembly
+2026-07-18 10:15:18,149 - ida_adapter - DEBUG - 删除临时脚本: ExtractAll_IDA.py
+2026-07-18 10:15:18,149 - ida_adapter - INFO - 分析完成，输出目录: /Users/lovensar/Workspace/windows_server_2022_21H2_ntoskrnl_10.0.20348.3804.exe_goal_deep/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_rebind_demo/windows_server_2022_21H2_ntoskrnl_10_0_20348_3804_exe_idademo

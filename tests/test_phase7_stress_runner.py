@@ -351,11 +351,198 @@ def test_tokenization_splits_compound_function_names():
     assert stress._tokens("attack_main sendHTTP") == {"attack", "main", "send", "http"}
 
 
+def test_build_matrix_detailed_profile(tmp_path: Path):
+    db = tmp_path / "sample.db"
+    sqlite3.connect(db).close()
+    manifest_path = tmp_path / "manifest.json"
+    manifest = {"samples": [{"name": "one", "db": str(db)}]}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    matrix = stress.build_run_matrix(
+        manifest_path,
+        manifest,
+        profile="detailed",
+        repeat_override=None,
+        budgets_override=None,
+        engines_override=None,
+    )
+
+    assert len(matrix) == 12
+    assert {spec.variant for spec in matrix} == {
+        "legacy",
+        "practical-b12",
+        "practical-b24",
+        "practical-b40",
+    }
+
+
+def test_resolve_detailed_suite_stages():
+    stages = stress.resolve_suite_stages("detailed", stage_filter="all")
+    assert [stage["name"] for stage in stages] == [
+        "01_dry_guard",
+        "02_resilience",
+        "03_ab_matrix",
+    ]
+    only = stress.resolve_suite_stages("detailed", stage_filter="02_resilience")
+    assert len(only) == 1
+    assert only[0]["engines"] == ["practical"]
+
+
+def test_usage_recovery_metrics_detect_budget_expansion():
+    metrics = stress._usage_recovery_metrics(
+        [
+            {
+                "attempt": 1,
+                "status": "ok",
+                "request_max_tokens": 1600,
+                "response_chars": 5000,
+                "completion_tokens": 1600,
+            },
+            {
+                "attempt": 2,
+                "status": "ok",
+                "request_max_tokens": 3200,
+                "response_chars": 1200,
+                "completion_tokens": 400,
+            },
+            {
+                "attempt": 1,
+                "status": "ok",
+                "request_max_tokens": 1600,
+                "response_chars": 800,
+            },
+        ]
+    )
+
+    assert metrics["usage_interaction_groups"] == 2
+    assert metrics["usage_retry_groups"] == 1
+    assert metrics["usage_recovered_retry_groups"] == 1
+    assert metrics["usage_budget_expansions"] == 1
+    assert metrics["usage_retry_recovery_rate"] == 1.0
+    assert metrics["request_max_tokens_max"] == 3200
+
+
+def test_extract_metrics_includes_usage_recovery(tmp_path: Path):
+    report = {
+        "selected_goals": [{"entry_va": "0x1000"}],
+        "generations": [
+            {
+                "actual_generations": 1,
+                "generations": [
+                    {
+                        "lambda_nodes": ["0x1000"],
+                        "result": {
+                            "paths": [{"path_vas": ["0x1000"]}],
+                            "llm": {
+                                "token_usage": {
+                                    "prompt_tokens": 10,
+                                    "completion_tokens": 5,
+                                    "total_tokens": 15,
+                                    "api_calls": 1,
+                                },
+                                "usage_records": [
+                                    {
+                                        "attempt": 1,
+                                        "status": "ok",
+                                        "request_max_tokens": 6000,
+                                        "response_chars": 100,
+                                    }
+                                ],
+                                "steps": [{"status": "ok", "confidence": 0.8}],
+                            },
+                        },
+                    }
+                ],
+            }
+        ],
+        "function_compare": [
+            {
+                "selection": {"selected": "new", "evidence_gate": {"passed": True}},
+                "new_profile": {
+                    "status": "ok",
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                        "api_calls": 2,
+                    },
+                    "usage_records": [
+                        {
+                            "attempt": 1,
+                            "status": "ok",
+                            "request_max_tokens": 1600,
+                            "response_chars": 4000,
+                        },
+                        {
+                            "attempt": 2,
+                            "status": "ok",
+                            "request_max_tokens": 3200,
+                            "response_chars": 900,
+                        },
+                    ],
+                },
+                "llm_compare": {
+                    "status": "ok",
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                        "api_calls": 1,
+                    },
+                    "usage_records": [
+                        {
+                            "attempt": 1,
+                            "status": "ok",
+                            "request_max_tokens": 1600,
+                            "response_chars": 200,
+                        }
+                    ],
+                },
+            }
+        ],
+        "selected_profiles": [],
+        "db_apply": {"planned_count": 0, "applied_count": 0},
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    metrics = stress.extract_report_metrics(report_path, {})
+
+    assert metrics["usage_attempt_count"] == 4
+    assert metrics["usage_retry_groups"] == 1
+    assert metrics["usage_budget_expansions"] == 1
+    assert metrics["request_max_tokens_max"] == 6000
+
+
+def test_evaluate_acceptance_flags_incomplete_retry_recovery():
+    summary = [
+        {
+            "sample": "s",
+            "variant": "practical-b12",
+            "success_rate": 1.0,
+            "timeouts": 0,
+            "failed_api_calls_max": 0,
+            "llm_interaction_success_rate_mean": 1.0,
+            "usage_retry_groups_sum": 2,
+            "usage_recovered_retry_groups_sum": 1,
+            "usage_failed_retry_groups_sum": 1,
+            "usage_budget_expansions_sum": 1,
+            "wall_time_sec_cv": 0.01,
+            "total_tokens_cv": 0.02,
+        }
+    ]
+    acceptance = stress.evaluate_acceptance(summary, [], llm_mode="on")
+    assert acceptance["passed"] is False
+    assert acceptance["variant_gates"][0]["checks"]["retry_recovery_complete"] is False
+
+
 _TMP_PATH_TESTS = (
     test_build_matrix_balanced_profile,
+    test_build_matrix_detailed_profile,
     test_clone_sqlite_copies_content,
     test_build_command_forces_safe_writeback_off,
     test_extract_metrics_with_expectations,
+    test_extract_metrics_includes_usage_recovery,
     test_matrix_rejects_normalized_name_collision,
     test_manifest_rejects_malformed_expectations,
     test_run_process_terminates_tree_on_keyboard_interrupt,
@@ -375,6 +562,9 @@ def load_tests(_loader, _tests, _pattern):
         test_comparison_reports_speed_and_token_reduction,
         test_aggregate_excludes_failed_runs_from_performance_metrics,
         test_tokenization_splits_compound_function_names,
+        test_resolve_detailed_suite_stages,
+        test_usage_recovery_metrics_detect_budget_expansion,
+        test_evaluate_acceptance_flags_incomplete_retry_recovery,
     ):
         suite.addTest(unittest.FunctionTestCase(func, description=func.__name__))
     return suite
