@@ -24,6 +24,16 @@ import csv
 import sys
 import traceback
 
+_EXTRACTOR_DIR = os.path.dirname(os.path.abspath(__file__))
+if _EXTRACTOR_DIR not in sys.path:
+    sys.path.insert(0, _EXTRACTOR_DIR)
+
+try:
+    from varledger_single_pass import bounded_symbol_filename, function_pseudocode_filename
+except ImportError:
+    bounded_symbol_filename = None
+    function_pseudocode_filename = None
+
 import idc
 import idautils
 import ida_bytes
@@ -508,8 +518,13 @@ def extract_xrefs(all_symbols, safe_base, xrefs_dir):
             continue
         if len(refs) < MIN_REFS_TO_CREATE_FILE:
             continue
-        sanitized_name = sanitize_filename(name, max_len=60)
-        filename = "%s_0x%X_%s_refs.csv" % (safe_base, ea, sanitized_name)
+        if os.environ.get("VARLEDGER_MAP_EXPORTER") and bounded_symbol_filename:
+            filename = bounded_symbol_filename(
+                xrefs_dir, "%s_0x%X_" % (safe_base, ea), name, "_refs.csv",
+                sanitize_filename_disasm, max_name_length=60)
+        else:
+            sanitized_name = sanitize_filename(name, max_len=60)
+            filename = "%s_0x%X_%s_refs.csv" % (safe_base, ea, sanitized_name)
         filepath = os.path.join(xrefs_dir, filename)
         if write_csv(filepath, header, refs) > 0:
             generated_files += 1
@@ -658,8 +673,13 @@ def run_phase_disassembly(disasm_dir, safe_base):
         func = ida_funcs.get_func(func_ea)
         if not func:
             continue
-        safe_name = sanitize_filename_disasm(func_name)
-        filename = "0x%X_%s.asm" % (func_ea, safe_name)
+        if os.environ.get("VARLEDGER_MAP_EXPORTER") and bounded_symbol_filename:
+            filename = bounded_symbol_filename(
+                disasm_dir, "0x%X_" % func_ea, func_name, ".asm",
+                sanitize_filename_disasm)
+        else:
+            safe_name = sanitize_filename_disasm(func_name)
+            filename = "0x%X_%s.asm" % (func_ea, safe_name)
         path = os.path.join(disasm_dir, filename)
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -683,15 +703,8 @@ def run_phase_disassembly(disasm_dir, safe_base):
 
 # ----- Phase 3: pseudocode -----
 
-def decompile_function(ea):
-    try:
-        cfunc = ida_hexrays.decompile(ea)
-    except ida_hexrays.DecompilationFailure:
-        return None
-    except Exception:
-        return None
-    if not cfunc:
-        return None
+def render_cfunc(cfunc, preserve_all_lines=False):
+    """只渲染已经取得的 cfunc；映射模式保留行结构以匹配 IDA 坐标。"""
     result_lines = []
     try:
         lines_list = cfunc.get_pseudocode()
@@ -705,15 +718,27 @@ def decompile_function(ea):
                         tr = getattr(idc, "tag_remove", None)
                         clean_text = tr(line_text) if callable(tr) else line_text
                     clean_text = clean_text.rstrip("\r\n")
-                    if clean_text.strip() and not clean_text.lstrip().startswith("JUMPOUT"):
+                    if preserve_all_lines or (clean_text.strip() and not clean_text.lstrip().startswith("JUMPOUT")):
                         result_lines.append(clean_text)
                 except Exception:
-                    pass
+                    if preserve_all_lines:
+                        result_lines.append("")
     except Exception:
-        pass
-    if result_lines:
-        return "\n".join(result_lines)
-    return ""
+        if not preserve_all_lines:
+            return None
+    return "\n".join(result_lines)
+
+
+def decompile_function(ea):
+    try:
+        cfunc = ida_hexrays.decompile(ea)
+    except ida_hexrays.DecompilationFailure:
+        return None
+    except Exception:
+        return None
+    if not cfunc:
+        return None
+    return render_cfunc(cfunc)
 
 
 def export_whole_program_pseudocode(out_dir, safe_base):
@@ -747,6 +772,51 @@ def run_phase_pseudocode(pseudo_dir, safe_base):
         log("[!] Hex-Rays decompiler is not available. Skipping pseudocode extraction.")
         return True, "no_hexrays"
     log("[*] Output directory: %s" % pseudo_dir)
+    mapping_exporter = os.environ.get("VARLEDGER_MAP_EXPORTER")
+    if mapping_exporter:
+        import runpy
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if script_dir not in sys.path:
+            sys.path.insert(0, script_dir)
+        from varledger_single_pass import export_functions_once, function_pseudocode_filename
+        mapping_module = runpy.run_path(mapping_exporter, run_name="varledger_mapping_hook")
+        whole_path = os.path.join(pseudo_dir, "%s_decompiled.c" % safe_base)
+        total_funcs = len(list(idautils.Functions()))
+        counters = {"written": 0, "failed": 0}
+        log("[*] VarLedger 集成导出：每个函数反编译一次，同时写伪代码和映射索引。")
+        with open(whole_path, "w", encoding="utf-8") as whole:
+            def emit_function(ea, func_name, code):
+                filename = function_pseudocode_filename(
+                    pseudo_dir, ea, func_name, sanitize_filename_disasm)
+                path = os.path.join(pseudo_dir, filename)
+                with open(path, "w", encoding="utf-8") as output:
+                    output.write("// Function: %s\n" % func_name)
+                    output.write("// Start EA: 0x%X\n" % ea)
+                    output.write("// Decompile timeout hint: %d seconds\n" % DECOMPILE_TIMEOUT_HINT)
+                    output.write("\n")
+                    output.write(code if code else "// [WARNING] Empty decompilation in headless mode")
+                    output.write("\n")
+                whole.write("// Function: %s @ 0x%X\n" % (func_name, ea))
+                whole.write(code if code else "// [WARNING] Empty decompilation in headless mode")
+                whole.write("\n\n")
+                counters["written"] += 1
+
+            def on_function_error(ea, func_name, error):
+                counters["failed"] += 1
+                log("[!] 逐函数导出／映射失败：%s @ 0x%X：%s" % (func_name, ea, error))
+
+            results = mapping_module["export_mapping"](
+                function_driver=export_functions_once,
+                render_function=lambda cfunc: render_cfunc(cfunc, preserve_all_lines=True),
+                emit_function=emit_function,
+                on_function_error=on_function_error,
+            )
+        mapping_output = os.environ["VARLEDGER_MAP_OUTPUT"]
+        with open(os.path.join(mapping_output, "export-result.json"), "w", encoding="utf-8") as stream:
+            json.dump(results, stream, ensure_ascii=False, indent=2)
+        log("[+] 单次访问伪代码与映射完成。total=%d exported=%d failed=%d" %
+            (total_funcs, counters["written"], counters["failed"]))
+        return True, None
     export_whole_program_pseudocode(pseudo_dir, safe_base)
     total_funcs = 0
     decompiled = 0
@@ -821,7 +891,7 @@ def main():
         else:
             log("[*] 断点续跑：跳过阶段 2 (disassembly)")
 
-        if not state["phases"].get("pseudocode"):
+        if not state["phases"].get("pseudocode") or os.environ.get("VARLEDGER_MAP_EXPORTER"):
             _ok, skip_reason = run_phase_pseudocode(pseudo_dir, safe_base)
             if _ok:
                 state["phases"]["pseudocode"] = True
